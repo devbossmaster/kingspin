@@ -1,0 +1,262 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  PLAYER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum RoomStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  MAINTENANCE
+  CLOSED
+  ARCHIVED
+}
+
+enum RoundStatus {
+  OPEN
+  LOCKED
+  DRAWING
+  SPINNING
+  SETTLING
+  COMPLETED
+  CANCELLED
+}
+
+enum WalletAccountType {
+  MAIN
+  BONUS
+  HOUSE
+}
+
+enum LedgerTransactionType {
+  ADMIN_CREDIT
+  ADMIN_DEBIT
+  ENTRY_HOLD
+  ENTRY_REFUND
+  ROUND_PAYOUT
+  HOUSE_FEE
+  DEPOSIT
+  WITHDRAWAL_REQUEST
+  WITHDRAWAL_APPROVED
+  WITHDRAWAL_REJECTED
+}
+
+enum LedgerEntryDirection {
+  CREDIT
+  DEBIT
+}
+
+enum AdminAuditAction {
+  ROOM_CREATED
+  ROOM_ACTIVATED
+  ROOM_PAUSED
+  ROOM_CLOSED
+  ROOM_ARCHIVED
+  CATEGORY_CREATED
+  CATEGORY_UPDATED
+  ADMIN_CREDIT
+  ADMIN_DEBIT
+}
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  username      String   @unique
+  fullName      String
+  emailVerified Boolean  @default(false)
+  role          Role     @default(PLAYER)
+  image         String?
+  bannedAt      DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  walletAccounts WalletAccount[]
+  entries         Entry[]
+  createdRooms    Room[]          @relation("RoomCreatedByAdmin")
+  adminAuditLogs  AdminAuditLog[] @relation("AdminAuditActor")
+
+  @@map("users")
+}
+
+model Category {
+  id              String   @id @default(cuid())
+  name            String   @unique
+  slug            String   @unique
+  minEntryAmount  BigInt
+  maxEntryAmount  BigInt
+  maxPlayers      Int      @default(24)
+  roundDurationMs Int      @default(45000)
+  isActive        Boolean  @default(true)
+  sortOrder       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  rooms Room[]
+
+  @@index([isActive, sortOrder])
+  @@map("categories")
+}
+
+model Room {
+  id               String     @id @default(cuid())
+  categoryId       String
+  code             String
+  name             String?
+  status           RoomStatus @default(DRAFT)
+  maxPlayers       Int        @default(24)
+  roundDurationMs  Int        @default(45000)
+  createdByAdminId String?
+  activatedAt      DateTime?
+  pausedAt         DateTime?
+  closedAt         DateTime?
+  archivedAt       DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  category       Category @relation(fields: [categoryId], references: [id])
+  createdByAdmin User?    @relation("RoomCreatedByAdmin", fields: [createdByAdminId], references: [id])
+  rounds         Round[]
+
+  @@unique([categoryId, code])
+  @@index([categoryId, status])
+  @@index([status])
+  @@map("rooms")
+}
+
+model Round {
+  id               String      @id @default(cuid())
+  roomId           String
+  roundNumber      Int
+  status           RoundStatus @default(OPEN)
+
+  openedAt         DateTime    @default(now())
+  locksAt          DateTime?
+  lockedAt         DateTime?
+  drawingAt        DateTime?
+  spinningAt       DateTime?
+  settlingAt       DateTime?
+  completedAt      DateTime?
+  cancelledAt      DateTime?
+
+  totalEntryAmount BigInt      @default(0)
+  houseFeeAmount    BigInt      @default(0)
+  payoutAmount      BigInt      @default(0)
+
+  serverSeedHash    String?
+  serverSeedReveal  String?
+  winningTicket     BigInt?
+  winnerUserId      String?
+  winnerEntryId     String?
+  spinAngle         Float?
+
+  idempotencyKey    String?     @unique
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  room    Room    @relation(fields: [roomId], references: [id])
+  entries Entry[]
+
+  @@unique([roomId, roundNumber])
+  @@index([roomId, status])
+  @@index([status])
+  @@map("rounds")
+}
+
+model Entry {
+  id          String   @id @default(cuid())
+  roundId     String
+  userId      String
+  amount      BigInt
+  ticketStart BigInt?
+  ticketEnd   BigInt?
+  isWinner    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  round Round @relation(fields: [roundId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@unique([roundId, userId])
+  @@index([userId, createdAt])
+  @@index([roundId])
+  @@map("entries")
+}
+
+model WalletAccount {
+  id              String            @id @default(cuid())
+  userId          String?
+  type            WalletAccountType
+  balanceSnapshot BigInt            @default(0)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  user          User?         @relation(fields: [userId], references: [id])
+  ledgerEntries LedgerEntry[]
+
+  @@unique([userId, type])
+  @@index([type])
+  @@map("wallet_accounts")
+}
+
+model LedgerTransaction {
+  id             String                @id @default(cuid())
+  type           LedgerTransactionType
+  referenceType  String?
+  referenceId    String?
+  idempotencyKey String                @unique
+  metadata       Json?
+  createdAt      DateTime              @default(now())
+
+  entries LedgerEntry[]
+
+  @@index([referenceType, referenceId])
+  @@index([type, createdAt])
+  @@map("ledger_transactions")
+}
+
+model LedgerEntry {
+  id                  String               @id @default(cuid())
+  transactionId        String
+  walletAccountId      String
+  direction            LedgerEntryDirection
+  amount               BigInt
+  balanceAfterSnapshot BigInt?
+  createdAt            DateTime             @default(now())
+
+  transaction   LedgerTransaction @relation(fields: [transactionId], references: [id])
+  walletAccount WalletAccount     @relation(fields: [walletAccountId], references: [id])
+
+  @@index([walletAccountId, createdAt])
+  @@index([transactionId])
+  @@map("ledger_entries")
+}
+
+model AdminAuditLog {
+  id          String           @id @default(cuid())
+  actorId     String?
+  action      AdminAuditAction
+  targetType  String
+  targetId    String?
+  before      Json?
+  after       Json?
+  metadata    Json?
+  createdAt   DateTime         @default(now())
+
+  actor User? @relation("AdminAuditActor", fields: [actorId], references: [id])
+
+  @@index([actorId, createdAt])
+  @@index([targetType, targetId])
+  @@index([action, createdAt])
+  @@map("admin_audit_logs")
+}

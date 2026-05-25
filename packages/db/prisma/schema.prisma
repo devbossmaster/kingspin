@@ -114,6 +114,7 @@ model Room {
   code             String
   name             String?
   status           RoomStatus @default(DRAFT)
+  isPermanent      Boolean @default(false)
   maxPlayers       Int        @default(24)
   roundDurationMs  Int        @default(45000)
   createdByAdminId String?
@@ -131,6 +132,7 @@ model Room {
   @@unique([categoryId, code])
   @@index([categoryId, status])
   @@index([status])
+  @@index([isPermanent])
   @@map("rooms")
 }
 

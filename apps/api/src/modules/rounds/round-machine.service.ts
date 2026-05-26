@@ -1,0 +1,532 @@
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleDestroy,
+  OnModuleInit,
+} from "@nestjs/common";
+import { RoomStatus, RoundStatus } from "@kingspin/db";
+import { RoomGateway } from "../../gateways/room.gateway";
+import { PrismaService } from "../../prisma/prisma.service";
+import { RoundsService } from "./rounds.service";
+
+const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
+  RoundStatus.OPEN,
+  RoundStatus.LOCKED,
+  RoundStatus.DRAWING,
+  RoundStatus.SPINNING,
+  RoundStatus.SETTLING,
+];
+
+const MACHINE_TIMINGS_MS = {
+  lockedPhase: 2_000,
+  drawingPhase: 1_000,
+  spinningPhase: 7_000,
+  cooldownPhase: 8_000,
+};
+
+export type AdvanceRoomOptions = {
+  force?: boolean;
+};
+
+type MachineRuntimeState = {
+  roomId: string;
+  isRunning: boolean;
+  tickCount: number;
+  lastAction: string | null;
+  lastError: string | null;
+  lastTickAt: Date | null;
+  nextTickAt: Date | null;
+};
+
+@Injectable()
+export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
+  private readonly logger = new Logger(RoundMachineService.name);
+
+  private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly states = new Map<string, MachineRuntimeState>();
+  private readonly tickingRooms = new Set<string>();
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly roundsService: RoundsService,
+    private readonly roomGateway: RoomGateway,
+  ) {}
+
+  onModuleInit() {
+    const shouldAutoStart =
+      process.env.ROUND_MACHINE_AUTO_START === "true" ||
+      process.env.NODE_ENV !== "production";
+
+    if (!shouldAutoStart) {
+      this.logger.log(
+        "Round machine auto-start disabled. Set ROUND_MACHINE_AUTO_START=true to enable.",
+      );
+      return;
+    }
+
+    setTimeout(() => {
+      void this.autoStartPermanentActiveRooms();
+    }, 1_000);
+  }
+
+  onModuleDestroy() {
+    for (const timer of this.timers.values()) {
+      clearTimeout(timer);
+    }
+
+    this.timers.clear();
+    this.tickingRooms.clear();
+  }
+
+  async startRoomMachine(roomId: string) {
+    await this.assertRoomCanRun(roomId);
+
+    const existingState = this.states.get(roomId);
+
+    if (existingState?.isRunning) {
+      return this.getRoomMachineStatus(roomId);
+    }
+
+    const state: MachineRuntimeState = {
+      roomId,
+      isRunning: true,
+      tickCount: existingState?.tickCount ?? 0,
+      lastAction: existingState?.lastAction ?? null,
+      lastError: null,
+      lastTickAt: existingState?.lastTickAt ?? null,
+      nextTickAt: new Date(),
+    };
+
+    this.states.set(roomId, state);
+    this.scheduleNextTick(roomId, 0);
+
+    return this.getRoomMachineStatus(roomId);
+  }
+
+  async stopRoomMachine(roomId: string) {
+    if (!roomId) {
+      throw new BadRequestException("roomId is required.");
+    }
+
+    const timer = this.timers.get(roomId);
+
+    if (timer) {
+      clearTimeout(timer);
+      this.timers.delete(roomId);
+    }
+
+    const state = this.getOrCreateState(roomId);
+    state.isRunning = false;
+    state.nextTickAt = null;
+
+    this.states.set(roomId, state);
+
+    return this.getRoomMachineStatus(roomId);
+  }
+
+  async getRoomMachineStatus(roomId: string) {
+    if (!roomId) {
+      throw new BadRequestException("roomId is required.");
+    }
+
+    const state = this.getOrCreateState(roomId);
+
+    const currentRound = await this.prisma.round.findFirst({
+      where: {
+        roomId,
+        status: { in: ACTIVE_ROUND_STATUSES },
+      },
+      orderBy: { roundNumber: "desc" },
+    });
+
+    const latestRound = await this.prisma.round.findFirst({
+      where: { roomId },
+      orderBy: { roundNumber: "desc" },
+    });
+
+    return {
+      roomId,
+      isRunning: state.isRunning,
+      tickCount: state.tickCount,
+      lastAction: state.lastAction,
+      lastError: state.lastError,
+      lastTickAt: state.lastTickAt?.toISOString() ?? null,
+      nextTickAt: state.nextTickAt?.toISOString() ?? null,
+      currentRound: currentRound
+        ? this.roundsService.toRoundSnapshot(currentRound)
+        : null,
+      latestRound: latestRound
+        ? this.roundsService.toRoundSnapshot(latestRound)
+        : null,
+      timings: MACHINE_TIMINGS_MS,
+    };
+  }
+
+  async advanceRoomOnce(roomId: string, options: AdvanceRoomOptions = {}) {
+    if (!roomId) {
+      throw new BadRequestException("roomId is required.");
+    }
+
+    const force = options.force === true;
+
+    const room = await this.prisma.room.findUnique({
+      where: { id: roomId },
+      select: {
+        id: true,
+        code: true,
+        status: true,
+        roundDurationMs: true,
+      },
+    });
+
+    if (!room) {
+      throw new NotFoundException("Room not found.");
+    }
+
+    if (room.status !== RoomStatus.ACTIVE) {
+      throw new BadRequestException("Only ACTIVE rooms can be advanced.");
+    }
+
+    const currentRound = await this.prisma.round.findFirst({
+      where: {
+        roomId,
+        status: { in: ACTIVE_ROUND_STATUSES },
+      },
+      orderBy: { roundNumber: "desc" },
+    });
+
+    if (!currentRound) {
+      const startedRound = await this.roundsService.startOpenRoundForRoom(roomId);
+
+      return {
+        action: "STARTED_OPEN_ROUND",
+        roomId,
+        currentRound: startedRound,
+        timings: {
+          openPhase: room.roundDurationMs,
+          ...MACHINE_TIMINGS_MS,
+        },
+        force,
+      };
+    }
+
+    const now = new Date();
+
+    if (currentRound.status === RoundStatus.OPEN) {
+      if (!force && currentRound.locksAt && currentRound.locksAt > now) {
+        return {
+          action: "WAITING_FOR_OPEN_TO_EXPIRE",
+          roomId,
+          currentRound: this.roundsService.toRoundSnapshot(currentRound),
+          msRemaining: currentRound.locksAt.getTime() - now.getTime(),
+          force,
+        };
+      }
+
+      const entryCount = await this.prisma.entry.count({
+        where: { roundId: currentRound.id },
+      });
+
+      if (entryCount === 0) {
+        const cancelled = await this.roundsService.cancelCurrentRoundForRoom(roomId);
+        const startedRound = await this.roundsService.startOpenRoundForRoom(roomId);
+
+        return {
+          action: "CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT",
+          roomId,
+          cancelledRound: cancelled.currentRound,
+          currentRound: startedRound,
+          force,
+        };
+      }
+
+      const locked = await this.roundsService.lockCurrentRoundForRoom(roomId);
+
+      return {
+        action: "LOCKED_ROUND",
+        roomId,
+        result: locked,
+        force,
+      };
+    }
+
+    if (currentRound.status === RoundStatus.LOCKED) {
+      if (
+        !force &&
+        currentRound.lockedAt &&
+        now.getTime() < currentRound.lockedAt.getTime() + MACHINE_TIMINGS_MS.lockedPhase
+      ) {
+        return {
+          action: "WAITING_FOR_LOCKED_PHASE",
+          roomId,
+          currentRound: this.roundsService.toRoundSnapshot(currentRound),
+          msRemaining:
+            currentRound.lockedAt.getTime() +
+            MACHINE_TIMINGS_MS.lockedPhase -
+            now.getTime(),
+          force,
+        };
+      }
+
+      const drawn = await this.roundsService.drawCurrentRoundForRoom(roomId);
+
+      return {
+        action: "DREW_ROUND",
+        roomId,
+        result: drawn,
+        force,
+      };
+    }
+
+    if (currentRound.status === RoundStatus.DRAWING) {
+      if (
+        !force &&
+        currentRound.drawingAt &&
+        now.getTime() <
+          currentRound.drawingAt.getTime() + MACHINE_TIMINGS_MS.drawingPhase
+      ) {
+        return {
+          action: "WAITING_FOR_DRAWING_PHASE",
+          roomId,
+          currentRound: this.roundsService.toRoundSnapshot(currentRound),
+          msRemaining:
+            currentRound.drawingAt.getTime() +
+            MACHINE_TIMINGS_MS.drawingPhase -
+            now.getTime(),
+          force,
+        };
+      }
+
+      const settled = await this.roundsService.settleCurrentRoundForRoom(roomId);
+
+      return {
+        action: "SETTLED_ROUND",
+        roomId,
+        result: settled,
+        force,
+      };
+    }
+
+    if (currentRound.status === RoundStatus.SPINNING) {
+      return {
+        action: "SPINNING_PHASE_RESERVED",
+        roomId,
+        currentRound: this.roundsService.toRoundSnapshot(currentRound),
+        message:
+          "SPINNING is reserved for the Socket.IO animation phase. Current machine settles directly from DRAWING.",
+        force,
+      };
+    }
+
+    if (currentRound.status === RoundStatus.SETTLING) {
+      const settled = await this.roundsService.settleCurrentRoundForRoom(roomId);
+
+      return {
+        action: "RESUMED_SETTLEMENT",
+        roomId,
+        result: settled,
+        force,
+      };
+    }
+
+    throw new BadRequestException(
+      `Unsupported machine state: ${currentRound.status}`,
+    );
+  }
+
+  private async autoStartPermanentActiveRooms() {
+    const rooms = await this.prisma.room.findMany({
+      where: {
+        status: RoomStatus.ACTIVE,
+        isPermanent: true,
+      },
+      select: {
+        id: true,
+        code: true,
+      },
+      orderBy: { code: "asc" },
+    });
+
+    if (rooms.length === 0) {
+      this.logger.log("No ACTIVE permanent rooms found for machine auto-start.");
+      return;
+    }
+
+    for (const room of rooms) {
+      try {
+        await this.startRoomMachine(room.id);
+        this.logger.log(`Auto-started round machine for room ${room.code}.`);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unknown auto-start error";
+
+        this.logger.error(
+          `Failed to auto-start round machine for room ${room.code}: ${message}`,
+        );
+      }
+    }
+  }
+
+  private async tickRoom(roomId: string) {
+    const state = this.getOrCreateState(roomId);
+
+    if (!state.isRunning) {
+      return;
+    }
+
+    if (this.tickingRooms.has(roomId)) {
+      return;
+    }
+
+    this.tickingRooms.add(roomId);
+
+    try {
+      state.tickCount += 1;
+      state.lastTickAt = new Date();
+      state.lastError = null;
+
+      const result = await this.advanceRoomOnce(roomId, { force: false });
+
+      await this.roomGateway.broadcastMachineResult(roomId, result);
+
+      state.lastAction = result.action;
+      this.states.set(roomId, state);
+
+      const nextDelayMs = this.getNextDelayMs(result);
+      this.scheduleNextTick(roomId, nextDelayMs);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unknown machine error";
+
+      state.lastError = message;
+      state.nextTickAt = new Date(Date.now() + 5_000);
+      this.states.set(roomId, state);
+
+      this.logger.error(`Room machine tick failed for ${roomId}: ${message}`);
+
+      this.scheduleNextTick(roomId, 5_000);
+    } finally {
+      this.tickingRooms.delete(roomId);
+    }
+  }
+
+  private scheduleNextTick(roomId: string, delayMs: number) {
+    const state = this.getOrCreateState(roomId);
+
+    if (!state.isRunning) {
+      return;
+    }
+
+    const existingTimer = this.timers.get(roomId);
+
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.timers.delete(roomId);
+    }
+
+    const safeDelayMs = this.clampDelay(delayMs);
+    state.nextTickAt = new Date(Date.now() + safeDelayMs);
+    this.states.set(roomId, state);
+
+    const timer = setTimeout(() => {
+      void this.tickRoom(roomId);
+    }, safeDelayMs);
+
+    this.timers.set(roomId, timer);
+  }
+
+  private getNextDelayMs(result: any): number {
+    if (typeof result?.msRemaining === "number") {
+      return result.msRemaining;
+    }
+
+    if (result?.action === "STARTED_OPEN_ROUND") {
+      return this.delayUntilRoundLocksAt(result.currentRound);
+    }
+
+    if (result?.action === "CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT") {
+      return this.delayUntilRoundLocksAt(result.currentRound);
+    }
+
+    if (result?.action === "LOCKED_ROUND") {
+      return MACHINE_TIMINGS_MS.lockedPhase;
+    }
+
+    if (result?.action === "DREW_ROUND") {
+      return MACHINE_TIMINGS_MS.drawingPhase;
+    }
+
+    if (
+      result?.action === "SETTLED_ROUND" ||
+      result?.action === "RESUMED_SETTLEMENT"
+    ) {
+      return MACHINE_TIMINGS_MS.cooldownPhase;
+    }
+
+    return 1_000;
+  }
+
+  private delayUntilRoundLocksAt(round: { locksAt?: string | null } | null) {
+    if (!round?.locksAt) {
+      return 1_000;
+    }
+
+    return new Date(round.locksAt).getTime() - Date.now();
+  }
+
+  private clampDelay(delayMs: number) {
+    if (!Number.isFinite(delayMs)) {
+      return 1_000;
+    }
+
+    return Math.max(250, Math.min(delayMs, 60_000));
+  }
+
+  private getOrCreateState(roomId: string): MachineRuntimeState {
+    const existing = this.states.get(roomId);
+
+    if (existing) {
+      return existing;
+    }
+
+    const state: MachineRuntimeState = {
+      roomId,
+      isRunning: false,
+      tickCount: 0,
+      lastAction: null,
+      lastError: null,
+      lastTickAt: null,
+      nextTickAt: null,
+    };
+
+    this.states.set(roomId, state);
+
+    return state;
+  }
+
+  private async assertRoomCanRun(roomId: string) {
+    if (!roomId) {
+      throw new BadRequestException("roomId is required.");
+    }
+
+    const room = await this.prisma.room.findUnique({
+      where: { id: roomId },
+      select: {
+        id: true,
+        status: true,
+      },
+    });
+
+    if (!room) {
+      throw new NotFoundException("Room not found.");
+    }
+
+    if (room.status !== RoomStatus.ACTIVE) {
+      throw new BadRequestException("Only ACTIVE rooms can run the machine.");
+    }
+  }
+}
+
+

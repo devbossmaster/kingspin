@@ -6,6 +6,12 @@ import {
 } from "@nestjs/common";
 import { RoundStatus, type Entry, type Round } from "@kingspin/db";
 import { createHash, randomBytes } from "node:crypto";
+import {
+  calculateSpinAngle as calculateGameSpinAngle,
+  selectWinner,
+  verifyTicketRanges,
+  type TicketRange,
+} from "@kingspin/game-engine";
 import { PrismaService } from "../../prisma/prisma.service";
 import {
   WalletsService,
@@ -317,27 +323,21 @@ export class RoundsService {
       };
     }
 
-    const drawInput = [
-      currentRound.serverSeedReveal,
-      currentRound.id,
-      currentRound.roundNumber.toString(),
-      currentRound.totalEntryAmount.toString(),
-    ].join(":");
+    const ticketRanges = this.toTicketRangesFromEntries(entries);
 
-    const drawHash = createHash("sha256").update(drawInput).digest("hex");
-    const winningTicket =
-      BigInt(`0x${drawHash}`) % currentRound.totalEntryAmount;
-
-    const winnerEntry = entries.find((entry) => {
-      if (entry.ticketStart === null || entry.ticketEnd === null) {
-        return false;
-      }
-
-      return (
-        winningTicket >= entry.ticketStart &&
-        winningTicket <= entry.ticketEnd
-      );
+    const winnerSelection = selectWinner({
+      ranges: ticketRanges,
+      serverSeed: currentRound.serverSeedReveal,
+      roundId: currentRound.id,
+      roundNumber: currentRound.roundNumber,
+      totalEntryAmount: currentRound.totalEntryAmount,
     });
+
+    const winningTicket = winnerSelection.winningTicket;
+
+    const winnerEntry = entries.find(
+      (entry) => entry.id === winnerSelection.winnerRange.id,
+    );
 
     if (!winnerEntry) {
       throw new BadRequestException(
@@ -813,60 +813,38 @@ export class RoundsService {
     };
   }
 
-  private verifyEntryRanges(entries: Entry[], expectedTotal: bigint) {
-    let cursor = 0n;
-
-    for (const entry of entries) {
+  private toTicketRangesFromEntries(entries: Entry[]): TicketRange[] {
+    return entries.map((entry) => {
       if (entry.ticketStart === null || entry.ticketEnd === null) {
-        return {
-          rangesCoverTotal: false,
-          rangeError: `Entry ${entry.id} is missing ticket range.`,
-        };
+        throw new BadRequestException(
+          `Entry ${entry.id} is missing ticket range.`,
+        );
       }
 
-      if (entry.ticketStart !== cursor) {
-        return {
-          rangesCoverTotal: false,
-          rangeError: `Entry ${entry.id} starts at ${entry.ticketStart.toString()} but expected ${cursor.toString()}.`,
-        };
-      }
-
-      const expectedEnd = cursor + entry.amount - 1n;
-
-      if (entry.ticketEnd !== expectedEnd) {
-        return {
-          rangesCoverTotal: false,
-          rangeError: `Entry ${entry.id} ends at ${entry.ticketEnd.toString()} but expected ${expectedEnd.toString()}.`,
-        };
-      }
-
-      cursor = entry.ticketEnd + 1n;
-    }
-
-    if (cursor !== expectedTotal) {
       return {
-        rangesCoverTotal: false,
-        rangeError: `Final cursor ${cursor.toString()} does not match round total ${expectedTotal.toString()}.`,
+        id: entry.id,
+        userId: entry.userId,
+        amount: entry.amount,
+        ticketStart: entry.ticketStart,
+        ticketEnd: entry.ticketEnd,
       };
-    }
-
-    return {
-      rangesCoverTotal: true,
-      rangeError: null,
-    };
+    });
+  }
+  private verifyEntryRanges(entries: Entry[], expectedTotal: bigint) {
+    return verifyTicketRanges(
+      this.toTicketRangesFromEntries(entries),
+      expectedTotal,
+    );
   }
   private calculateSpinAngle(winningTicket: bigint, totalTickets: bigint) {
-    if (totalTickets <= 0n) {
-      return 0;
-    }
-
-    // Position of winning ticket on a 360-degree wheel.
-    // This is deterministic and can later be adjusted for pointer offset.
-    const scaled = (winningTicket * 3_600_000n) / totalTickets;
-
-    return Number(scaled) / 10_000;
+    return calculateGameSpinAngle(winningTicket, totalTickets);
   }
 }
+
+
+
+
+
 
 
 

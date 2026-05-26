@@ -1,24 +1,22 @@
 {
   "name": "@kingspin/game-engine",
-  "version": "0.1.0",
+  "version": "0.0.1",
   "private": true,
-  "main": "./dist/index.js",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm,cjs --dts",
-    "dev": "tsup src/index.ts --format esm,cjs --dts --watch",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "build": "tsup src/index.ts --format cjs,esm --dts",
+    "test": "vitest run"
   },
-  "devDependencies": {
-    "tsup": "^8.0.0",
-    "typescript": "^5.0.0",
-    "vitest": "^4.0.0"
-  }
+  "dependencies": {},
+  "devDependencies": {}
 }

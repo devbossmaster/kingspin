@@ -1,7 +1,8 @@
 import type {
-  DevPlaceEntryInput,
-  DevPlayerBalance,
+  CurrentUser,
   LatestRoundResult,
+  MeWallet,
+  PlaceEntryInput,
   RoomLiveState,
 } from "@kingspin/contracts";
 
@@ -13,6 +14,7 @@ async function requestJson<TResponse>(
 ): Promise<TResponse> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
+    credentials: "include",
     headers: {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
@@ -35,6 +37,14 @@ async function requestJson<TResponse>(
 }
 
 export const apiClient = {
+  getMe() {
+    return requestJson<CurrentUser>("/me");
+  },
+
+  getMeWallet() {
+    return requestJson<MeWallet>("/me/wallet");
+  },
+
   getRoomLiveState(roomId: string) {
     return requestJson<RoomLiveState>(`/rooms/${roomId}/live-state`);
   },
@@ -45,14 +55,8 @@ export const apiClient = {
     );
   },
 
-  getDevPlayerBalance(playerKey: string) {
-    return requestJson<DevPlayerBalance>(
-      `/dev/players/${encodeURIComponent(playerKey)}/balance`,
-    );
-  },
-
-  devPlaceEntry(roomId: string, input: DevPlaceEntryInput) {
-    return requestJson(`/rooms/${roomId}/entries/dev-place`, {
+  placeEntry(roomId: string, input: PlaceEntryInput) {
+    return requestJson(`/rooms/${roomId}/entries`, {
       method: "POST",
       body: JSON.stringify(input),
     });

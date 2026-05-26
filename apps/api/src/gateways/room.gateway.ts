@@ -1,15 +1,32 @@
-import { BadRequestException, Logger } from "@nestjs/common";
+import { BadRequestException, Logger, OnModuleDestroy } from "@nestjs/common";
 import {
   ConnectedSocket,
   MessageBody,
   OnGatewayConnection,
   OnGatewayDisconnect,
+  OnGatewayInit,
   SubscribeMessage,
   WebSocketGateway,
   WebSocketServer,
+  WsException,
 } from "@nestjs/websockets";
+import {
+  SOCKET_EVENTS,
+  SocketMachineEventSchema,
+  SocketPresenceEventSchema,
+  SocketRoomJoinAckSchema,
+  SocketRoomJoinPayloadSchema,
+  SocketRoomLeaveAckSchema,
+  SocketRoomLeavePayloadSchema,
+  SocketRoundStateEventSchema,
+  type ClientToServerEvents,
+  type ServerToClientEvents,
+} from "@kingspin/contracts";
 import { RoundStatus } from "@kingspin/db";
+import { createAdapter } from "@socket.io/redis-adapter";
+import { createClient } from "redis";
 import type { Server, Socket } from "socket.io";
+import { getApiEnv } from "../config/api-env";
 import { PrismaService } from "../prisma/prisma.service";
 
 const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
@@ -20,14 +37,23 @@ const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
   RoundStatus.SETTLING,
 ];
 
-type JoinRoomPayload = {
-  roomId?: unknown;
-};
+type GameServer = Server<ClientToServerEvents, ServerToClientEvents>;
+type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
+type RedisClient = ReturnType<typeof createClient>;
+
+function allowConfiguredSocketOrigin(
+  origin: string | undefined,
+  callback: (error: Error | null, allow?: boolean) => void,
+) {
+  const allowedOrigin = getApiEnv().API_CORS_ORIGIN;
+
+  callback(null, !origin || origin === allowedOrigin);
+}
 
 @WebSocketGateway({
   namespace: "/game",
   cors: {
-    origin: true,
+    origin: allowConfiguredSocketOrigin,
     credentials: true,
   },
   connectionStateRecovery: {
@@ -35,85 +61,138 @@ type JoinRoomPayload = {
     skipMiddlewares: true,
   },
 })
-export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class RoomGateway
+  implements
+    OnGatewayInit,
+    OnGatewayConnection,
+    OnGatewayDisconnect,
+    OnModuleDestroy
+{
   @WebSocketServer()
-  server!: Server;
+  server!: GameServer;
 
   private readonly logger = new Logger(RoomGateway.name);
+  private redisPublisher: RedisClient | null = null;
+  private redisSubscriber: RedisClient | null = null;
 
   constructor(private readonly prisma: PrismaService) {}
 
-  handleConnection(client: Socket) {
+  async afterInit(server: GameServer) {
+    const env = getApiEnv();
+
+    await this.configureRedisAdapter(server);
+
+    // TODO(auth): validate the Better Auth session/JWT from the socket
+    // handshake before allowing authenticated room actions.
+    this.logger.log("Socket.IO /game namespace initialized.");
+
+    if (env.NODE_ENV === "production" && !env.ENABLE_REDIS) {
+      this.logger.warn(
+        "Socket.IO Redis adapter is disabled. Production scaling requires sticky sessions or a Redis adapter.",
+      );
+    }
+  }
+
+  async onModuleDestroy() {
+    await Promise.allSettled([
+      this.redisSubscriber?.quit(),
+      this.redisPublisher?.quit(),
+    ]);
+  }
+
+  handleConnection(client: GameSocket) {
     this.logger.log(`Socket connected: ${client.id}`);
   }
 
-  handleDisconnect(client: Socket) {
+  handleDisconnect(client: GameSocket) {
     this.logger.log(`Socket disconnected: ${client.id}`);
   }
 
-  @SubscribeMessage("room:join")
+  @SubscribeMessage(SOCKET_EVENTS.ROOM_JOIN)
   async handleJoin(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() payload: JoinRoomPayload,
+    @ConnectedSocket() client: GameSocket,
+    @MessageBody() payload: unknown,
   ) {
-    const roomId = this.parseRoomId(payload?.roomId);
+    const parsedPayload = SocketRoomJoinPayloadSchema.safeParse(payload);
+
+    if (!parsedPayload.success) {
+      throw new WsException("Invalid room:join payload.");
+    }
+
+    const roomId = this.parseRoomId(parsedPayload.data.roomId);
 
     await this.assertRoomExists(roomId);
     await client.join(roomId);
 
     const snapshot = await this.getRoomStateSnapshot(roomId);
+    const emittedAt = new Date().toISOString();
 
-    client.emit("round:state", {
+    const roundState = SocketRoundStateEventSchema.parse({
       roomId,
       reason: "JOINED_ROOM",
       snapshot,
-      emittedAt: new Date().toISOString(),
+      emittedAt,
     });
 
-    client.to(roomId).emit("room:player-joined", {
+    client.emit(SOCKET_EVENTS.ROUND_STATE, roundState);
+
+    const presence = SocketPresenceEventSchema.parse({
       roomId,
       socketId: client.id,
-      joinedAt: new Date().toISOString(),
+      joinedAt: emittedAt,
     });
 
-    return {
+    client.to(roomId).emit(SOCKET_EVENTS.ROOM_PLAYER_JOINED, presence);
+
+    return SocketRoomJoinAckSchema.parse({
       ok: true,
       roomId,
-      joinedAt: new Date().toISOString(),
-    };
+      joinedAt: emittedAt,
+    });
   }
 
-  @SubscribeMessage("room:leave")
+  @SubscribeMessage(SOCKET_EVENTS.ROOM_LEAVE)
   async handleLeave(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() payload: JoinRoomPayload,
+    @ConnectedSocket() client: GameSocket,
+    @MessageBody() payload: unknown,
   ) {
-    const roomId = this.parseRoomId(payload?.roomId);
+    const parsedPayload = SocketRoomLeavePayloadSchema.safeParse(payload);
+
+    if (!parsedPayload.success) {
+      throw new WsException("Invalid room:leave payload.");
+    }
+
+    const roomId = this.parseRoomId(parsedPayload.data.roomId);
 
     await client.leave(roomId);
 
-    client.to(roomId).emit("room:player-left", {
+    const leftAt = new Date().toISOString();
+    const presence = SocketPresenceEventSchema.parse({
       roomId,
       socketId: client.id,
-      leftAt: new Date().toISOString(),
+      leftAt,
     });
 
-    return {
+    client.to(roomId).emit(SOCKET_EVENTS.ROOM_PLAYER_LEFT, presence);
+
+    return SocketRoomLeaveAckSchema.parse({
       ok: true,
       roomId,
-      leftAt: new Date().toISOString(),
-    };
+      leftAt,
+    });
   }
 
   async broadcastRoundState(roomId: string, reason: string) {
     const snapshot = await this.getRoomStateSnapshot(roomId);
 
-    this.server.to(roomId).emit("round:state", {
+    const payload = SocketRoundStateEventSchema.parse({
       roomId,
       reason,
       snapshot,
       emittedAt: new Date().toISOString(),
     });
+
+    this.server.to(roomId).emit(SOCKET_EVENTS.ROUND_STATE, payload);
   }
 
   async broadcastMachineResult(roomId: string, result: unknown) {
@@ -127,61 +206,105 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
         : "UNKNOWN";
 
     if (action === "STARTED_OPEN_ROUND") {
-      this.server.to(roomId).emit("round:updated", {
-        roomId,
-        action,
-        result: payload,
-        emittedAt: new Date().toISOString(),
-      });
+      this.emitMachineEvent(roomId, SOCKET_EVENTS.ROUND_UPDATED, action, payload);
       return;
     }
 
     if (action === "CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT") {
-      this.server.to(roomId).emit("round:updated", {
-        roomId,
-        action,
-        result: payload,
-        emittedAt: new Date().toISOString(),
-      });
+      this.emitMachineEvent(roomId, SOCKET_EVENTS.ROUND_UPDATED, action, payload);
       return;
     }
 
     if (action === "LOCKED_ROUND") {
-      this.server.to(roomId).emit("round:locked", {
-        roomId,
-        action,
-        result: payload,
-        emittedAt: new Date().toISOString(),
-      });
+      this.emitMachineEvent(roomId, SOCKET_EVENTS.ROUND_LOCKED, action, payload);
       return;
     }
 
     if (action === "DREW_ROUND") {
-      this.server.to(roomId).emit("round:spinning", {
-        roomId,
-        action,
-        result: payload,
-        emittedAt: new Date().toISOString(),
-      });
+      this.emitMachineEvent(roomId, SOCKET_EVENTS.ROUND_SPINNING, action, payload);
       return;
     }
 
     if (action === "SETTLED_ROUND" || action === "RESUMED_SETTLEMENT") {
-      this.server.to(roomId).emit("round:settled", {
-        roomId,
-        action,
-        result: payload,
-        emittedAt: new Date().toISOString(),
-      });
+      this.emitMachineEvent(roomId, SOCKET_EVENTS.ROUND_SETTLED, action, payload);
       return;
     }
 
-    this.server.to(roomId).emit("round:updated", {
+    this.emitMachineEvent(roomId, SOCKET_EVENTS.ROUND_UPDATED, action, payload);
+  }
+
+  private emitMachineEvent(
+    roomId: string,
+    eventName:
+      | typeof SOCKET_EVENTS.ROUND_UPDATED
+      | typeof SOCKET_EVENTS.ROUND_LOCKED
+      | typeof SOCKET_EVENTS.ROUND_SPINNING
+      | typeof SOCKET_EVENTS.ROUND_SETTLED,
+    action: string,
+    result: unknown,
+  ) {
+    const payload = SocketMachineEventSchema.parse({
       roomId,
       action,
-      result: payload,
+      result,
       emittedAt: new Date().toISOString(),
     });
+
+    this.server.to(roomId).emit(eventName, payload);
+  }
+
+  private async configureRedisAdapter(server: GameServer) {
+    const env = getApiEnv();
+
+    if (!env.ENABLE_REDIS) {
+      return;
+    }
+
+    if (!env.REDIS_URL) {
+      const message = "ENABLE_REDIS=true but REDIS_URL is missing.";
+
+      if (env.NODE_ENV === "production") {
+        throw new Error(message);
+      }
+
+      this.logger.warn(message);
+      return;
+    }
+
+    const publisher = createClient({ url: env.REDIS_URL });
+    const subscriber = publisher.duplicate();
+
+    publisher.on("error", (error) => {
+      this.logger.error(`Socket.IO Redis publisher error: ${error.message}`);
+    });
+
+    subscriber.on("error", (error) => {
+      this.logger.error(`Socket.IO Redis subscriber error: ${error.message}`);
+    });
+
+    try {
+      await Promise.all([publisher.connect(), subscriber.connect()]);
+      server.adapter(createAdapter(publisher, subscriber));
+
+      this.redisPublisher = publisher;
+      this.redisSubscriber = subscriber;
+
+      this.logger.log("Socket.IO Redis adapter enabled for /game namespace.");
+    } catch (error) {
+      await Promise.allSettled([subscriber.quit(), publisher.quit()]);
+
+      const message =
+        error instanceof Error ? error.message : "Unknown Redis adapter error";
+
+      if (env.NODE_ENV === "production") {
+        this.logger.error(`Socket.IO Redis adapter failed: ${message}`);
+        throw error;
+      }
+
+      this.logger.warn(
+        `Socket.IO Redis adapter failed; continuing without Redis in ${env.NODE_ENV}: ${message}`,
+      );
+    }
   }
 
   private parseRoomId(rawRoomId: unknown) {
@@ -237,7 +360,10 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
         })
       : [];
 
+    const serverNow = new Date();
+
     return {
+      serverNow: serverNow.toISOString(),
       room: {
         id: room.id,
         categoryId: room.categoryId,
@@ -258,7 +384,9 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
         maxPlayers: room.category.maxPlayers,
         roundDurationMs: room.category.roundDurationMs,
       },
-      currentRound: currentRound ? this.toRoundSnapshot(currentRound) : null,
+      currentRound: currentRound
+        ? this.toRoundSnapshot(currentRound, serverNow)
+        : null,
       entries: entries.map((entry) => ({
         id: entry.id,
         roundId: entry.roundId,
@@ -295,7 +423,12 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
     winnerUserId: string | null;
     winnerEntryId: string | null;
     spinAngle: number | null;
-  }) {
+  }, serverNow = new Date()) {
+    const msUntilLock =
+      round.status === RoundStatus.OPEN && round.locksAt
+        ? Math.max(0, round.locksAt.getTime() - serverNow.getTime())
+        : 0;
+
     return {
       id: round.id,
       roomId: round.roomId,
@@ -317,6 +450,7 @@ export class RoomGateway implements OnGatewayConnection, OnGatewayDisconnect {
       winnerUserId: round.winnerUserId,
       winnerEntryId: round.winnerEntryId,
       spinAngle: round.spinAngle,
+      msUntilLock,
     };
   }
 

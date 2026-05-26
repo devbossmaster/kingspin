@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { useParams } from "next/navigation";
 import { RoundPhaseBanner } from "../../../../components/spinpro/round-phase-banner";
 import { RoundTimer } from "../../../../components/spinpro/round-timer";
@@ -18,18 +17,16 @@ export default function LiveRoomPage() {
   const params = useParams<{ categorySlug: string; roomId: string }>();
   const roomId = params.roomId;
 
-  const [playerKey, setPlayerKey] = useState("player-101");
-
   const {
     state,
     latestResult,
-    devBalance,
+    meWallet,
     error,
     isPlacingEntry,
-    placeDevEntry,
+    placeEntry,
     refresh,
-    refreshDevBalance,
-  } = useRoom(roomId, playerKey);
+    refreshWallet,
+  } = useRoom(roomId);
 
   const selectedChip = useRoomStore((store) => store.selectedChip);
   const setSelectedChip = useRoomStore((store) => store.setSelectedChip);
@@ -125,16 +122,16 @@ export default function LiveRoomPage() {
         <aside className="space-y-4">
           <section className="rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-5">
             <p className="text-sm font-bold uppercase tracking-wide text-yellow-200">
-              Dev Player Balance
+              Wallet
             </p>
             <h2 className="mt-2 text-3xl font-black">
-              {formatAmount(devBalance?.wallet?.balanceSnapshot)}
+              {formatAmount(meWallet?.wallet.balanceSnapshot)}
             </h2>
             <p className="mt-1 text-sm text-yellow-100/80">
-              {devBalance?.player.username ?? playerKey}
+              {meWallet?.user.username ?? "Sign in required"}
             </p>
             <button
-              onClick={() => void refreshDevBalance()}
+              onClick={() => void refreshWallet()}
               className="mt-4 rounded-xl bg-yellow-400 px-4 py-2 text-sm font-bold text-slate-950"
             >
               Refresh Balance
@@ -142,19 +139,7 @@ export default function LiveRoomPage() {
           </section>
 
           <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
-            <h2 className="text-lg font-bold">Place Dev Entry</h2>
-            <p className="mt-1 text-sm text-slate-400">
-              Temporary dev route until real auth entry is connected.
-            </p>
-
-            <label className="mt-4 block text-sm text-slate-300">
-              Player Key
-              <input
-                value={playerKey}
-                onChange={(event) => setPlayerKey(event.target.value)}
-                className="mt-2 w-full rounded-xl border border-white/10 bg-slate-900 px-3 py-2 text-white outline-none"
-              />
-            </label>
+            <h2 className="text-lg font-bold">Place Entry</h2>
 
             <div className="mt-4 grid grid-cols-3 gap-2">
               {[1000, 2000, 5000].map((chip) => (
@@ -173,13 +158,19 @@ export default function LiveRoomPage() {
             </div>
 
             <button
-              disabled={isPlacingEntry || state.currentRound?.status !== "OPEN"}
-              onClick={() =>
-                void placeDevEntry({ playerKey, amount: selectedChip })
+              disabled={
+                isPlacingEntry ||
+                state.currentRound?.status !== "OPEN" ||
+                !meWallet
               }
+              onClick={() => void placeEntry({ amount: selectedChip })}
               className="mt-4 w-full rounded-xl bg-emerald-500 px-4 py-3 font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
             >
-              {isPlacingEntry ? "Placing..." : `Enter ${selectedChip}`}
+              {meWallet
+                ? isPlacingEntry
+                  ? "Placing..."
+                  : `Enter ${selectedChip}`
+                : "Sign in required"}
             </button>
           </section>
 

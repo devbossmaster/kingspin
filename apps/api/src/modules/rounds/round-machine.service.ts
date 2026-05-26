@@ -7,8 +7,10 @@ import {
   OnModuleInit,
 } from "@nestjs/common";
 import { RoomStatus, RoundStatus } from "@kingspin/db";
+import { getApiEnv } from "../../config/api-env";
 import { RoomGateway } from "../../gateways/room.gateway";
 import { PrismaService } from "../../prisma/prisma.service";
+import { RoundMachineLockService } from "./round-machine-lock.service";
 import { RoundsService } from "./rounds.service";
 
 const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
@@ -46,18 +48,18 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
 
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly states = new Map<string, MachineRuntimeState>();
-  private readonly tickingRooms = new Set<string>();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly roundsService: RoundsService,
     private readonly roomGateway: RoomGateway,
+    private readonly roundMachineLockService: RoundMachineLockService,
   ) {}
 
   onModuleInit() {
+    const env = getApiEnv();
     const shouldAutoStart =
-      process.env.ROUND_MACHINE_AUTO_START === "true" ||
-      process.env.NODE_ENV !== "production";
+      env.ROUND_MACHINE_AUTO_START === true || env.NODE_ENV !== "production";
 
     if (!shouldAutoStart) {
       this.logger.log(
@@ -77,7 +79,6 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     }
 
     this.timers.clear();
-    this.tickingRooms.clear();
   }
 
   async startRoomMachine(roomId: string) {
@@ -165,6 +166,36 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
   }
 
   async advanceRoomOnce(roomId: string, options: AdvanceRoomOptions = {}) {
+    if (!roomId) {
+      throw new BadRequestException("roomId is required.");
+    }
+
+    const lockResult = await this.roundMachineLockService.withRoomTickLock(
+      roomId,
+      () => this.advanceRoomOnceLocked(roomId, options),
+    );
+
+    if (!lockResult.acquired) {
+      const message =
+        lockResult.reason === "PROCESS_LOCKED"
+          ? "This process is already advancing this room."
+          : "Another process is advancing this room.";
+
+      return {
+        action: "SKIPPED_NOT_LEADER",
+        roomId,
+        message,
+        force: options.force === true,
+      };
+    }
+
+    return lockResult.result;
+  }
+
+  private async advanceRoomOnceLocked(
+    roomId: string,
+    options: AdvanceRoomOptions = {},
+  ) {
     if (!roomId) {
       throw new BadRequestException("roomId is required.");
     }
@@ -376,12 +407,6 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
       return;
     }
 
-    if (this.tickingRooms.has(roomId)) {
-      return;
-    }
-
-    this.tickingRooms.add(roomId);
-
     try {
       state.tickCount += 1;
       state.lastTickAt = new Date();
@@ -407,8 +432,6 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(`Room machine tick failed for ${roomId}: ${message}`);
 
       this.scheduleNextTick(roomId, 5_000);
-    } finally {
-      this.tickingRooms.delete(roomId);
     }
   }
 
@@ -463,6 +486,10 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
       result?.action === "RESUMED_SETTLEMENT"
     ) {
       return MACHINE_TIMINGS_MS.cooldownPhase;
+    }
+
+    if (result?.action === "SKIPPED_NOT_LEADER") {
+      return 1_000;
     }
 
     return 1_000;

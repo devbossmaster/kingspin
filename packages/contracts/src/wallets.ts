@@ -21,6 +21,24 @@ export const WalletSnapshotSchema = z.object({
   updatedAt: IsoDateStringSchema,
 });
 
+export const CurrentUserSchema = z
+  .object({
+    id: z.string(),
+    username: z.string(),
+    email: z.string().email().optional(),
+    fullName: z.string().nullable().optional(),
+    role: z.string().optional(),
+    emailVerified: z.boolean().optional(),
+  })
+  .strict();
+
+export const MeWalletSchema = z
+  .object({
+    user: CurrentUserSchema,
+    wallet: WalletSnapshotSchema,
+  })
+  .strict();
+
 export const LedgerEntrySnapshotSchema = z.object({
   id: z.string(),
   walletAccountId: z.string(),
@@ -30,17 +48,8 @@ export const LedgerEntrySnapshotSchema = z.object({
   createdAt: IsoDateStringSchema,
 });
 
-export const DevPlayerBalanceSchema = z.object({
-  player: z.object({
-    id: z.string(),
-    username: z.string(),
-    email: z.string().email(),
-    fullName: z.string().nullable(),
-  }),
-  wallet: WalletSnapshotSchema.nullable(),
-});
-
 export type DevCreditWalletInput = z.infer<typeof DevCreditWalletSchema>;
+export type CurrentUser = z.infer<typeof CurrentUserSchema>;
+export type MeWallet = z.infer<typeof MeWalletSchema>;
 export type WalletSnapshot = z.infer<typeof WalletSnapshotSchema>;
 export type LedgerEntrySnapshot = z.infer<typeof LedgerEntrySnapshotSchema>;
-export type DevPlayerBalance = z.infer<typeof DevPlayerBalanceSchema>;

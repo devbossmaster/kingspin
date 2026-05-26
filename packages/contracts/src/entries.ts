@@ -17,10 +17,12 @@ export const DevPlaceEntrySchema = z
     path: ["playerKey"],
   });
 
-export const PlaceEntrySchema = z.object({
-  amount: z.number().int().positive(),
-  idempotencyKey: z.string().min(1).max(200).optional(),
-});
+export const PlaceEntrySchema = z
+  .object({
+    amount: z.number().int().positive(),
+    idempotencyKey: z.string().min(1).max(200).optional(),
+  })
+  .strict();
 
 export const EntrySnapshotSchema = z.object({
   id: z.string(),

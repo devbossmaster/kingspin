@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildDrawInput,
+  findRangeByWinningTicket,
   buildTicketRanges,
   calculateSpinAngle,
   selectWinner,
@@ -24,6 +25,42 @@ describe("game-engine", () => {
       rangesCoverTotal: true,
       rangeError: null,
     });
+  });
+
+  it("covers the full ticket interval without gaps or overlaps", () => {
+    const ranges = buildTicketRanges([
+      { id: "a", userId: "user-a", amount: 1n },
+      { id: "b", userId: "user-b", amount: 3n },
+      { id: "c", userId: "user-c", amount: 2n },
+    ]);
+
+    expect(ranges).toEqual([
+      {
+        id: "a",
+        userId: "user-a",
+        amount: 1n,
+        ticketStart: 0n,
+        ticketEnd: 0n,
+      },
+      {
+        id: "b",
+        userId: "user-b",
+        amount: 3n,
+        ticketStart: 1n,
+        ticketEnd: 3n,
+      },
+      {
+        id: "c",
+        userId: "user-c",
+        amount: 2n,
+        ticketStart: 4n,
+        ticketEnd: 5n,
+      },
+    ]);
+    expect(findRangeByWinningTicket(ranges, 0n)?.id).toBe("a");
+    expect(findRangeByWinningTicket(ranges, 3n)?.id).toBe("b");
+    expect(findRangeByWinningTicket(ranges, 5n)?.id).toBe("c");
+    expect(findRangeByWinningTicket(ranges, 6n)).toBeNull();
   });
 
   it("selects a deterministic winner from the draw input", () => {
@@ -66,6 +103,13 @@ describe("game-engine", () => {
 
   it("calculates spin angle from winning ticket", () => {
     expect(calculateSpinAngle(1968n, 3500n)).toBe(202.4228);
+  });
+
+  it("guards spin angle boundaries", () => {
+    expect(calculateSpinAngle(0n, 3500n)).toBe(0);
+    expect(() => calculateSpinAngle(3500n, 3500n)).toThrow(
+      "winningTicket must be within total ticket range.",
+    );
   });
 
   it("builds the same draw input format used by the API", () => {

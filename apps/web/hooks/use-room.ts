@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
-  DevPlayerBalance,
   LatestRoundResult,
+  MeWallet,
   RoomLiveState,
   SocketMachineEvent,
 } from "@kingspin/contracts";
@@ -11,12 +11,20 @@ import { apiClient } from "../lib/api-client";
 import { getGameSocket } from "../lib/socket-client";
 import { useRoomStore } from "../stores/room-store";
 
-export function useRoom(roomId: string, playerKey?: string) {
+function createIdempotencyKey(roomId: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `entry:${roomId}:${crypto.randomUUID()}`;
+  }
+
+  return `entry:${roomId}:${Date.now()}`;
+}
+
+export function useRoom(roomId: string) {
   const [state, setState] = useState<RoomLiveState | null>(null);
   const [latestResult, setLatestResult] = useState<LatestRoundResult | null>(
     null,
   );
-  const [devBalance, setDevBalance] = useState<DevPlayerBalance | null>(null);
+  const [meWallet, setMeWallet] = useState<MeWallet | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isPlacingEntry, setIsPlacingEntry] = useState(false);
 
@@ -35,18 +43,16 @@ export function useRoom(roomId: string, playerKey?: string) {
     }
   }, [roomId]);
 
-  const refreshDevBalance = useCallback(async () => {
-    if (!playerKey) return null;
-
+  const refreshWallet = useCallback(async () => {
     try {
-      const balance = await apiClient.getDevPlayerBalance(playerKey);
-      setDevBalance(balance);
-      return balance;
+      const wallet = await apiClient.getMeWallet();
+      setMeWallet(wallet);
+      return wallet;
     } catch {
-      setDevBalance(null);
+      setMeWallet(null);
       return null;
     }
-  }, [playerKey]);
+  }, []);
 
   const fetchLatestResult = useCallback(async () => {
     if (!roomId) return null;
@@ -61,8 +67,8 @@ export function useRoom(roomId: string, playerKey?: string) {
   }, [roomId]);
 
   useEffect(() => {
-    void refreshDevBalance();
-  }, [refreshDevBalance]);
+    void refreshWallet();
+  }, [refreshWallet]);
 
   useEffect(() => {
     if (!roomId) return;
@@ -103,7 +109,7 @@ export function useRoom(roomId: string, playerKey?: string) {
       ) {
         showWinner(payload);
         void fetchLatestResult();
-        void refreshDevBalance();
+        void refreshWallet();
       }
     };
 
@@ -130,35 +136,39 @@ export function useRoom(roomId: string, playerKey?: string) {
   }, [
     fetchLatestResult,
     refresh,
-    refreshDevBalance,
+    refreshWallet,
     roomId,
     setConnectionStatus,
     showWinner,
   ]);
 
-  const placeDevEntry = useCallback(
-    async (args: { playerKey: string; amount: number }) => {
+  const placeEntry = useCallback(
+    async (args: { amount: number }) => {
       if (!roomId) return;
+
+      if (!meWallet) {
+        setError("Sign in required.");
+        return;
+      }
 
       setIsPlacingEntry(true);
       setError(null);
 
       try {
-        await apiClient.devPlaceEntry(roomId, {
-          playerKey: args.playerKey,
+        await apiClient.placeEntry(roomId, {
           amount: args.amount,
-          idempotencyKey: `${args.playerKey}:${roomId}:${Date.now()}`,
+          idempotencyKey: createIdempotencyKey(roomId),
         });
 
         await refresh();
-        await refreshDevBalance();
+        await refreshWallet();
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : "Failed to place entry.");
       } finally {
         setIsPlacingEntry(false);
       }
     },
-    [refresh, refreshDevBalance, roomId],
+    [meWallet, refresh, refreshWallet, roomId],
   );
 
   const entriesTotal = useMemo(() => {
@@ -168,13 +178,13 @@ export function useRoom(roomId: string, playerKey?: string) {
   return {
     state,
     latestResult,
-    devBalance,
+    meWallet,
     error,
     isPlacingEntry,
     entriesTotal,
     refresh,
-    refreshDevBalance,
+    refreshWallet,
     fetchLatestResult,
-    placeDevEntry,
+    placeEntry,
   };
 }

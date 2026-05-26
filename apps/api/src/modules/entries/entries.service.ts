@@ -3,16 +3,27 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { Prisma, RoundStatus, type Entry, type User } from "@kingspin/db";
+import {
+  LedgerTransactionType,
+  Prisma,
+  RoundStatus,
+  type Entry,
+  type User,
+} from "@kingspin/db";
 import { randomUUID } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
 import { RoundsService } from "../rounds/rounds.service";
 import { WalletsService } from "../wallets/wallets.service";
 
-export type DevPlaceEntryBody = {
-  userId?: unknown;
-  playerKey?: unknown;
+export type PlaceEntryBody = {
   amount?: unknown;
+  idempotencyKey?: unknown;
+};
+
+export type PlaceEntryForUserArgs = {
+  roomId: string;
+  userId: string;
+  amount: unknown;
   idempotencyKey?: unknown;
 };
 
@@ -36,14 +47,46 @@ export class EntriesService {
     private readonly walletsService: WalletsService,
   ) {}
 
-  async devPlaceEntryForRoom(roomId: string, body: DevPlaceEntryBody) {
+  async placeEntryForUser(args: PlaceEntryForUserArgs) {
+    if (!args.roomId) {
+      throw new BadRequestException("roomId is required.");
+    }
+
+    if (!args.userId) {
+      throw new BadRequestException("Authenticated user id is required.");
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: args.userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException("User not found.");
+    }
+
+    return this.placeEntryForResolvedUser(
+      args.roomId,
+      {
+        amount: args.amount,
+        idempotencyKey: args.idempotencyKey,
+      },
+      user,
+      "entry",
+    );
+  }
+
+  private async placeEntryForResolvedUser(
+    roomId: string,
+    body: PlaceEntryBody,
+    user: User,
+    idempotencyScope: "entry",
+  ) {
     if (!roomId) {
       throw new BadRequestException("roomId is required.");
     }
 
     const addAmount = this.parseAmount(body?.amount);
 
-    const user = await this.resolveDevUserOutsideTransaction(body);
     const wallet = await this.walletsService.ensureMainWalletForUserId(user.id);
 
     const room = await this.prisma.room.findUnique({
@@ -81,43 +124,70 @@ export class EntriesService {
       typeof body?.idempotencyKey === "string" &&
       body.idempotencyKey.trim().length > 0
         ? body.idempotencyKey.trim()
-        : `dev-entry:${currentRound.id}:${user.id}:${randomUUID()}`;
+        : `${idempotencyScope}:${currentRound.id}:${user.id}:${randomUUID()}`;
 
-    const existingLedgerTransaction =
-      await this.prisma.ledgerTransaction.findUnique({
-        where: { idempotencyKey: requestIdempotencyKey },
-      });
+    const existingPlacement = await this.getExistingPlacementSnapshot({
+      idempotencyKey: requestIdempotencyKey,
+      roundId: currentRound.id,
+      userId: user.id,
+      walletAccountId: wallet.id,
+      amount: addAmount,
+      player: user,
+    });
 
-    if (existingLedgerTransaction) {
-      const existingEntry = await this.prisma.entry.findUniqueOrThrow({
-        where: {
-          roundId_userId: {
-            roundId: currentRound.id,
-            userId: user.id,
-          },
-        },
-      });
-
-      const freshWallet = await this.prisma.walletAccount.findUniqueOrThrow({
-        where: { id: wallet.id },
-      });
-
-      const freshRound = await this.prisma.round.findUniqueOrThrow({
-        where: { id: currentRound.id },
-      });
-
-      return {
-        entry: this.toEntrySnapshot(existingEntry),
-        player: this.toPlayerSnapshot(user),
-        wallet: this.toWalletSnapshot(freshWallet),
-        currentRound: this.roundsService.toRoundSnapshot(freshRound),
-        reused: true,
-      };
+    if (existingPlacement) {
+      return existingPlacement;
     }
 
+    const existingEntry = await this.prisma.entry.findUnique({
+      where: {
+        roundId_userId: {
+          roundId: currentRound.id,
+          userId: user.id,
+        },
+      },
+    });
+
+    this.assertEntryIncreaseAllowed(addAmount, room.category, existingEntry);
+
+    const pendingHoldEntryId = await this.getPendingHoldEntryId({
+      idempotencyKey: requestIdempotencyKey,
+      roundId: currentRound.id,
+      userId: user.id,
+      walletAccountId: wallet.id,
+      amount: addAmount,
+    });
+    const entryId = existingEntry?.id ?? pendingHoldEntryId ?? randomUUID();
+    let walletHoldSucceeded = false;
+
     try {
+      const hold = await this.walletsService.holdEntryAmountForEntry({
+        walletAccountId: wallet.id,
+        userId: user.id,
+        roundId: currentRound.id,
+        entryId,
+        amount: addAmount,
+        idempotencyKey: requestIdempotencyKey,
+      });
+      walletHoldSucceeded = true;
+
+      if (hold.reused) {
+        const replay = await this.getExistingPlacementSnapshot({
+          idempotencyKey: requestIdempotencyKey,
+          roundId: currentRound.id,
+          userId: user.id,
+          walletAccountId: wallet.id,
+          amount: addAmount,
+          player: user,
+        });
+
+        if (replay) {
+          return replay;
+        }
+      }
+
       const result = await this.prisma.$transaction(async (tx) => {
-        const existingEntry = await tx.entry.findUnique({
+        const currentEntry = await tx.entry.findUnique({
           where: {
             roundId_userId: {
               roundId: currentRound.id,
@@ -128,21 +198,10 @@ export class EntriesService {
 
         let entry: Entry;
 
-        if (!existingEntry) {
-          if (addAmount < room.category.minEntryAmount) {
-            throw new BadRequestException(
-              `Entry amount is below category minimum. Minimum is ${room.category.minEntryAmount.toString()}.`,
-            );
-          }
-
-          if (addAmount > room.category.maxEntryAmount) {
-            throw new BadRequestException(
-              `Entry amount is above category maximum. Maximum is ${room.category.maxEntryAmount.toString()}.`,
-            );
-          }
-
+        if (!currentEntry) {
           entry = await tx.entry.create({
             data: {
+              id: entryId,
               roundId: currentRound.id,
               userId: user.id,
               amount: addAmount,
@@ -151,16 +210,26 @@ export class EntriesService {
             },
           });
         } else {
-          const finalAmount = existingEntry.amount + addAmount;
-
-          if (finalAmount > room.category.maxEntryAmount) {
+          if (!existingEntry && currentEntry.id !== entryId) {
             throw new BadRequestException(
-              `Entry increase would exceed category maximum. Maximum is ${room.category.maxEntryAmount.toString()}, current is ${existingEntry.amount.toString()}, attempted add is ${addAmount.toString()}.`,
+              "Another entry was created for this user and round. Retry the request as a top-up.",
             );
           }
 
-          await tx.entry.update({
-            where: { id: existingEntry.id },
+          this.assertEntryIncreaseAllowed(addAmount, room.category, currentEntry);
+
+          const maxAmountBeforeIncrement =
+            room.category.maxEntryAmount - addAmount;
+
+          const entryUpdate = await tx.entry.updateMany({
+            where: {
+              id: currentEntry.id,
+              roundId: currentRound.id,
+              userId: user.id,
+              amount: {
+                lte: maxAmountBeforeIncrement,
+              },
+            },
             data: {
               amount: {
                 increment: addAmount,
@@ -170,19 +239,16 @@ export class EntriesService {
             },
           });
 
+          if (entryUpdate.count !== 1) {
+            throw new BadRequestException(
+              `Entry increase would exceed category maximum. Maximum is ${room.category.maxEntryAmount.toString()}, current is ${currentEntry.amount.toString()}, attempted add is ${addAmount.toString()}.`,
+            );
+          }
+
           entry = await tx.entry.findUniqueOrThrow({
-            where: { id: existingEntry.id },
+            where: { id: currentEntry.id },
           });
         }
-
-        const updatedWallet = await this.walletsService.holdEntryAmount(tx, {
-          walletAccountId: wallet.id,
-          userId: user.id,
-          roundId: currentRound.id,
-          entryId: entry.id,
-          amount: addAmount,
-          idempotencyKey: requestIdempotencyKey,
-        });
 
         const roundUpdate = await tx.round.updateMany({
           where: {
@@ -205,9 +271,30 @@ export class EntriesService {
           where: { id: currentRound.id },
         });
 
+        await tx.ledgerTransaction.update({
+          where: { idempotencyKey: requestIdempotencyKey },
+          data: {
+            referenceId: entry.id,
+            metadata: {
+              ...this.toMetadataRecord(hold.transaction.metadata),
+              userId: user.id,
+              roundId: currentRound.id,
+              entryId: entry.id,
+              amount: addAmount.toString(),
+              walletAccountId: wallet.id,
+              holdState: "APPLIED",
+              appliedAt: new Date().toISOString(),
+              entryAmountAfter: entry.amount.toString(),
+              roundTotalEntryAmountAfter:
+                updatedRound.totalEntryAmount.toString(),
+              roundPayoutAmountAfter: updatedRound.payoutAmount.toString(),
+            },
+          },
+        });
+
         return {
           entry,
-          wallet: updatedWallet,
+          wallet: hold.wallet,
           round: updatedRound,
         };
       });
@@ -220,6 +307,19 @@ export class EntriesService {
         reused: false,
       };
     } catch (error) {
+      if (walletHoldSucceeded) {
+        try {
+          await this.walletsService.refundEntryHoldByIdempotencyKey({
+            holdIdempotencyKey: requestIdempotencyKey,
+            reason: this.toCompensationReason(error),
+          });
+        } catch {
+          throw new BadRequestException(
+            "Entry placement failed after wallet hold and automatic refund failed. Manual review required.",
+          );
+        }
+      }
+
       if (this.isUniqueConstraintError(error)) {
         throw new BadRequestException(
           "Duplicate entry request detected. Use an idempotency key and retry safely.",
@@ -228,6 +328,199 @@ export class EntriesService {
 
       throw error;
     }
+  }
+
+  private async getExistingPlacementSnapshot(args: {
+    idempotencyKey: string;
+    roundId: string;
+    userId: string;
+    walletAccountId: string;
+    amount: bigint;
+    player: User;
+  }) {
+    const transaction = await this.prisma.ledgerTransaction.findUnique({
+      where: { idempotencyKey: args.idempotencyKey },
+    });
+
+    if (!transaction) {
+      return null;
+    }
+
+    this.assertEntryHoldTransactionMatches(transaction, args);
+
+    const compensation = await this.prisma.ledgerTransaction.findUnique({
+      where: {
+        idempotencyKey:
+          WalletsService.entryHoldCompensationIdempotencyKey(transaction.id),
+      },
+    });
+
+    if (compensation) {
+      throw new BadRequestException(
+        "Previous entry request was refunded after a failed write. Retry with a new idempotency key.",
+      );
+    }
+
+    if (this.getMetadataString(transaction.metadata, "holdState") === "HELD") {
+      return null;
+    }
+
+    const entryId =
+      this.getMetadataString(transaction.metadata, "entryId") ?? undefined;
+
+    const entry = entryId
+      ? await this.prisma.entry.findUniqueOrThrow({
+          where: { id: entryId },
+        })
+      : await this.prisma.entry.findUniqueOrThrow({
+          where: {
+            roundId_userId: {
+              roundId: args.roundId,
+              userId: args.userId,
+            },
+          },
+        });
+
+    const freshWallet = await this.prisma.walletAccount.findUniqueOrThrow({
+      where: { id: args.walletAccountId },
+    });
+
+    const freshRound = await this.prisma.round.findUniqueOrThrow({
+      where: { id: args.roundId },
+    });
+
+    return {
+      entry: this.toEntrySnapshot(entry),
+      player: this.toPlayerSnapshot(args.player),
+      wallet: this.toWalletSnapshot(freshWallet),
+      currentRound: this.roundsService.toRoundSnapshot(freshRound),
+      reused: true,
+    };
+  }
+
+  private async getPendingHoldEntryId(args: {
+    idempotencyKey: string;
+    roundId: string;
+    userId: string;
+    walletAccountId: string;
+    amount: bigint;
+  }) {
+    const transaction = await this.prisma.ledgerTransaction.findUnique({
+      where: { idempotencyKey: args.idempotencyKey },
+    });
+
+    if (!transaction) {
+      return null;
+    }
+
+    this.assertEntryHoldTransactionMatches(transaction, args);
+
+    const compensation = await this.prisma.ledgerTransaction.findUnique({
+      where: {
+        idempotencyKey:
+          WalletsService.entryHoldCompensationIdempotencyKey(transaction.id),
+      },
+    });
+
+    if (compensation) {
+      throw new BadRequestException(
+        "Previous entry request was refunded after a failed write. Retry with a new idempotency key.",
+      );
+    }
+
+    if (this.getMetadataString(transaction.metadata, "holdState") !== "HELD") {
+      return null;
+    }
+
+    return this.getMetadataString(transaction.metadata, "entryId");
+  }
+
+  private assertEntryIncreaseAllowed(
+    addAmount: bigint,
+    category: {
+      minEntryAmount: bigint;
+      maxEntryAmount: bigint;
+    },
+    existingEntry: Pick<Entry, "amount"> | null,
+  ) {
+    if (!existingEntry) {
+      if (addAmount < category.minEntryAmount) {
+        throw new BadRequestException(
+          `Entry amount is below category minimum. Minimum is ${category.minEntryAmount.toString()}.`,
+        );
+      }
+
+      if (addAmount > category.maxEntryAmount) {
+        throw new BadRequestException(
+          `Entry amount is above category maximum. Maximum is ${category.maxEntryAmount.toString()}.`,
+        );
+      }
+
+      return;
+    }
+
+    if (existingEntry.amount + addAmount > category.maxEntryAmount) {
+      throw new BadRequestException(
+        `Entry increase would exceed category maximum. Maximum is ${category.maxEntryAmount.toString()}, current is ${existingEntry.amount.toString()}, attempted add is ${addAmount.toString()}.`,
+      );
+    }
+  }
+
+  private assertEntryHoldTransactionMatches(
+    transaction: {
+      id: string;
+      type: LedgerTransactionType;
+      referenceType: string | null;
+      metadata: Prisma.JsonValue | null;
+    },
+    args: {
+      roundId: string;
+      userId: string;
+      walletAccountId: string;
+      amount: bigint;
+    },
+  ) {
+    const matches =
+      transaction.type === LedgerTransactionType.ENTRY_HOLD &&
+      transaction.referenceType === "ENTRY" &&
+      this.getMetadataString(transaction.metadata, "roundId") === args.roundId &&
+      this.getMetadataString(transaction.metadata, "userId") === args.userId &&
+      this.getMetadataString(transaction.metadata, "walletAccountId") ===
+        args.walletAccountId &&
+      this.getMetadataString(transaction.metadata, "amount") ===
+        args.amount.toString();
+
+    if (!matches) {
+      throw new BadRequestException(
+        "Idempotency key was already used for a different entry request.",
+      );
+    }
+  }
+
+  private getMetadataString(metadata: Prisma.JsonValue | null, key: string) {
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+      return null;
+    }
+
+    const value = (metadata as Record<string, unknown>)[key];
+
+    return typeof value === "string" ? value : null;
+  }
+
+  private toMetadataRecord(metadata: Prisma.JsonValue | null) {
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+      return {};
+    }
+
+    return metadata as Record<string, Prisma.JsonValue>;
+  }
+
+  private toCompensationReason(error: unknown) {
+    if (error instanceof Error && error.message.trim().length > 0) {
+      return error.message.slice(0, 200);
+    }
+
+    return "ENTRY_WRITE_FAILED";
   }
 
   private parseAmount(rawAmount: unknown): bigint {
@@ -244,50 +537,6 @@ export class EntriesService {
     }
 
     return BigInt(rawAmount);
-  }
-
-  private async resolveDevUserOutsideTransaction(
-    body: DevPlaceEntryBody,
-  ): Promise<User> {
-    if (typeof body?.userId === "string" && body.userId.trim().length > 0) {
-      const user = await this.prisma.user.findUnique({
-        where: { id: body.userId.trim() },
-      });
-
-      if (!user) {
-        throw new NotFoundException("User not found.");
-      }
-
-      return user;
-    }
-
-    const playerKey =
-      typeof body?.playerKey === "string" && body.playerKey.trim().length > 0
-        ? body.playerKey.trim()
-        : "player-1";
-
-    const safePlayerKey = playerKey
-      .toLowerCase()
-      .replace(/[^a-z0-9_-]/g, "-")
-      .slice(0, 32);
-
-    const email = `dev+${safePlayerKey}@kingspin.local`;
-    const username = `dev_${safePlayerKey}`;
-
-    return this.prisma.user.upsert({
-      where: { email },
-      update: {
-        username,
-        fullName: `Dev Player ${safePlayerKey}`,
-        emailVerified: true,
-      },
-      create: {
-        email,
-        username,
-        fullName: `Dev Player ${safePlayerKey}`,
-        emailVerified: true,
-      },
-    });
   }
 
   private isUniqueConstraintError(error: unknown) {

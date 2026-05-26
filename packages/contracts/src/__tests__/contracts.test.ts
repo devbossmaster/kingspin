@@ -1,29 +1,68 @@
 import { describe, expect, it } from "vitest";
 import {
-  DevPlaceEntrySchema,
+  CurrentUserSchema,
   LatestRoundResultSchema,
+  MeWalletSchema,
+  PlaceEntrySchema,
   RoomLiveStateSchema,
+  SocketMachineEventSchema,
+  SocketPresenceEventSchema,
   SocketRoundStateEventSchema,
 } from "../index";
 
 describe("contracts", () => {
-  it("rejects invalid dev place entry amount", () => {
-    const result = DevPlaceEntrySchema.safeParse({
-      playerKey: "player-1",
+  it("rejects invalid place entry amount", () => {
+    const result = PlaceEntrySchema.safeParse({
       amount: 0,
     });
 
     expect(result.success).toBe(false);
   });
 
-  it("accepts valid dev place entry", () => {
-    const result = DevPlaceEntrySchema.safeParse({
-      playerKey: "player-1",
+  it("accepts valid production place entry", () => {
+    const result = PlaceEntrySchema.safeParse({
       amount: 1000,
       idempotencyKey: "entry-1",
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("rejects identity fields in production place entry", () => {
+    const result = PlaceEntrySchema.safeParse({
+      amount: 1000,
+      userId: "user-1",
+      playerKey: "player-1",
+      walletId: "wallet-1",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts current user and me wallet shapes", () => {
+    const user = {
+      id: "user-1",
+      username: "player1",
+      email: "player1@example.com",
+      fullName: "Player One",
+      role: "PLAYER",
+      emailVerified: true,
+    };
+
+    expect(CurrentUserSchema.safeParse(user).success).toBe(true);
+    expect(
+      MeWalletSchema.safeParse({
+        user,
+        wallet: {
+          id: "wallet-1",
+          userId: "user-1",
+          type: "MAIN",
+          balanceSnapshot: "1000",
+          createdAt: "2026-05-26T11:31:15.289Z",
+          updatedAt: "2026-05-26T11:31:15.289Z",
+        },
+      }).success,
+    ).toBe(true);
   });
 
   it("accepts a public room live-state shape", () => {
@@ -164,5 +203,24 @@ describe("contracts", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("accepts socket machine and presence event shapes", () => {
+    expect(
+      SocketMachineEventSchema.safeParse({
+        roomId: "room-1",
+        action: "LOCKED_ROUND",
+        result: { ok: true },
+        emittedAt: "2026-05-26T11:23:08.262Z",
+      }).success,
+    ).toBe(true);
+
+    expect(
+      SocketPresenceEventSchema.safeParse({
+        roomId: "room-1",
+        socketId: "socket-1",
+        joinedAt: "2026-05-26T11:23:08.262Z",
+      }).success,
+    ).toBe(true);
   });
 });

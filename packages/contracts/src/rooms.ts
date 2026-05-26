@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { BigIntStringSchema, IsoDateStringSchema } from "./common";
+import { EntryWithPlayerSnapshotSchema } from "./entries";
+import { LiveRoundSnapshotSchema } from "./rounds";
 
 export const RoomStatusSchema = z.enum([
   "DRAFT",
@@ -12,21 +15,44 @@ export const RoomStatusSchema = z.enum([
 export const CreateRoomSchema = z.object({
   categoryId: z.string().min(1),
   code: z.string().min(1).max(20),
-  name: z.string().max(80).optional(),
-  maxPlayers: z.number().int().min(2).max(50).default(24),
-  roundDurationMs: z.number().int().min(15000).max(120000).default(45000),
+  name: z.string().min(1).max(120).optional(),
+  isPermanent: z.boolean().optional(),
+  maxPlayers: z.number().int().positive().optional(),
+  roundDurationMs: z.number().int().positive().optional(),
 });
 
-export const RoomSchema = z.object({
+export const RoomSnapshotSchema = z.object({
   id: z.string(),
   categoryId: z.string(),
   code: z.string(),
-  name: z.string().nullable().optional(),
+  name: z.string(),
   status: RoomStatusSchema,
-  maxPlayers: z.number().int(),
-  roundDurationMs: z.number().int(),
+  isPermanent: z.boolean(),
+  maxPlayers: z.number().int().positive(),
+  roundDurationMs: z.number().int().positive(),
+  activatedAt: IsoDateStringSchema.nullable(),
+});
+
+export const CategorySnapshotSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  slug: z.string(),
+  minEntryAmount: BigIntStringSchema,
+  maxEntryAmount: BigIntStringSchema,
+  maxPlayers: z.number().int().positive(),
+  roundDurationMs: z.number().int().positive(),
+});
+
+export const RoomLiveStateSchema = z.object({
+  serverNow: IsoDateStringSchema,
+  room: RoomSnapshotSchema,
+  category: CategorySnapshotSchema,
+  currentRound: LiveRoundSnapshotSchema.nullable(),
+  entries: z.array(EntryWithPlayerSnapshotSchema),
 });
 
 export type RoomStatus = z.infer<typeof RoomStatusSchema>;
 export type CreateRoomInput = z.infer<typeof CreateRoomSchema>;
-export type Room = z.infer<typeof RoomSchema>;
+export type RoomSnapshot = z.infer<typeof RoomSnapshotSchema>;
+export type CategorySnapshot = z.infer<typeof CategorySnapshotSchema>;
+export type RoomLiveState = z.infer<typeof RoomLiveStateSchema>;

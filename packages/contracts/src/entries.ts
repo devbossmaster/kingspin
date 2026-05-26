@@ -1,17 +1,25 @@
 import { z } from "zod";
+import {
+  BigIntStringSchema,
+  IsoDateStringSchema,
+  PlayerPublicSchema,
+} from "./common";
 
-const BigIntStringSchema = z.string().regex(/^\d+$/);
+export const DevPlaceEntrySchema = z
+  .object({
+    userId: z.string().min(1).optional(),
+    playerKey: z.string().min(1).optional(),
+    amount: z.number().int().positive(),
+    idempotencyKey: z.string().min(1).max(200).optional(),
+  })
+  .refine((value) => value.userId || value.playerKey, {
+    message: "Either userId or playerKey is required.",
+    path: ["playerKey"],
+  });
 
-export const DevPlaceEntrySchema = z.object({
-  userId: z.string().min(1).optional(),
-  playerKey: z.string().min(1).optional(),
-
-  // Added amount.
-  // If the user already has an entry, this increases their existing entry.
+export const PlaceEntrySchema = z.object({
   amount: z.number().int().positive(),
-
-  // Strongly recommended for retry safety.
-  idempotencyKey: z.string().min(1).optional(),
+  idempotencyKey: z.string().min(1).max(200).optional(),
 });
 
 export const EntrySnapshotSchema = z.object({
@@ -22,9 +30,17 @@ export const EntrySnapshotSchema = z.object({
   ticketStart: BigIntStringSchema.nullable(),
   ticketEnd: BigIntStringSchema.nullable(),
   isWinner: z.boolean(),
-  createdAt: z.string(),
-  updatedAt: z.string(),
+  createdAt: IsoDateStringSchema,
+  updatedAt: IsoDateStringSchema,
+});
+
+export const EntryWithPlayerSnapshotSchema = EntrySnapshotSchema.extend({
+  player: PlayerPublicSchema.nullable().optional(),
 });
 
 export type DevPlaceEntryInput = z.infer<typeof DevPlaceEntrySchema>;
+export type PlaceEntryInput = z.infer<typeof PlaceEntrySchema>;
 export type EntrySnapshot = z.infer<typeof EntrySnapshotSchema>;
+export type EntryWithPlayerSnapshot = z.infer<
+  typeof EntryWithPlayerSnapshotSchema
+>;

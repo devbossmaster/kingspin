@@ -317,8 +317,10 @@ export class RoundsService {
       return {
         currentRound: this.toRoundSnapshot(currentRound),
         winningTicket: currentRound.winningTicket.toString(),
-        winnerEntry: winnerEntry ? this.toEntrySnapshot(winnerEntry) : null,
-        entries: entries.map((entry) => this.toEntrySnapshot(entry)),
+        winnerEntry: winnerEntry
+        ? this.toEntryWithPlayerSnapshot(winnerEntry)
+        : null,
+        entries: entries.map((entry) => this.toEntryWithPlayerSnapshot(entry)),
         reused: true,
       };
     }
@@ -463,7 +465,9 @@ export class RoundsService {
 
         return {
           currentRound: this.toRoundSnapshot(completedRound),
-          winnerEntry: winnerEntry ? this.toEntrySnapshot(winnerEntry) : null,
+          winnerEntry: winnerEntry
+        ? this.toEntryWithPlayerSnapshot(winnerEntry)
+        : null,
           payoutAmount: completedRound.payoutAmount.toString(),
           payout: null,
           reused: true,
@@ -702,6 +706,15 @@ export class RoundsService {
 
     const entries = await this.prisma.entry.findMany({
       where: { roundId: round.id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            username: true,
+            fullName: true,
+          },
+        },
+      },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
 
@@ -770,8 +783,10 @@ export class RoundsService {
         rangesCoverTotal: rangesCheck.rangesCoverTotal,
         rangeError: rangesCheck.rangeError,
       },
-      winnerEntry: winnerEntry ? this.toEntrySnapshot(winnerEntry) : null,
-      entries: entries.map((entry) => this.toEntrySnapshot(entry)),
+      winnerEntry: winnerEntry
+        ? this.toEntryWithPlayerSnapshot(winnerEntry)
+        : null,
+      entries: entries.map((entry) => this.toEntryWithPlayerSnapshot(entry)),
     };
   }
   toRoundSnapshot(round: Round): RoundSnapshot {
@@ -839,7 +854,46 @@ export class RoundsService {
   private calculateSpinAngle(winningTicket: bigint, totalTickets: bigint) {
     return calculateGameSpinAngle(winningTicket, totalTickets);
   }
+
+  private toEntryWithPlayerSnapshot(entry: {
+    id: string;
+    roundId: string;
+    userId: string;
+    amount: bigint;
+    ticketStart: bigint | null;
+    ticketEnd: bigint | null;
+    isWinner: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+    user?: {
+      id: string;
+      username: string;
+      fullName: string | null;
+    } | null;
+  }) {
+    return {
+      id: entry.id,
+      roundId: entry.roundId,
+      userId: entry.userId,
+      player: entry.user
+        ? {
+            id: entry.user.id,
+            username: entry.user.username,
+            fullName: entry.user.fullName,
+          }
+        : null,
+      amount: entry.amount.toString(),
+      ticketStart: entry.ticketStart?.toString() ?? null,
+      ticketEnd: entry.ticketEnd?.toString() ?? null,
+      isWinner: entry.isWinner,
+      createdAt: entry.createdAt.toISOString(),
+      updatedAt: entry.updatedAt.toISOString(),
+    };
+  }
 }
+
+
+
 
 
 

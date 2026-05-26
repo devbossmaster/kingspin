@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  BigIntStringSchema,
+  IsoDateStringSchema,
+  NullableIsoDateStringSchema,
+} from "./common";
+import { EntryWithPlayerSnapshotSchema } from "./entries";
 
 export const RoundStatusSchema = z.enum([
   "OPEN",
@@ -10,8 +16,6 @@ export const RoundStatusSchema = z.enum([
   "CANCELLED",
 ]);
 
-const BigIntStringSchema = z.string().regex(/^\d+$/);
-
 export const RoundSnapshotSchema = z.object({
   id: z.string(),
   roomId: z.string(),
@@ -20,14 +24,14 @@ export const RoundSnapshotSchema = z.object({
   totalEntryAmount: BigIntStringSchema,
   houseFeeAmount: BigIntStringSchema,
   payoutAmount: BigIntStringSchema,
-  openedAt: z.string(),
-  locksAt: z.string().nullable(),
-  lockedAt: z.string().nullable(),
-  drawingAt: z.string().nullable(),
-  spinningAt: z.string().nullable(),
-  settlingAt: z.string().nullable(),
-  completedAt: z.string().nullable(),
-  cancelledAt: z.string().nullable(),
+  openedAt: IsoDateStringSchema,
+  locksAt: NullableIsoDateStringSchema,
+  lockedAt: NullableIsoDateStringSchema,
+  drawingAt: NullableIsoDateStringSchema,
+  spinningAt: NullableIsoDateStringSchema,
+  settlingAt: NullableIsoDateStringSchema,
+  completedAt: NullableIsoDateStringSchema,
+  cancelledAt: NullableIsoDateStringSchema,
   serverSeedHash: z.string().nullable(),
   winningTicket: BigIntStringSchema.nullable(),
   winnerUserId: z.string().nullable(),
@@ -35,37 +39,35 @@ export const RoundSnapshotSchema = z.object({
   spinAngle: z.number().nullable(),
 });
 
-export const RoomStateSchema = z.object({
-  room: z.object({
-    id: z.string(),
-    categoryId: z.string(),
-    code: z.string(),
-    name: z.string().nullable(),
-    status: z.string(),
-    isPermanent: z.boolean(),
-    maxPlayers: z.number().int(),
-    roundDurationMs: z.number().int(),
-    activatedAt: z.string().nullable(),
-  }),
-  category: z.object({
-    id: z.string(),
-    name: z.string(),
-    slug: z.string(),
-    minEntryAmount: BigIntStringSchema,
-    maxEntryAmount: BigIntStringSchema,
-    maxPlayers: z.number().int(),
-    roundDurationMs: z.number().int(),
-  }),
-  currentRound: RoundSnapshotSchema.nullable(),
+export const LiveRoundSnapshotSchema = RoundSnapshotSchema.extend({
+  msUntilLock: z.number().int().nonnegative(),
 });
 
-export const PlaceEntrySchema = z.object({
-  roomId: z.string().min(1),
-  roundId: z.string().min(1),
-  amount: z.number().int().positive(),
+export const FairnessProofSchema = z.object({
+  serverSeedHash: z.string().nullable(),
+  recomputedServerSeedHash: z.string().nullable(),
+  seedHashMatches: z.boolean(),
+  drawInput: z.string().nullable(),
+  drawHash: z.string().nullable(),
+  recomputedWinningTicket: BigIntStringSchema.nullable(),
+  winningTicketMatches: z.boolean(),
+  winnerTicketInsideRange: z.boolean(),
+  rangesCoverTotal: z.boolean(),
+  rangeError: z.string().nullable(),
+});
+
+export const LatestRoundResultSchema = z.object({
+  round: RoundSnapshotSchema,
+  serverSeedReveal: z.string().nullable(),
+  fairness: FairnessProofSchema,
+  winnerEntry: EntryWithPlayerSnapshotSchema.nullable(),
+  entries: z.array(EntryWithPlayerSnapshotSchema),
 });
 
 export type RoundStatus = z.infer<typeof RoundStatusSchema>;
 export type RoundSnapshot = z.infer<typeof RoundSnapshotSchema>;
-export type RoomState = z.infer<typeof RoomStateSchema>;
-export type PlaceEntryInput = z.infer<typeof PlaceEntrySchema>;
+export type LiveRoundSnapshot = z.infer<typeof LiveRoundSnapshotSchema>;
+export type FairnessProof = z.infer<typeof FairnessProofSchema>;
+export type LatestRoundResult = z.infer<typeof LatestRoundResultSchema>;
+
+

@@ -1,6 +1,5 @@
 import { z } from "zod";
-
-const BigIntStringSchema = z.string().regex(/^\d+$/);
+import { BigIntStringSchema, IsoDateStringSchema } from "./common";
 
 export const WalletAccountTypeSchema = z.enum(["MAIN", "BONUS", "HOUSE"]);
 export const LedgerDirectionSchema = z.enum(["CREDIT", "DEBIT"]);
@@ -18,8 +17,8 @@ export const WalletSnapshotSchema = z.object({
   userId: z.string().nullable(),
   type: WalletAccountTypeSchema,
   balanceSnapshot: BigIntStringSchema,
-  createdAt: z.string(),
-  updatedAt: z.string(),
+  createdAt: IsoDateStringSchema,
+  updatedAt: IsoDateStringSchema,
 });
 
 export const LedgerEntrySnapshotSchema = z.object({
@@ -28,9 +27,20 @@ export const LedgerEntrySnapshotSchema = z.object({
   direction: LedgerDirectionSchema,
   amount: BigIntStringSchema,
   balanceAfterSnapshot: BigIntStringSchema.nullable(),
-  createdAt: z.string(),
+  createdAt: IsoDateStringSchema,
+});
+
+export const DevPlayerBalanceSchema = z.object({
+  player: z.object({
+    id: z.string(),
+    username: z.string(),
+    email: z.string().email(),
+    fullName: z.string().nullable(),
+  }),
+  wallet: WalletSnapshotSchema.nullable(),
 });
 
 export type DevCreditWalletInput = z.infer<typeof DevCreditWalletSchema>;
 export type WalletSnapshot = z.infer<typeof WalletSnapshotSchema>;
 export type LedgerEntrySnapshot = z.infer<typeof LedgerEntrySnapshotSchema>;
+export type DevPlayerBalance = z.infer<typeof DevPlayerBalanceSchema>;

@@ -1,19 +1,19 @@
-import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
+import { parseApiEnv } from "@kingspin/env";
+import { NestFactory } from "@nestjs/core";
+import { AppModule } from "./app.module";
 
 async function bootstrap() {
+  const env = parseApiEnv(process.env);
   const app = await NestFactory.create(AppModule);
 
   app.enableCors({
-    origin: ['http://localhost:3000'],
+    origin: env.WEB_URL,
     credentials: true,
   });
 
-  const port = process.env.PORT ? Number(process.env.PORT) : 4000;
+  await app.listen(env.PORT);
 
-  await app.listen(port);
-
-  console.log(`KingSpin API running on http://localhost:${port}`);
+  console.log(`KingSpin API running on http://localhost:${env.PORT}`);
 }
 
 bootstrap();

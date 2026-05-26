@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
+import { parseApiEnv } from "@kingspin/env";
 import { AdminEntriesModule } from "./modules/admin/entries/admin-entries.module";
 import { AdminRoomsModule } from "./modules/admin/rooms/admin-rooms.module";
 import { AdminRoundsModule } from "./modules/admin/rounds/admin-rounds.module";
@@ -20,6 +21,8 @@ import { AppService } from "./app.service";
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: [".env"],
+      validate: (config) =>
+        parseApiEnv(config as Record<string, string | undefined>),
     }),
     PrismaModule,
     CategoriesModule,

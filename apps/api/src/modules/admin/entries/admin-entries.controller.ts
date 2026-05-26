@@ -1,14 +1,12 @@
 import { Body, Controller, Param, Post, UseGuards } from "@nestjs/common";
+import {
+  DevPlaceEntrySchema,
+  type DevPlaceEntryInput,
+} from "@kingspin/contracts";
 import { RoomGateway } from "../../../gateways/room.gateway";
 import { AdminDevGuard } from "../../../guards/admin-dev.guard";
+import { ZodValidationPipe } from "../../../pipes/zod-validation.pipe";
 import { EntriesService } from "../../entries/entries.service";
-
-type DevPlaceEntryRequestBody = {
-  userId?: unknown;
-  playerKey?: unknown;
-  amount?: unknown;
-  idempotencyKey?: unknown;
-};
 
 @Controller("admin/rooms/:roomId/entries")
 @UseGuards(AdminDevGuard)
@@ -21,11 +19,15 @@ export class AdminEntriesController {
   @Post("dev-place")
   async devPlaceEntry(
     @Param("roomId") roomId: string,
-    @Body() body: DevPlaceEntryRequestBody,
+    @Body(new ZodValidationPipe(DevPlaceEntrySchema))
+    body: DevPlaceEntryInput,
   ) {
     const result = await this.entriesService.devPlaceEntryForRoom(roomId, body);
 
-    await this.roomGateway.broadcastRoundState(roomId, "ENTRY_PLACED");
+    await this.roomGateway.broadcastRoundState(
+      roomId,
+      result.reused ? "ENTRY_REUSED" : "ENTRY_PLACED",
+    );
 
     return result;
   }

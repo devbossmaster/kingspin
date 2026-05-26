@@ -4,10 +4,13 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
-import { RoundStatus, type Round } from "@kingspin/db";
+import { RoundStatus, type Entry, type Round } from "@kingspin/db";
 import { createHash, randomBytes } from "node:crypto";
 import { PrismaService } from "../../prisma/prisma.service";
-import { WalletsService, type EntryRefundResult } from "../wallets/wallets.service";
+import {
+  WalletsService,
+  type EntryRefundResult,
+} from "../wallets/wallets.service";
 
 const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
   RoundStatus.OPEN,
@@ -46,6 +49,18 @@ export type RoundSnapshot = {
   winnerUserId: string | null;
   winnerEntryId: string | null;
   spinAngle: number | null;
+};
+
+type EntrySnapshot = {
+  id: string;
+  roundId: string;
+  userId: string;
+  amount: string;
+  ticketStart: string | null;
+  ticketEnd: string | null;
+  isWinner: boolean;
+  createdAt: string;
+  updatedAt: string;
 };
 
 @Injectable()
@@ -232,20 +247,336 @@ export class RoundsService {
 
     return {
       currentRound: this.toRoundSnapshot(result.round),
-      entries: result.entries.map((entry) => ({
-        id: entry.id,
-        roundId: entry.roundId,
-        userId: entry.userId,
-        amount: entry.amount.toString(),
-        ticketStart: entry.ticketStart?.toString() ?? null,
-        ticketEnd: entry.ticketEnd?.toString() ?? null,
-        isWinner: entry.isWinner,
-        createdAt: entry.createdAt.toISOString(),
-        updatedAt: entry.updatedAt.toISOString(),
-      })),
+      entries: result.entries.map((entry) => this.toEntrySnapshot(entry)),
     };
   }
 
+  async drawCurrentRoundForRoom(roomId: string) {
+    if (!roomId) {
+      throw new BadRequestException("roomId is required.");
+    }
+
+    const currentRound = await this.prisma.round.findFirst({
+      where: {
+        roomId,
+        status: { in: [RoundStatus.LOCKED, RoundStatus.DRAWING] },
+      },
+      orderBy: { roundNumber: "desc" },
+    });
+
+    if (!currentRound) {
+      throw new BadRequestException(
+        "Room does not have a LOCKED round ready to draw.",
+      );
+    }
+
+    const entries = await this.prisma.entry.findMany({
+      where: { roundId: currentRound.id },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+
+    if (entries.length === 0) {
+      throw new BadRequestException("Cannot draw a round with no entries.");
+    }
+
+    if (currentRound.totalEntryAmount <= 0n) {
+      throw new BadRequestException("Cannot draw a round with zero total.");
+    }
+
+    const invalidRangeEntry = entries.find(
+      (entry) => entry.ticketStart === null || entry.ticketEnd === null,
+    );
+
+    if (invalidRangeEntry) {
+      throw new BadRequestException(
+        "Cannot draw before ticket ranges are assigned. Lock the round first.",
+      );
+    }
+
+    if (!currentRound.serverSeedReveal) {
+      throw new BadRequestException(
+        "Round is missing server seed reveal. Cannot draw safely.",
+      );
+    }
+
+    if (
+      currentRound.status === RoundStatus.DRAWING &&
+      currentRound.winningTicket !== null &&
+      currentRound.winnerEntryId
+    ) {
+      const winnerEntry = entries.find(
+        (entry) => entry.id === currentRound.winnerEntryId,
+      );
+
+      return {
+        currentRound: this.toRoundSnapshot(currentRound),
+        winningTicket: currentRound.winningTicket.toString(),
+        winnerEntry: winnerEntry ? this.toEntrySnapshot(winnerEntry) : null,
+        entries: entries.map((entry) => this.toEntrySnapshot(entry)),
+        reused: true,
+      };
+    }
+
+    const drawInput = [
+      currentRound.serverSeedReveal,
+      currentRound.id,
+      currentRound.roundNumber.toString(),
+      currentRound.totalEntryAmount.toString(),
+    ].join(":");
+
+    const drawHash = createHash("sha256").update(drawInput).digest("hex");
+    const winningTicket =
+      BigInt(`0x${drawHash}`) % currentRound.totalEntryAmount;
+
+    const winnerEntry = entries.find((entry) => {
+      if (entry.ticketStart === null || entry.ticketEnd === null) {
+        return false;
+      }
+
+      return (
+        winningTicket >= entry.ticketStart &&
+        winningTicket <= entry.ticketEnd
+      );
+    });
+
+    if (!winnerEntry) {
+      throw new BadRequestException(
+        "Winning ticket did not match any entry. Manual review required.",
+      );
+    }
+
+    const spinAngle = this.calculateSpinAngle(
+      winningTicket,
+      currentRound.totalEntryAmount,
+    );
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const updateResult = await tx.round.updateMany({
+        where: {
+          id: currentRound.id,
+          status: RoundStatus.LOCKED,
+        },
+        data: {
+          status: RoundStatus.DRAWING,
+          drawingAt: new Date(),
+          winningTicket,
+          winnerEntryId: winnerEntry.id,
+          winnerUserId: winnerEntry.userId,
+          spinAngle,
+        },
+      });
+
+      if (updateResult.count !== 1) {
+        const racedRound = await tx.round.findUniqueOrThrow({
+          where: { id: currentRound.id },
+        });
+
+        if (
+          racedRound.status === RoundStatus.DRAWING &&
+          racedRound.winningTicket !== null &&
+          racedRound.winnerEntryId
+        ) {
+          return {
+            round: racedRound,
+            winnerEntry,
+            entries,
+            reused: true,
+          };
+        }
+
+        throw new BadRequestException(
+          "Round changed while drawing. Retry or review manually.",
+        );
+      }
+
+      await tx.entry.update({
+        where: { id: winnerEntry.id },
+        data: { isWinner: true },
+      });
+
+      const finalRound = await tx.round.findUniqueOrThrow({
+        where: { id: currentRound.id },
+      });
+
+      const finalEntries = await tx.entry.findMany({
+        where: { roundId: currentRound.id },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      });
+
+      const finalWinnerEntry = finalEntries.find(
+        (entry) => entry.id === winnerEntry.id,
+      );
+
+      if (!finalWinnerEntry) {
+        throw new BadRequestException("Winner entry disappeared after draw.");
+      }
+
+      return {
+        round: finalRound,
+        winnerEntry: finalWinnerEntry,
+        entries: finalEntries,
+        reused: false,
+      };
+    });
+
+    return {
+      currentRound: this.toRoundSnapshot(result.round),
+      winningTicket: result.round.winningTicket?.toString() ?? null,
+      winnerEntry: this.toEntrySnapshot(result.winnerEntry),
+      entries: result.entries.map((entry) => this.toEntrySnapshot(entry)),
+      reused: result.reused,
+    };
+  }
+
+  async settleCurrentRoundForRoom(roomId: string) {
+    if (!roomId) {
+      throw new BadRequestException("roomId is required.");
+    }
+
+    let currentRound = await this.prisma.round.findFirst({
+      where: {
+        roomId,
+        status: { in: [RoundStatus.DRAWING, RoundStatus.SETTLING] },
+      },
+      orderBy: { roundNumber: "desc" },
+    });
+
+    if (!currentRound) {
+      const completedRound = await this.prisma.round.findFirst({
+        where: {
+          roomId,
+          status: RoundStatus.COMPLETED,
+          winnerEntryId: { not: null },
+          winnerUserId: { not: null },
+        },
+        orderBy: { roundNumber: "desc" },
+      });
+
+      if (completedRound) {
+        const completedWinnerEntryId = completedRound.winnerEntryId;
+
+        const winnerEntry = completedWinnerEntryId
+          ? await this.prisma.entry.findUnique({
+              where: { id: completedWinnerEntryId },
+            })
+          : null;
+
+        return {
+          currentRound: this.toRoundSnapshot(completedRound),
+          winnerEntry: winnerEntry ? this.toEntrySnapshot(winnerEntry) : null,
+          payoutAmount: completedRound.payoutAmount.toString(),
+          payout: null,
+          reused: true,
+        };
+      }
+
+      throw new BadRequestException(
+        "Room does not have a DRAWING round ready to settle.",
+      );
+    }
+
+    const winnerUserId = currentRound.winnerUserId;
+    const winnerEntryId = currentRound.winnerEntryId;
+
+    if (!winnerEntryId || !winnerUserId) {
+      throw new BadRequestException(
+        "Round has no winner yet. Draw the round before settlement.",
+      );
+    }
+
+    if (currentRound.payoutAmount <= 0n) {
+      throw new BadRequestException("Round payout amount must be greater than zero.");
+    }
+
+    const winnerEntry = await this.prisma.entry.findUnique({
+      where: { id: winnerEntryId },
+    });
+
+    if (!winnerEntry) {
+      throw new BadRequestException("Winner entry not found.");
+    }
+
+    if (winnerEntry.userId !== winnerUserId) {
+      throw new BadRequestException(
+        "Winner entry user does not match round winner user. Manual review required.",
+      );
+    }
+
+    if (currentRound.status === RoundStatus.DRAWING) {
+      const settleStart = await this.prisma.round.updateMany({
+        where: {
+          id: currentRound.id,
+          status: RoundStatus.DRAWING,
+        },
+        data: {
+          status: RoundStatus.SETTLING,
+          settlingAt: new Date(),
+        },
+      });
+
+      if (settleStart.count !== 1) {
+        currentRound = await this.prisma.round.findUniqueOrThrow({
+          where: { id: currentRound.id },
+        });
+
+        if (currentRound.status !== RoundStatus.SETTLING) {
+          throw new BadRequestException(
+            "Round changed while settlement was starting. Retry settlement.",
+          );
+        }
+      } else {
+        currentRound = await this.prisma.round.findUniqueOrThrow({
+          where: { id: currentRound.id },
+        });
+      }
+    }
+
+    const payout = await this.walletsService.creditRoundWin({
+      userId: winnerUserId,
+      roundId: currentRound.id,
+      winnerEntryId,
+      amount: currentRound.payoutAmount,
+    });
+
+    const completeResult = await this.prisma.round.updateMany({
+      where: {
+        id: currentRound.id,
+        status: RoundStatus.SETTLING,
+      },
+      data: {
+        status: RoundStatus.COMPLETED,
+        completedAt: new Date(),
+      },
+    });
+
+    if (completeResult.count !== 1) {
+      const round = await this.prisma.round.findUniqueOrThrow({
+        where: { id: currentRound.id },
+      });
+
+      if (round.status !== RoundStatus.COMPLETED) {
+        throw new BadRequestException(
+          "Payout was created but round could not be marked COMPLETED. Retry settlement.",
+        );
+      }
+    }
+
+    const completedRound = await this.prisma.round.findUniqueOrThrow({
+      where: { id: currentRound.id },
+    });
+
+    const finalWinnerEntry = await this.prisma.entry.findUniqueOrThrow({
+      where: { id: winnerEntryId },
+    });
+
+    return {
+      currentRound: this.toRoundSnapshot(completedRound),
+      winnerEntry: this.toEntrySnapshot(finalWinnerEntry),
+      payoutAmount: completedRound.payoutAmount.toString(),
+      payout,
+      reused: payout.reused,
+    };
+  }
   async cancelCurrentRoundForRoom(roomId: string) {
     if (!roomId) {
       throw new BadRequestException("roomId is required.");
@@ -263,8 +594,6 @@ export class RoundsService {
       throw new BadRequestException("Room does not have a cancellable round.");
     }
 
-    // If the round is still OPEN, stop new entries first.
-    // We use LOCKED as a temporary "no more entries" state before final CANCELLED.
     if (currentRound.status === RoundStatus.OPEN) {
       const stopEntryResult = await this.prisma.round.updateMany({
         where: {
@@ -353,6 +682,98 @@ export class RoundsService {
       })),
     };
   }
+
+  async getLatestRoundResultForRoom(roomId: string) {
+    if (!roomId) {
+      throw new BadRequestException("roomId is required.");
+    }
+
+    const round = await this.prisma.round.findFirst({
+      where: {
+        roomId,
+        status: RoundStatus.COMPLETED,
+      },
+      orderBy: { roundNumber: "desc" },
+    });
+
+    if (!round) {
+      throw new NotFoundException("No completed round result found for this room.");
+    }
+
+    const entries = await this.prisma.entry.findMany({
+      where: { roundId: round.id },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+
+    const winnerEntry = round.winnerEntryId
+      ? entries.find((entry) => entry.id === round.winnerEntryId) ?? null
+      : null;
+
+    const serverSeedReveal = round.serverSeedReveal;
+    const serverSeedHash = round.serverSeedHash;
+
+    const recomputedServerSeedHash = serverSeedReveal
+      ? createHash("sha256").update(serverSeedReveal).digest("hex")
+      : null;
+
+    const seedHashMatches =
+      !!serverSeedReveal &&
+      !!serverSeedHash &&
+      recomputedServerSeedHash === serverSeedHash;
+
+    const drawInput =
+      serverSeedReveal && round.totalEntryAmount > 0n
+        ? [
+            serverSeedReveal,
+            round.id,
+            round.roundNumber.toString(),
+            round.totalEntryAmount.toString(),
+          ].join(":")
+        : null;
+
+    const drawHash = drawInput
+      ? createHash("sha256").update(drawInput).digest("hex")
+      : null;
+
+    const recomputedWinningTicket =
+      drawHash && round.totalEntryAmount > 0n
+        ? BigInt(`0x${drawHash}`) % round.totalEntryAmount
+        : null;
+
+    const winningTicketMatches =
+      recomputedWinningTicket !== null &&
+      round.winningTicket !== null &&
+      recomputedWinningTicket === round.winningTicket;
+
+    const winnerTicketInsideRange =
+      !!winnerEntry &&
+      round.winningTicket !== null &&
+      winnerEntry.ticketStart !== null &&
+      winnerEntry.ticketEnd !== null &&
+      round.winningTicket >= winnerEntry.ticketStart &&
+      round.winningTicket <= winnerEntry.ticketEnd;
+
+    const rangesCheck = this.verifyEntryRanges(entries, round.totalEntryAmount);
+
+    return {
+      round: this.toRoundSnapshot(round),
+      serverSeedReveal,
+      fairness: {
+        serverSeedHash,
+        recomputedServerSeedHash,
+        seedHashMatches,
+        drawInput,
+        drawHash,
+        recomputedWinningTicket: recomputedWinningTicket?.toString() ?? null,
+        winningTicketMatches,
+        winnerTicketInsideRange,
+        rangesCoverTotal: rangesCheck.rangesCoverTotal,
+        rangeError: rangesCheck.rangeError,
+      },
+      winnerEntry: winnerEntry ? this.toEntrySnapshot(winnerEntry) : null,
+      entries: entries.map((entry) => this.toEntrySnapshot(entry)),
+    };
+  }
   toRoundSnapshot(round: Round): RoundSnapshot {
     return {
       id: round.id,
@@ -376,6 +797,74 @@ export class RoundsService {
       winnerEntryId: round.winnerEntryId,
       spinAngle: round.spinAngle,
     };
+  }
+
+  private toEntrySnapshot(entry: Entry): EntrySnapshot {
+    return {
+      id: entry.id,
+      roundId: entry.roundId,
+      userId: entry.userId,
+      amount: entry.amount.toString(),
+      ticketStart: entry.ticketStart?.toString() ?? null,
+      ticketEnd: entry.ticketEnd?.toString() ?? null,
+      isWinner: entry.isWinner,
+      createdAt: entry.createdAt.toISOString(),
+      updatedAt: entry.updatedAt.toISOString(),
+    };
+  }
+
+  private verifyEntryRanges(entries: Entry[], expectedTotal: bigint) {
+    let cursor = 0n;
+
+    for (const entry of entries) {
+      if (entry.ticketStart === null || entry.ticketEnd === null) {
+        return {
+          rangesCoverTotal: false,
+          rangeError: `Entry ${entry.id} is missing ticket range.`,
+        };
+      }
+
+      if (entry.ticketStart !== cursor) {
+        return {
+          rangesCoverTotal: false,
+          rangeError: `Entry ${entry.id} starts at ${entry.ticketStart.toString()} but expected ${cursor.toString()}.`,
+        };
+      }
+
+      const expectedEnd = cursor + entry.amount - 1n;
+
+      if (entry.ticketEnd !== expectedEnd) {
+        return {
+          rangesCoverTotal: false,
+          rangeError: `Entry ${entry.id} ends at ${entry.ticketEnd.toString()} but expected ${expectedEnd.toString()}.`,
+        };
+      }
+
+      cursor = entry.ticketEnd + 1n;
+    }
+
+    if (cursor !== expectedTotal) {
+      return {
+        rangesCoverTotal: false,
+        rangeError: `Final cursor ${cursor.toString()} does not match round total ${expectedTotal.toString()}.`,
+      };
+    }
+
+    return {
+      rangesCoverTotal: true,
+      rangeError: null,
+    };
+  }
+  private calculateSpinAngle(winningTicket: bigint, totalTickets: bigint) {
+    if (totalTickets <= 0n) {
+      return 0;
+    }
+
+    // Position of winning ticket on a 360-degree wheel.
+    // This is deterministic and can later be adjusted for pointer offset.
+    const scaled = (winningTicket * 3_600_000n) / totalTickets;
+
+    return Number(scaled) / 10_000;
   }
 }
 

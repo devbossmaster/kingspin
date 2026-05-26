@@ -374,6 +374,106 @@ export class WalletsService {
     );
   }
 
+  async creditRoundWin(args: {
+    userId: string;
+    roundId: string;
+    winnerEntryId: string;
+    amount: bigint;
+  }) {
+    if (args.amount <= 0n) {
+      throw new BadRequestException("Round win amount must be greater than zero.");
+    }
+
+    const wallet = await this.ensureMainWalletForUserId(args.userId);
+    const idempotencyKey = `round-win:${args.roundId}:${args.winnerEntryId}`;
+
+    const existingTransaction = await this.prisma.ledgerTransaction.findUnique({
+      where: { idempotencyKey },
+      include: { entries: true },
+    });
+
+    if (existingTransaction) {
+      const freshWallet = await this.prisma.walletAccount.findUniqueOrThrow({
+        where: { id: wallet.id },
+      });
+
+      return {
+        wallet: this.toWalletSnapshot(freshWallet),
+        transaction: this.toLedgerTransactionSnapshot(existingTransaction),
+        reused: true,
+      };
+    }
+
+    try {
+      const result = await this.prisma.$transaction(async (tx) => {
+        const updatedWallet = await tx.walletAccount.update({
+          where: { id: wallet.id },
+          data: {
+            balanceSnapshot: {
+              increment: args.amount,
+            },
+          },
+        });
+
+        const transaction = await tx.ledgerTransaction.create({
+          data: {
+            type: LedgerTransactionType.ROUND_PAYOUT,
+            referenceType: "ROUND",
+            referenceId: args.roundId,
+            idempotencyKey,
+            metadata: {
+              userId: args.userId,
+              roundId: args.roundId,
+              winnerEntryId: args.winnerEntryId,
+              amount: args.amount.toString(),
+              walletAccountId: updatedWallet.id,
+            },
+            entries: {
+              create: {
+                walletAccountId: updatedWallet.id,
+                direction: LedgerEntryDirection.CREDIT,
+                amount: args.amount,
+                balanceAfterSnapshot: updatedWallet.balanceSnapshot,
+              },
+            },
+          },
+          include: { entries: true },
+        });
+
+        return {
+          wallet: updatedWallet,
+          transaction,
+          reused: false,
+        };
+      });
+
+      return {
+        wallet: this.toWalletSnapshot(result.wallet),
+        transaction: this.toLedgerTransactionSnapshot(result.transaction),
+        reused: result.reused,
+      };
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        const transaction =
+          await this.prisma.ledgerTransaction.findUniqueOrThrow({
+            where: { idempotencyKey },
+            include: { entries: true },
+          });
+
+        const freshWallet = await this.prisma.walletAccount.findUniqueOrThrow({
+          where: { id: wallet.id },
+        });
+
+        return {
+          wallet: this.toWalletSnapshot(freshWallet),
+          transaction: this.toLedgerTransactionSnapshot(transaction),
+          reused: true,
+        };
+      }
+
+      throw error;
+    }
+  }
   async ensureMainWalletForUserId(userId: string): Promise<WalletAccount> {
     return this.prisma.walletAccount.upsert({
       where: {
@@ -498,4 +598,6 @@ export class WalletsService {
     };
   }
 }
+
+
 

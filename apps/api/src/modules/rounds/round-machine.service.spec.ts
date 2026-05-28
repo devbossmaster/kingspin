@@ -1,3 +1,4 @@
+import { ConflictException } from "@nestjs/common";
 import { RoomStatus, RoundStatus } from "@kingspin/db";
 import { RoundMachineService } from "./round-machine.service";
 
@@ -37,6 +38,7 @@ function buildService(args?: {
   lockResult?: { acquired: false; reason: "PROCESS_LOCKED" | "DATABASE_LOCKED" };
   currentRound?: ReturnType<typeof buildRound> | null;
   entryCount?: number;
+  lockEvents?: string[];
 }) {
   const prisma = {
     room: {
@@ -92,9 +94,12 @@ function buildService(args?: {
           return args.lockResult;
         }
 
+        args?.lockEvents?.push("lock:start");
         return {
           acquired: true,
-          result: await work(),
+          result: await work().finally(() => {
+            args?.lockEvents?.push("lock:end");
+          }),
         };
       },
     ),
@@ -168,6 +173,23 @@ describe("RoundMachineService", () => {
     );
   });
 
+  it("treats a raced round start conflict as a leader skip", async () => {
+    const { service, roundsService } = buildService();
+
+    roundsService.startOpenRoundForRoom.mockRejectedValueOnce(
+      new ConflictException("Another round start is already running."),
+    );
+
+    const result = await service.advanceRoomOnce("room-1");
+
+    expect(result).toEqual({
+      action: "SKIPPED_NOT_LEADER",
+      roomId: "room-1",
+      message: "Another process is advancing this room.",
+      force: false,
+    });
+  });
+
   it("still cancels an expired empty round and opens the next round", async () => {
     const expiredRound = buildRound();
     const { service, roundsService } = buildService({
@@ -187,5 +209,32 @@ describe("RoundMachineService", () => {
         roomId: "room-1",
       }),
     );
+  });
+
+  it("broadcasts machine results after the lock-protected advance finishes", async () => {
+    jest.useFakeTimers();
+    const events: string[] = [];
+    const { service, roomGateway } = buildService({ lockEvents: events });
+
+    roomGateway.broadcastMachineResult.mockImplementation(async () => {
+      events.push("broadcast");
+    });
+
+    (service as any).states.set("room-1", {
+      roomId: "room-1",
+      isRunning: true,
+      tickCount: 0,
+      lastAction: null,
+      lastError: null,
+      lastTickAt: null,
+      nextTickAt: null,
+    });
+
+    await (service as any).tickRoom("room-1");
+
+    expect(roomGateway.broadcastMachineResult).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["lock:start", "lock:end", "broadcast"]);
+
+    service.onModuleDestroy();
   });
 });

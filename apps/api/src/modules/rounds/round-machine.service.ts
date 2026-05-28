@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -172,21 +173,21 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
 
     const lockResult = await this.roundMachineLockService.withRoomTickLock(
       roomId,
-      () => this.advanceRoomOnceLocked(roomId, options),
+      async () => {
+        try {
+          return await this.advanceRoomOnceLocked(roomId, options);
+        } catch (error) {
+          if (error instanceof ConflictException) {
+            return this.toLeaderSkipResult(roomId, options, "DATABASE_LOCKED");
+          }
+
+          throw error;
+        }
+      },
     );
 
     if (!lockResult.acquired) {
-      const message =
-        lockResult.reason === "PROCESS_LOCKED"
-          ? "This process is already advancing this room."
-          : "Another process is advancing this room.";
-
-      return {
-        action: "SKIPPED_NOT_LEADER",
-        roomId,
-        message,
-        force: options.force === true,
-      };
+      return this.toLeaderSkipResult(roomId, options, lockResult.reason);
     }
 
     return lockResult.result;
@@ -509,6 +510,24 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     }
 
     return Math.max(250, Math.min(delayMs, 60_000));
+  }
+
+  private toLeaderSkipResult(
+    roomId: string,
+    options: AdvanceRoomOptions,
+    reason: "PROCESS_LOCKED" | "DATABASE_LOCKED",
+  ) {
+    const message =
+      reason === "PROCESS_LOCKED"
+        ? "This process is already advancing this room."
+        : "Another process is advancing this room.";
+
+    return {
+      action: "SKIPPED_NOT_LEADER",
+      roomId,
+      message,
+      force: options.force === true,
+    };
   }
 
   private getOrCreateState(roomId: string): MachineRuntimeState {

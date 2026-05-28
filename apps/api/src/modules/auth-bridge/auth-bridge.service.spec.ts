@@ -29,7 +29,7 @@ describe("AuthBridgeService", () => {
     process.env.BETTER_AUTH_SECRET = "test-secret";
     process.env.ADMIN_DEV_KEY = "admin-secret";
     process.env.RESEND_API_KEY = "resend-test";
-    process.env.EMAIL_FROM = "SpinPro <auth@example.com>";
+    process.env.EMAIL_FROM = "SpinPro <auth@spinpro.com>";
     process.env.ENABLE_DEV_AUTH = "false";
   }
 

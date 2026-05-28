@@ -87,7 +87,7 @@ describe("HttpExceptionFilter", () => {
       BETTER_AUTH_SECRET: "test-secret",
       ADMIN_DEV_KEY: "admin-secret",
       RESEND_API_KEY: "resend-test",
-      EMAIL_FROM: "SpinPro <auth@example.com>",
+      EMAIL_FROM: "SpinPro <auth@spinpro.com>",
     };
     resetApiEnvForTesting();
 

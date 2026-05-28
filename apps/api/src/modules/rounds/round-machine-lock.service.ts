@@ -40,83 +40,62 @@ export class RoundMachineLockService {
     try {
       this.logProductionPolicy();
 
-      return await this.withPostgresAdvisoryLock(roomId, work);
-    } finally {
-      this.activeRooms.delete(roomId);
-    }
-  }
+      const acquiredDatabaseLeadership =
+        await this.tryAcquireDatabaseLeadership(roomId);
 
-  private async withPostgresAdvisoryLock<T>(
-    roomId: string,
-    work: () => Promise<T>,
-  ): Promise<RoundMachineLockResult<T>> {
-    const lockKey = `round-machine:${roomId}`;
-    let startedWork = false;
-
-    try {
-      return await this.prisma.$transaction(async (tx) => {
-        const lockResult = await tx.$queryRaw<Array<{ locked: boolean }>>`
-          SELECT pg_try_advisory_lock(hashtext(${lockKey})::bigint)::boolean AS locked
-        `;
-
-        if (lockResult[0]?.locked !== true) {
-          return {
-            acquired: false,
-            reason: "DATABASE_LOCKED",
-          };
-        }
-
-        try {
-          startedWork = true;
-          const result = await work();
-
-          return {
-            acquired: true,
-            result,
-          };
-        } finally {
-          const unlockResult = await tx.$queryRaw<Array<{ unlocked: boolean }>>`
-            SELECT pg_advisory_unlock(hashtext(${lockKey})::bigint)::boolean AS unlocked
-          `;
-
-          if (unlockResult[0]?.unlocked !== true) {
-            this.logger.warn(
-              `PostgreSQL advisory lock for room ${roomId} did not report a clean unlock.`,
-            );
-          }
-        }
-      });
-    } catch (error) {
-      if (startedWork) {
-        throw error;
+      if (!acquiredDatabaseLeadership) {
+        return {
+          acquired: false,
+          reason: "DATABASE_LOCKED",
+        };
       }
-
-      const env = getApiEnv();
-      const message =
-        error instanceof Error ? error.message : "Unknown advisory lock error";
-
-      if (env.NODE_ENV === "production") {
-        this.logger.error(
-          `Round machine advisory lock failed in production for room ${roomId}: ${message}`,
-        );
-        throw error;
-      }
-
-      this.logger.warn(
-        `Round machine advisory lock unavailable for room ${roomId}; using process-only lock in ${env.NODE_ENV}: ${message}`,
-      );
 
       return {
         acquired: true,
         result: await work(),
       };
+    } finally {
+      this.activeRooms.delete(roomId);
+    }
+  }
+
+  private async tryAcquireDatabaseLeadership(
+    roomId: string,
+  ): Promise<boolean> {
+    const lockKey = `round-machine:${roomId}`;
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const lockResult = await tx.$queryRaw<Array<{ locked: boolean }>>`
+          SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})::bigint)::boolean AS locked
+        `;
+
+        return lockResult[0]?.locked === true;
+      });
+    } catch (error) {
+      const env = getApiEnv();
+      const message =
+        error instanceof Error ? error.message : "Unknown advisory lock error";
+
+      if (env.APP_ENV !== "local") {
+        this.logger.error(
+          `Round machine advisory leadership check failed in ${env.APP_ENV} for room ${roomId}: ${message}`,
+        );
+        throw error;
+      }
+
+      this.logger.warn(
+        `Round machine advisory leadership check unavailable for room ${roomId}; using process-only lock in ${env.APP_ENV}: ${message}`,
+      );
+
+      return true;
     }
   }
 
   private logProductionPolicy() {
     const env = getApiEnv();
 
-    if (env.NODE_ENV !== "production" || this.hasLoggedProductionPolicy) {
+    if (env.APP_ENV !== "production" || this.hasLoggedProductionPolicy) {
       return;
     }
 

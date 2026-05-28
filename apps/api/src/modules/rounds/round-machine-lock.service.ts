@@ -22,6 +22,11 @@ export class RoundMachineLockService {
   private readonly activeRooms = new Set<string>();
   private hasLoggedProductionPolicy = false;
 
+  private readonly transactionOptions = {
+    maxWait: 2_000,
+    timeout: 15_000,
+  } as const;
+
   constructor(private readonly prisma: PrismaService) {}
 
   async withRoomTickLock<T>(
@@ -40,55 +45,88 @@ export class RoundMachineLockService {
     try {
       this.logProductionPolicy();
 
-      const acquiredDatabaseLeadership =
-        await this.tryAcquireDatabaseLeadership(roomId);
-
-      if (!acquiredDatabaseLeadership) {
-        return {
-          acquired: false,
-          reason: "DATABASE_LOCKED",
-        };
-      }
-
-      return {
-        acquired: true,
-        result: await work(),
-      };
+      return await this.runWithDatabaseLeadership(roomId, work);
     } finally {
       this.activeRooms.delete(roomId);
     }
   }
 
-  private async tryAcquireDatabaseLeadership(
+  private async runWithDatabaseLeadership<T>(
     roomId: string,
-  ): Promise<boolean> {
+    work: () => Promise<T>,
+  ): Promise<RoundMachineLockResult<T>> {
     const lockKey = `round-machine:${roomId}`;
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
-        const lockResult = await tx.$queryRaw<Array<{ locked: boolean }>>`
-          SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})::bigint)::boolean AS locked
-        `;
+      return await this.prisma.$transaction(
+        async (tx) => {
+          const lockResult = await tx.$queryRaw<Array<{ locked: boolean }>>`
+            SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})::bigint)::boolean AS locked
+          `;
 
-        return lockResult[0]?.locked === true;
-      });
+          const locked = lockResult[0]?.locked === true;
+
+          if (!locked) {
+            return {
+              acquired: false,
+              reason: "DATABASE_LOCKED" as const,
+            };
+          }
+
+          /**
+           * Important correctness fix:
+           *
+           * pg_try_advisory_xact_lock is held only until this transaction ends.
+           * Therefore work() must run before this transaction returns.
+           *
+           * The old code acquired the xact lock inside a tiny transaction, ended
+           * that transaction, released the lock, and only then ran work().
+           */
+          const result = await work();
+
+          return {
+            acquired: true,
+            result,
+          };
+        },
+        this.transactionOptions,
+      );
     } catch (error) {
       const env = getApiEnv();
       const message =
         error instanceof Error ? error.message : "Unknown advisory lock error";
 
-      if (env.APP_ENV !== "local") {
-        this.logger.error(
-          `Round machine advisory leadership check failed in ${env.APP_ENV} for room ${roomId}: ${message}`,
+      /**
+       * In local development, keep the app usable even if Postgres advisory locks
+       * are unavailable.
+       */
+      if (env.APP_ENV === "local") {
+        this.logger.warn(
+          `Round machine advisory leadership unavailable for room ${roomId}; using process-only lock in ${env.APP_ENV}: ${message}`,
         );
-        throw error;
+
+        return {
+          acquired: true,
+          result: await work(),
+        };
       }
 
+      /**
+       * In deployed environments, do not crash the round-machine loop just
+       * because Supabase pooler could not start this tiny transaction. Skip this
+       * tick and try again on the next scheduler pass.
+       *
+       * This directly addresses noisy logs like:
+       * "Unable to start a transaction."
+       */
       this.logger.warn(
-        `Round machine advisory leadership check unavailable for room ${roomId}; using process-only lock in ${env.APP_ENV}: ${message}`,
+        `Round machine skipped tick for room ${roomId}; advisory leadership transaction unavailable in ${env.APP_ENV}: ${message}`,
       );
 
-      return true;
+      return {
+        acquired: false,
+        reason: "DATABASE_LOCKED",
+      };
     }
   }
 
@@ -103,13 +141,13 @@ export class RoundMachineLockService {
 
     if (!env.ENABLE_REDIS) {
       this.logger.warn(
-        "Production round machine is using PostgreSQL advisory locks. Configure Redis locks/adapter before horizontal scaling.",
+        "Production round machine is using PostgreSQL advisory transaction locks. Configure Redis locks/adapter before horizontal scaling.",
       );
       return;
     }
 
     this.logger.warn(
-      "ENABLE_REDIS=true, but Redis round-machine locking is not wired yet. PostgreSQL advisory locks remain the active safety layer.",
+      "ENABLE_REDIS=true, but Redis round-machine locking is not wired yet. PostgreSQL advisory transaction locks remain the active safety layer.",
     );
   }
 }

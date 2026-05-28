@@ -2,17 +2,21 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
+  EntryWithPlayerSnapshot,
   LatestRoundResult,
   RoomLiveState,
   SocketMachineEvent,
   SocketPresenceEvent,
   SocketRoundStateEvent,
+  WalletSnapshot,
 } from "@kingspin/contracts";
-import { apiClient } from "../lib/api-client";
+import { apiClient, type PlaceEntryResponse } from "../lib/api-client";
 import { deriveChipOptions } from "../lib/format";
 import { getGameSocket } from "../lib/socket-client";
 import { useAuthStore } from "../stores/auth-store";
 import { useRoomStore } from "../stores/room-store";
+
+type LiveEntry = RoomLiveState["entries"][number];
 
 function createIdempotencyKey(roomId: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -20,6 +24,17 @@ function createIdempotencyKey(roomId: string) {
   }
 
   return `entry:${roomId}:${Date.now()}`;
+}
+
+function compareEntriesByCreatedAt(left: LiveEntry, right: LiveEntry) {
+  const leftTime = new Date(left.createdAt).getTime();
+  const rightTime = new Date(right.createdAt).getTime();
+
+  if (leftTime !== rightTime) {
+    return leftTime - rightTime;
+  }
+
+  return left.id.localeCompare(right.id);
 }
 
 export function useRoom(roomId: string) {
@@ -30,15 +45,19 @@ export function useRoom(roomId: string) {
   const [error, setError] = useState<string | null>(null);
   const [walletError, setWalletError] = useState<string | null>(null);
   const [isPlacingEntry, setIsPlacingEntry] = useState(false);
+  const [fastWallet, setFastWallet] = useState<WalletSnapshot | null>(null);
 
   const user = useAuthStore((store) => store.user);
   const wallet = useAuthStore((store) => store.wallet);
   const fetchMe = useAuthStore((store) => store.fetchMe);
   const fetchWallet = useAuthStore((store) => store.fetchWallet);
+
   const setConnectionStatus = useRoomStore((store) => store.setConnectionStatus);
   const setChipOptions = useRoomStore((store) => store.setChipOptions);
   const showWinner = useRoomStore((store) => store.showWinner);
   const dismissWinner = useRoomStore((store) => store.dismissWinner);
+
+  const visibleWallet = fastWallet ?? wallet;
 
   const applyState = useCallback(
     (nextState: RoomLiveState) => {
@@ -52,6 +71,43 @@ export function useRoom(roomId: string) {
     },
     [setChipOptions],
   );
+
+  const applyEntryPlacementResult = useCallback((result: PlaceEntryResponse) => {
+    setState((currentState) => {
+      if (!currentState) {
+        return currentState;
+      }
+
+      const confirmedEntry: LiveEntry = {
+        ...result.entry,
+        player: result.player,
+      };
+
+      const entriesWithoutDuplicate = currentState.entries.filter((entry) => {
+        if (entry.id === confirmedEntry.id) {
+          return false;
+        }
+
+        return !(
+          entry.roundId === confirmedEntry.roundId &&
+          entry.userId === confirmedEntry.userId
+        );
+      });
+
+      const entries = [...entriesWithoutDuplicate, confirmedEntry].sort(
+        compareEntriesByCreatedAt,
+      );
+
+      return {
+        ...currentState,
+        currentRound: result.currentRound ?? currentState.currentRound,
+        entries,
+      };
+    });
+
+    setFastWallet(result.wallet);
+    setWalletError(null);
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!roomId) return;
@@ -70,6 +126,7 @@ export function useRoom(roomId: string) {
 
     if (result) {
       setWalletError(null);
+      setFastWallet(null);
       return result;
     }
 
@@ -99,8 +156,6 @@ export function useRoom(roomId: string) {
   useEffect(() => {
     if (!roomId) return;
 
-    void refresh();
-
     const socket = getGameSocket();
     const settlementTimers: number[] = [];
 
@@ -109,7 +164,6 @@ export function useRoom(roomId: string) {
     const onConnect = () => {
       setConnectionStatus("connected");
       socket.emit("room:join", { roomId });
-      void refresh();
     };
 
     const onDisconnect = () => {
@@ -127,8 +181,6 @@ export function useRoom(roomId: string) {
 
     const onMachineEvent = (payload: SocketMachineEvent) => {
       if (payload.roomId !== roomId) return;
-
-      void refresh();
 
       if (payload.action === "STARTED_OPEN_ROUND") {
         setLatestResult(null);
@@ -172,6 +224,7 @@ export function useRoom(roomId: string) {
 
     if (socket.connected) {
       socket.emit("room:join", { roomId });
+    } else {
       void refresh();
     }
 
@@ -206,9 +259,9 @@ export function useRoom(roomId: string) {
 
   const placeEntry = useCallback(
     async (amount: number) => {
-      if (!roomId) return;
+      if (!roomId || isPlacingEntry) return;
 
-      if (!wallet) {
+      if (!visibleWallet) {
         setError("Sign in required.");
         return;
       }
@@ -217,27 +270,46 @@ export function useRoom(roomId: string) {
       setError(null);
 
       try {
-        await apiClient.placeEntry(roomId, {
+        const result = await apiClient.placeEntry(roomId, {
           amount,
           idempotencyKey: createIdempotencyKey(roomId),
         });
 
-        await refresh();
-        await refreshWallet();
+        applyEntryPlacementResult(result);
+
+        void refreshWallet();
+
+        if (!getGameSocket().connected) {
+          void refresh();
+        }
       } catch (caught) {
+        setFastWallet(null);
         setError(caught instanceof Error ? caught.message : "Failed to place entry.");
+
+        void refreshWallet();
+
+        if (!getGameSocket().connected) {
+          void refresh();
+        }
       } finally {
         setIsPlacingEntry(false);
       }
     },
-    [refresh, refreshWallet, roomId, wallet],
+    [
+      applyEntryPlacementResult,
+      isPlacingEntry,
+      refresh,
+      refreshWallet,
+      roomId,
+      visibleWallet,
+    ],
   );
 
   const entriesTotal = useMemo(() => {
     return state?.entries.reduce((sum, entry) => sum + Number(entry.amount), 0) ?? 0;
   }, [state?.entries]);
 
-  const myEntry = useMemo(() => {
+  const myEntry = useMemo<EntryWithPlayerSnapshot | null>(() => {
     if (!user || !state) {
       return null;
     }
@@ -249,8 +321,8 @@ export function useRoom(roomId: string) {
     state,
     latestResult,
     user,
-    wallet,
-    meWallet: user && wallet ? { user, wallet } : null,
+    wallet: visibleWallet,
+    meWallet: user && visibleWallet ? { user, wallet: visibleWallet } : null,
     error,
     walletError,
     isPlacingEntry,

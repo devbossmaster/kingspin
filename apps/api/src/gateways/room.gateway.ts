@@ -40,6 +40,7 @@ const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
 type GameServer = Server<ClientToServerEvents, ServerToClientEvents>;
 type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
 type RedisClient = ReturnType<typeof createClient>;
+type RoomStateSnapshot = Awaited<ReturnType<RoomGateway["buildRoomStateSnapshot"]>>;
 
 function allowConfiguredSocketOrigin(
   origin: string | undefined,
@@ -72,6 +73,11 @@ export class RoomGateway
   server!: GameServer;
 
   private readonly logger = new Logger(RoomGateway.name);
+  private readonly inFlightSnapshotsByRoom = new Map<
+    string,
+    Promise<RoomStateSnapshot>
+  >();
+
   private redisPublisher: RedisClient | null = null;
   private redisSubscriber: RedisClient | null = null;
 
@@ -198,7 +204,23 @@ export class RoomGateway
   async broadcastMachineResult(roomId: string, result: unknown) {
     const payload = this.toSocketSafePayload(result);
 
-    await this.broadcastRoundState(roomId, "MACHINE_ADVANCED");
+    /**
+     * Performance fix:
+     *
+     * Do not block machine-event emission on a full room snapshot rebuild.
+     * The caller already runs this in the background, but this keeps the gateway
+     * itself responsive and avoids serial socket work.
+     */
+    void this.broadcastRoundState(roomId, "MACHINE_ADVANCED").catch(
+      (error: unknown) => {
+        const message =
+          error instanceof Error ? error.message : "Unknown round state error";
+
+        this.logger.warn(
+          `Failed to broadcast room state for ${roomId} after machine result: ${message}`,
+        );
+      },
+    );
 
     const action =
       payload && typeof payload === "object" && "action" in payload
@@ -327,27 +349,106 @@ export class RoomGateway
   }
 
   private async getRoomStateSnapshot(roomId: string) {
-    const room = await this.prisma.room.findUnique({
-      where: { id: roomId },
-      include: { category: true },
+    /**
+     * Performance fix:
+     *
+     * Entry placement, machine transitions, and room join can request the same
+     * snapshot at the same time. Share the in-flight DB work per room instead
+     * of rebuilding the same snapshot repeatedly.
+     *
+     * This is not stale caching. After the current snapshot resolves, the next
+     * call performs fresh DB reads.
+     */
+    const existing = this.inFlightSnapshotsByRoom.get(roomId);
+
+    if (existing) {
+      return existing;
+    }
+
+    const request = this.buildRoomStateSnapshot(roomId).finally(() => {
+      this.inFlightSnapshotsByRoom.delete(roomId);
     });
+
+    this.inFlightSnapshotsByRoom.set(roomId, request);
+
+    return request;
+  }
+
+  private async buildRoomStateSnapshot(roomId: string) {
+    const [room, currentRound] = await Promise.all([
+      this.prisma.room.findUnique({
+        where: { id: roomId },
+        select: {
+          id: true,
+          categoryId: true,
+          code: true,
+          name: true,
+          status: true,
+          isPermanent: true,
+          maxPlayers: true,
+          roundDurationMs: true,
+          activatedAt: true,
+          category: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              minEntryAmount: true,
+              maxEntryAmount: true,
+              maxPlayers: true,
+              roundDurationMs: true,
+            },
+          },
+        },
+      }),
+      this.prisma.round.findFirst({
+        where: {
+          roomId,
+          status: { in: ACTIVE_ROUND_STATUSES },
+        },
+        orderBy: { roundNumber: "desc" },
+        select: {
+          id: true,
+          roomId: true,
+          roundNumber: true,
+          status: true,
+          totalEntryAmount: true,
+          houseFeeAmount: true,
+          payoutAmount: true,
+          openedAt: true,
+          locksAt: true,
+          lockedAt: true,
+          drawingAt: true,
+          spinningAt: true,
+          settlingAt: true,
+          completedAt: true,
+          cancelledAt: true,
+          serverSeedHash: true,
+          winningTicket: true,
+          winnerUserId: true,
+          winnerEntryId: true,
+          spinAngle: true,
+        },
+      }),
+    ]);
 
     if (!room) {
       throw new BadRequestException("Room not found.");
     }
 
-    const currentRound = await this.prisma.round.findFirst({
-      where: {
-        roomId,
-        status: { in: ACTIVE_ROUND_STATUSES },
-      },
-      orderBy: { roundNumber: "desc" },
-    });
-
     const entries = currentRound
       ? await this.prisma.entry.findMany({
           where: { roundId: currentRound.id },
-          include: {
+          select: {
+            id: true,
+            roundId: true,
+            userId: true,
+            amount: true,
+            ticketStart: true,
+            ticketEnd: true,
+            isWinner: true,
+            createdAt: true,
+            updatedAt: true,
             user: {
               select: {
                 id: true,
@@ -402,28 +503,31 @@ export class RoomGateway
     };
   }
 
-  private toRoundSnapshot(round: {
-    id: string;
-    roomId: string;
-    roundNumber: number;
-    status: RoundStatus;
-    totalEntryAmount: bigint;
-    houseFeeAmount: bigint;
-    payoutAmount: bigint;
-    openedAt: Date;
-    locksAt: Date | null;
-    lockedAt: Date | null;
-    drawingAt: Date | null;
-    spinningAt: Date | null;
-    settlingAt: Date | null;
-    completedAt: Date | null;
-    cancelledAt: Date | null;
-    serverSeedHash: string | null;
-    winningTicket: bigint | null;
-    winnerUserId: string | null;
-    winnerEntryId: string | null;
-    spinAngle: number | null;
-  }, serverNow = new Date()) {
+  private toRoundSnapshot(
+    round: {
+      id: string;
+      roomId: string;
+      roundNumber: number;
+      status: RoundStatus;
+      totalEntryAmount: bigint;
+      houseFeeAmount: bigint;
+      payoutAmount: bigint;
+      openedAt: Date;
+      locksAt: Date | null;
+      lockedAt: Date | null;
+      drawingAt: Date | null;
+      spinningAt: Date | null;
+      settlingAt: Date | null;
+      completedAt: Date | null;
+      cancelledAt: Date | null;
+      serverSeedHash: string | null;
+      winningTicket: bigint | null;
+      winnerUserId: string | null;
+      winnerEntryId: string | null;
+      spinAngle: number | null;
+    },
+    serverNow = new Date(),
+  ) {
     const msUntilLock =
       round.status === RoundStatus.OPEN && round.locksAt
         ? Math.max(0, round.locksAt.getTime() - serverNow.getTime())

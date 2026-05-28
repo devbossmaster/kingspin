@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { RoundStatus } from "@kingspin/db";
 import { PrismaService } from "../../prisma/prisma.service";
 
@@ -10,36 +14,185 @@ const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
   RoundStatus.SETTLING,
 ];
 
+type RoomLiveStateSnapshot = {
+  serverNow: string;
+  room: {
+    id: string;
+    categoryId: string;
+    code: string;
+    name: string;
+    status: string;
+    isPermanent: boolean;
+    maxPlayers: number;
+    roundDurationMs: number;
+    activatedAt: string | null;
+  };
+  category: {
+    id: string;
+    name: string;
+    slug: string;
+    minEntryAmount: string;
+    maxEntryAmount: string;
+    maxPlayers: number;
+    roundDurationMs: number;
+  };
+  currentRound: {
+    id: string;
+    roomId: string;
+    roundNumber: number;
+    status: RoundStatus;
+    totalEntryAmount: string;
+    houseFeeAmount: string;
+    payoutAmount: string;
+    openedAt: string;
+    locksAt: string | null;
+    lockedAt: string | null;
+    drawingAt: string | null;
+    spinningAt: string | null;
+    settlingAt: string | null;
+    completedAt: string | null;
+    cancelledAt: string | null;
+    serverSeedHash: string;
+    winningTicket: string | null;
+    winnerUserId: string | null;
+    winnerEntryId: string | null;
+    spinAngle: number | null;
+    msUntilLock: number;
+  } | null;
+  entries: {
+    id: string;
+    roundId: string;
+    userId: string;
+    player: {
+      id: string;
+      username: string;
+      fullName: string;
+    };
+    amount: string;
+    ticketStart: string | null;
+    ticketEnd: string | null;
+    isWinner: boolean;
+    createdAt: string;
+    updatedAt: string;
+  }[];
+};
+
 @Injectable()
 export class PublicGameService {
+  private readonly inFlightLiveStateByRoom = new Map<
+    string,
+    Promise<RoomLiveStateSnapshot>
+  >();
+
   constructor(private readonly prisma: PrismaService) {}
 
-  async getRoomLiveState(roomId: string) {
+  async getRoomLiveState(roomId: string): Promise<RoomLiveStateSnapshot> {
     if (!roomId) {
       throw new BadRequestException("roomId is required.");
     }
 
-    const room = await this.prisma.room.findUnique({
-      where: { id: roomId },
-      include: { category: true },
+    /**
+     * Performance fix:
+     *
+     * This endpoint is called by normal page refreshes and by socket broadcasts.
+     * If several callers ask for the same room at the same time, they should not
+     * all hit Supabase independently.
+     *
+     * This is not stale caching. It only dedupes concurrent in-flight work, so a
+     * later request still gets fresh DB state.
+     */
+    const existingInFlight = this.inFlightLiveStateByRoom.get(roomId);
+
+    if (existingInFlight) {
+      return existingInFlight;
+    }
+
+    const request = this.buildRoomLiveState(roomId).finally(() => {
+      this.inFlightLiveStateByRoom.delete(roomId);
     });
+
+    this.inFlightLiveStateByRoom.set(roomId, request);
+
+    return request;
+  }
+
+  private async buildRoomLiveState(
+    roomId: string,
+  ): Promise<RoomLiveStateSnapshot> {
+    const [room, currentRound] = await Promise.all([
+      this.prisma.room.findUnique({
+        where: { id: roomId },
+        select: {
+          id: true,
+          categoryId: true,
+          code: true,
+          name: true,
+          status: true,
+          isPermanent: true,
+          maxPlayers: true,
+          roundDurationMs: true,
+          activatedAt: true,
+          category: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              minEntryAmount: true,
+              maxEntryAmount: true,
+              maxPlayers: true,
+              roundDurationMs: true,
+            },
+          },
+        },
+      }),
+      this.prisma.round.findFirst({
+        where: {
+          roomId,
+          status: { in: ACTIVE_ROUND_STATUSES },
+        },
+        orderBy: { roundNumber: "desc" },
+        select: {
+          id: true,
+          roomId: true,
+          roundNumber: true,
+          status: true,
+          totalEntryAmount: true,
+          houseFeeAmount: true,
+          payoutAmount: true,
+          openedAt: true,
+          locksAt: true,
+          lockedAt: true,
+          drawingAt: true,
+          spinningAt: true,
+          settlingAt: true,
+          completedAt: true,
+          cancelledAt: true,
+          serverSeedHash: true,
+          winningTicket: true,
+          winnerUserId: true,
+          winnerEntryId: true,
+          spinAngle: true,
+        },
+      }),
+    ]);
 
     if (!room) {
       throw new NotFoundException("Room not found.");
     }
 
-    const currentRound = await this.prisma.round.findFirst({
-      where: {
-        roomId,
-        status: { in: ACTIVE_ROUND_STATUSES },
-      },
-      orderBy: { roundNumber: "desc" },
-    });
-
     const entries = currentRound
       ? await this.prisma.entry.findMany({
           where: { roundId: currentRound.id },
-          include: {
+          select: {
+            id: true,
+            roundId: true,
+            userId: true,
+            amount: true,
+            ticketStart: true,
+            ticketEnd: true,
+            isWinner: true,
+            createdAt: true,
+            updatedAt: true,
             user: {
               select: {
                 id: true,

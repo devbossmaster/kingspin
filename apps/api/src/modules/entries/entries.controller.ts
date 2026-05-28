@@ -1,4 +1,4 @@
-import { Body, Controller, Param, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Logger, Param, Post, UseGuards } from "@nestjs/common";
 import { PlaceEntrySchema, type PlaceEntryInput } from "@kingspin/contracts";
 import { RoomGateway } from "../../gateways/room.gateway";
 import { AuthGuard } from "../auth-bridge/auth.guard";
@@ -9,6 +9,8 @@ import { EntriesService } from "./entries.service";
 
 @Controller("rooms/:roomId/entries")
 export class EntriesController {
+  private readonly logger = new Logger(EntriesController.name);
+
   constructor(
     private readonly entriesService: EntriesService,
     private readonly roomGateway: RoomGateway,
@@ -28,10 +30,28 @@ export class EntriesController {
       idempotencyKey: body.idempotencyKey,
     });
 
-    await this.roomGateway.broadcastRoundState(
-      roomId,
-      result.reused ? "ENTRY_REUSED" : "ENTRY_PLACED",
-    );
+    const eventType = result.reused ? "ENTRY_REUSED" : "ENTRY_PLACED";
+
+    /**
+     * Important performance fix:
+     *
+     * Do NOT await broadcastRoundState() in the HTTP request path.
+     *
+     * The entry has already been written by entriesService.placeEntryForUser().
+     * The response already contains enough data for the frontend to update quickly.
+     * Waiting for the socket broadcast forces POST /entries to also pay the cost of
+     * rebuilding and emitting the full room snapshot.
+     */
+    setImmediate(() => {
+      void this.roomGateway
+        .broadcastRoundState(roomId, eventType)
+        .catch((error: unknown) => {
+          this.logger.error(
+            `Failed to broadcast round state after ${eventType} for room ${roomId}`,
+            error instanceof Error ? error.stack : String(error),
+          );
+        });
+    });
 
     return result;
   }

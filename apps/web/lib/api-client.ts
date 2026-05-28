@@ -1,11 +1,13 @@
 import type {
   CategorySnapshot,
   CurrentUser,
+  EntryWithPlayerSnapshot,
   LatestRoundResult,
   MeWallet,
   PlaceEntryInput,
   RoomSnapshot,
   RoomLiveState,
+  WalletSnapshot,
 } from "@kingspin/contracts";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -18,11 +20,20 @@ export type CategoryListItem = CategorySnapshot & {
 export type RoomListItem = Omit<RoomSnapshot, "name"> & {
   name: string | null;
 };
+
 export type AdminRoomCommand =
   | "activate"
   | "pause"
   | "close"
   | "archive";
+
+export type PlaceEntryResponse = {
+  entry: Omit<EntryWithPlayerSnapshot, "player">;
+  player: EntryWithPlayerSnapshot["player"];
+  wallet: WalletSnapshot;
+  currentRound: RoomLiveState["currentRound"];
+  reused: boolean;
+};
 
 async function requestJson<TResponse>(
   path: string,
@@ -86,7 +97,7 @@ export const apiClient = {
       ? { amount: input.amount, idempotencyKey: input.idempotencyKey }
       : { amount: input.amount };
 
-    return requestJson(`/rooms/${roomId}/entries`, {
+    return requestJson<PlaceEntryResponse>(`/rooms/${roomId}/entries`, {
       method: "POST",
       body: JSON.stringify(body),
     });

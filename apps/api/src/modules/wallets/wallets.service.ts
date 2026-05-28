@@ -81,6 +81,11 @@ type LedgerTransactionWithEntries = LedgerTransaction & {
 export class WalletsService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private readonly transactionOptions = {
+    maxWait: 5_000,
+    timeout: 10_000,
+  } as const;
+
   static entryHoldCompensationIdempotencyKey(holdTransactionId: string) {
     return `entry-hold-compensation:${holdTransactionId}`;
   }
@@ -225,9 +230,23 @@ export class WalletsService {
       idempotencyKey: string;
     },
   ): Promise<WalletSnapshot> {
-    const result = await this.holdEntryAmountInTransaction(tx, args);
+    const result = await this.holdEntryAmountForEntryInTransaction(tx, args);
 
     return result.wallet;
+  }
+
+  async holdEntryAmountForEntryInTransaction(
+    tx: Prisma.TransactionClient,
+    args: {
+      walletAccountId: string;
+      userId: string;
+      roundId: string;
+      entryId: string;
+      amount: bigint;
+      idempotencyKey: string;
+    },
+  ): Promise<EntryHoldResult> {
+    return this.holdEntryAmountInTransaction(tx, args);
   }
 
   async holdEntryAmountForEntry(args: {
@@ -239,8 +258,9 @@ export class WalletsService {
     idempotencyKey: string;
   }): Promise<EntryHoldResult> {
     try {
-      return await this.prisma.$transaction((tx) =>
-        this.holdEntryAmountInTransaction(tx, args),
+      return await this.prisma.$transaction(
+        (tx) => this.holdEntryAmountInTransaction(tx, args),
+        this.transactionOptions,
       );
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
@@ -665,8 +685,9 @@ export class WalletsService {
     entryId: string;
     roundId: string;
   }): Promise<EntryRefundResult> {
-    return this.prisma.$transaction((tx) =>
-      this.refundEntryHolds(tx, args),
+    return this.prisma.$transaction(
+      (tx) => this.refundEntryHolds(tx, args),
+      this.transactionOptions,
     );
   }
 
@@ -775,19 +796,44 @@ export class WalletsService {
     }
   }
   async ensureMainWalletForUserId(userId: string): Promise<WalletAccount> {
-    return this.prisma.walletAccount.upsert({
+    if (!userId) {
+      throw new BadRequestException("userId is required.");
+    }
+
+    const existingWallet = await this.prisma.walletAccount.findUnique({
       where: {
         userId_type: {
           userId,
           type: WalletAccountType.MAIN,
         },
       },
-      update: {},
-      create: {
-        userId,
-        type: WalletAccountType.MAIN,
-      },
     });
+
+    if (existingWallet) {
+      return existingWallet;
+    }
+
+    try {
+      return await this.prisma.walletAccount.create({
+        data: {
+          userId,
+          type: WalletAccountType.MAIN,
+        },
+      });
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return this.prisma.walletAccount.findUniqueOrThrow({
+          where: {
+            userId_type: {
+              userId,
+              type: WalletAccountType.MAIN,
+            },
+          },
+        });
+      }
+
+      throw error;
+    }
   }
 
   private async resolveDevUserOutsideTransaction(
@@ -1048,6 +1094,7 @@ export class WalletsService {
     };
   }
 }
+
 
 
 

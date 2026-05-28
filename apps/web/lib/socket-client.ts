@@ -13,6 +13,7 @@ export function getGameSocket() {
     socket = io(SOCKET_URL, {
       transports: ["websocket"],
       reconnection: true,
+      withCredentials: true,
     });
   }
 

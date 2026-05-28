@@ -81,8 +81,13 @@ describe("HttpExceptionFilter", () => {
     process.env = {
       ...originalEnv,
       NODE_ENV: "production",
+      WEB_URL: "https://app.example.com",
       DATABASE_URL: "postgresql://user:pass@localhost:5432/kingspin",
+      DIRECT_URL: "postgresql://user:pass@localhost:5432/kingspin",
       BETTER_AUTH_SECRET: "test-secret",
+      ADMIN_DEV_KEY: "admin-secret",
+      RESEND_API_KEY: "resend-test",
+      EMAIL_FROM: "SpinPro <auth@example.com>",
     };
     resetApiEnvForTesting();
 

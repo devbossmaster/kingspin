@@ -2,6 +2,53 @@
 
 :root {
   color-scheme: dark;
+  --bg-void: #080C14;
+  --bg-surface: #0D1525;
+  --bg-card: #111B2E;
+  --bg-raised: #172035;
+  --gold: #F6C547;
+  --gold-dim: #C9962A;
+  --teal: #2DD4BF;
+  --magenta: #E879F9;
+  --red-hot: #F87171;
+  --green-go: #4ADE80;
+  --text-primary: #F0F4FF;
+  --text-secondary: #8B9CC8;
+  --text-dim: #445070;
+  --border: rgba(246, 197, 71, 0.15);
+  --border-glow: rgba(246, 197, 71, 0.4);
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-xl: 12px;
+  --glow-gold: 0 0 26px rgba(246, 197, 71, 0.28);
+  --glow-teal: 0 0 24px rgba(45, 212, 191, 0.22);
+  --font-body: var(--font-inter), system-ui, sans-serif;
+  --font-heading: var(--font-syne), var(--font-inter), system-ui, sans-serif;
+  --font-numeric: var(--font-dm-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+@theme inline {
+  --color-bg-void: var(--bg-void);
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-card: var(--bg-card);
+  --color-bg-raised: var(--bg-raised);
+  --color-gold: var(--gold);
+  --color-gold-dim: var(--gold-dim);
+  --color-teal: var(--teal);
+  --color-magenta: var(--magenta);
+  --color-red-hot: var(--red-hot);
+  --color-green-go: var(--green-go);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-dim: var(--text-dim);
+  --font-sans: var(--font-body);
+  --font-display: var(--font-heading);
+  --font-mono: var(--font-numeric);
+  --radius-sm: var(--r-sm);
+  --radius-md: var(--r-md);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
 }
 
 html,
@@ -11,5 +58,36 @@ body {
 
 body {
   margin: 0;
-  background: #020617;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(45, 212, 191, 0.12), transparent 32%),
+    linear-gradient(135deg, var(--bg-void) 0%, var(--bg-surface) 58%, #0A1020 100%);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+::selection {
+  background: rgba(250, 204, 21, 0.35);
+  color: #ffffff;
+}
+
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.arcadia-surface {
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-card) 82%, transparent);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
 }

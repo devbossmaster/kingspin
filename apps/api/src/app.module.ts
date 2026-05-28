@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
+import { join } from "node:path";
 import { AdminEntriesModule } from "./modules/admin/entries/admin-entries.module";
 import { AdminRoomsModule } from "./modules/admin/rooms/admin-rooms.module";
 import { AdminRoundsModule } from "./modules/admin/rounds/admin-rounds.module";
@@ -26,7 +27,7 @@ import { validateAndStoreApiEnv } from "./config/api-env";
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: [".env", "apps/api/.env"],
+      envFilePath: join(__dirname, "..", ".env"),
       validate: (config) =>
         validateAndStoreApiEnv(config as Record<string, string | undefined>),
     }),

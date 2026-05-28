@@ -1,28 +1,39 @@
 "use client";
 
 import { useParams } from "next/navigation";
+import { ConnectionPill } from "../../../../components/layout/connection-pill";
+import { NavBar } from "../../../../components/layout/nav-bar";
+import { EntryPanel } from "../../../../components/spinpro/entry-panel";
+import { FairnessStrip } from "../../../../components/spinpro/fairness-strip";
+import { PlayersList } from "../../../../components/spinpro/players-list";
+import { PoolStat } from "../../../../components/spinpro/pool-stat";
 import { RoundPhaseBanner } from "../../../../components/spinpro/round-phase-banner";
 import { RoundTimer } from "../../../../components/spinpro/round-timer";
 import { SpinningWheel } from "../../../../components/spinpro/spinning-wheel";
+import { WalletHUD } from "../../../../components/spinpro/wallet-hud";
 import { WinnerReveal } from "../../../../components/spinpro/winner-reveal";
+import { Badge, phaseBadgeVariant } from "../../../../components/ui/badge";
+import { Button } from "../../../../components/ui/button";
 import { useRoom } from "../../../../hooks/use-room";
+import { formatCoins, truncateId } from "../../../../lib/format";
+import { useSession } from "../../../../lib/auth-client";
 import { useRoomStore } from "../../../../stores/room-store";
-
-function formatAmount(value: string | number | null | undefined) {
-  if (value === null || value === undefined) return "0";
-  return Number(value).toLocaleString();
-}
 
 export default function LiveRoomPage() {
   const params = useParams<{ categorySlug: string; roomId: string }>();
   const roomId = params.roomId;
+  const roomHref = `/spinpro/${params.categorySlug}/${roomId}`;
+  const { data: session, isPending } = useSession();
 
   const {
     state,
     latestResult,
-    meWallet,
+    user,
+    wallet,
     error,
+    walletError,
     isPlacingEntry,
+    myEntry,
     placeEntry,
     refresh,
     refreshWallet,
@@ -30,67 +41,73 @@ export default function LiveRoomPage() {
 
   const selectedChip = useRoomStore((store) => store.selectedChip);
   const setSelectedChip = useRoomStore((store) => store.setSelectedChip);
+  const chipOptions = useRoomStore((store) => store.chipOptions);
   const connectionStatus = useRoomStore((store) => store.connectionStatus);
   const isWinnerRevealOpen = useRoomStore((store) => store.isWinnerRevealOpen);
   const dismissWinner = useRoomStore((store) => store.dismissWinner);
+  const roundLog = useRoomStore((store) => store.roundLog);
 
   if (!state) {
     return (
-      <main className="min-h-screen bg-slate-950 p-6 text-white">
-        <div className="mx-auto max-w-5xl">
+      <main className="min-h-screen text-text-primary">
+        <NavBar backHref={`/spinpro/${params.categorySlug}`} />
+        <div className="mx-auto max-w-5xl px-4 py-8 md:px-8">
           <p>Loading room...</p>
-          {error ? <p className="mt-3 text-red-400">{error}</p> : null}
+          {error ? <p className="mt-3 text-red-hot">{error}</p> : null}
         </div>
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 p-4 text-white md:p-8">
-      <div className="mx-auto grid max-w-6xl gap-4 lg:grid-cols-[1.4fr_0.9fr]">
-        <section className="rounded-2xl border border-white/10 bg-white/5 p-5 shadow-xl">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+    <main className="min-h-screen text-text-primary">
+      <NavBar backHref={`/spinpro/${params.categorySlug}`} />
+      <ConnectionPill />
+
+      <div className="mx-auto grid max-w-7xl gap-4 px-4 py-5 md:px-8 lg:grid-cols-[1.45fr_0.9fr]">
+        <section className="arcadia-surface rounded-lg p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] pb-4">
             <div>
-              <p className="text-sm text-sky-300">{state.category.name}</p>
-              <h1 className="text-2xl font-bold">{state.room.name}</h1>
-              <p className="text-sm text-slate-400">
-                Room {state.room.code} · Socket {connectionStatus}
+              <p className="text-sm font-bold text-teal">{state.category.name}</p>
+              <h1 className="mt-1 font-display text-3xl font-black">
+                {state.room.name}
+              </h1>
+              <p className="mt-1 font-mono text-xs text-text-secondary">
+                {state.room.code} / socket {connectionStatus}
               </p>
             </div>
 
-            <button
-              onClick={() => void refresh()}
-              className="rounded-xl bg-white/10 px-4 py-2 text-sm hover:bg-white/20"
-            >
+            <Button variant="ghost" onClick={() => void refresh()}>
               Refresh
-            </button>
+            </Button>
           </div>
 
-          <div className="mt-6 grid gap-4 md:grid-cols-3">
-            <div className="rounded-2xl bg-slate-900 p-4">
-              <p className="text-sm text-slate-400">Round</p>
-              <p className="mt-1 text-2xl font-bold">
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            <div className="rounded-md border border-[var(--border)] bg-white/[0.04] p-4">
+              <p className="text-sm text-text-secondary">Round</p>
+              <p className="mt-1 font-mono text-2xl font-black">
                 #{state.currentRound?.roundNumber ?? "-"}
               </p>
-              <p className="text-sm text-slate-400">
-                {state.currentRound?.status ?? "NO ROUND"}
-              </p>
+              <div className="mt-2">
+                <Badge variant={phaseBadgeVariant(state.currentRound?.status)}>
+                  {state.currentRound?.status ?? "NO ROUND"}
+                </Badge>
+              </div>
             </div>
 
-            <div className="rounded-2xl bg-slate-900 p-4">
-              <p className="text-sm text-slate-400">Pool</p>
-              <p className="mt-1 text-2xl font-bold">
-                {formatAmount(state.currentRound?.totalEntryAmount)}
-              </p>
-              <p className="text-sm text-slate-400">coins</p>
-            </div>
+            <PoolStat
+              label="Pool"
+              value={state.currentRound?.totalEntryAmount}
+              caption="coins"
+            />
 
-            <div className="rounded-2xl bg-slate-900 p-4">
-              <p className="text-sm text-slate-400">Locks In</p>
+            <div className="rounded-md border border-[var(--border)] bg-white/[0.04] p-4">
+              <p className="text-sm text-text-secondary">Locks In</p>
               <RoundTimer
                 status={state.currentRound?.status}
                 serverNow={state.serverNow}
                 locksAt={state.currentRound?.locksAt}
+                durationMs={state.room.roundDurationMs}
               />
             </div>
           </div>
@@ -99,101 +116,85 @@ export default function LiveRoomPage() {
             status={state.currentRound?.status}
             roundNumber={state.currentRound?.roundNumber}
             totalEntryAmount={state.currentRound?.totalEntryAmount}
-            winnerUserId={state.currentRound?.winnerUserId}
             winningTicket={state.currentRound?.winningTicket}
           />
 
-          <div className="mt-6">
+          <div className="mt-5">
             <SpinningWheel
               entries={state.entries}
               totalEntryAmount={state.currentRound?.totalEntryAmount ?? "0"}
               spinAngle={state.currentRound?.spinAngle}
               status={state.currentRound?.status}
+              winnerEntryId={state.currentRound?.winnerEntryId}
             />
           </div>
 
+          <FairnessStrip
+            currentRound={state.currentRound}
+            latestResult={latestResult}
+          />
+
           {error ? (
-            <div className="mt-4 rounded-xl border border-red-500/40 bg-red-500/10 p-3 text-sm text-red-200">
+            <div className="mt-4 rounded-md border border-[rgba(248,113,113,0.42)] bg-[rgba(248,113,113,0.12)] p-3 text-sm text-red-hot">
               {error}
             </div>
           ) : null}
         </section>
 
         <aside className="space-y-4">
-          <section className="rounded-2xl border border-yellow-400/20 bg-yellow-400/10 p-5">
-            <p className="text-sm font-bold uppercase tracking-wide text-yellow-200">
-              Wallet
-            </p>
-            <h2 className="mt-2 text-3xl font-black">
-              {formatAmount(meWallet?.wallet.balanceSnapshot)}
-            </h2>
-            <p className="mt-1 text-sm text-yellow-100/80">
-              {meWallet?.user.username ?? "Sign in required"}
-            </p>
-            <button
-              onClick={() => void refreshWallet()}
-              className="mt-4 rounded-xl bg-yellow-400 px-4 py-2 text-sm font-bold text-slate-950"
-            >
-              Refresh Balance
-            </button>
-          </section>
+          <WalletHUD
+            user={user}
+            wallet={wallet}
+            fallbackName={session?.user.name}
+            loadingLabel={isPending ? "Checking session" : "Sign in required"}
+            error={session?.user ? walletError : null}
+            onRefresh={() => void refreshWallet()}
+          />
 
-          <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
-            <h2 className="text-lg font-bold">Place Entry</h2>
+          <EntryPanel
+            status={state.currentRound?.status}
+            wallet={wallet}
+            hasSession={Boolean(session?.user)}
+            emailVerified={session?.user.emailVerified}
+            roomHref={roomHref}
+            chipOptions={chipOptions}
+            selectedChip={selectedChip}
+            myEntry={myEntry}
+            isPlacingEntry={isPlacingEntry}
+            onSelectChip={setSelectedChip}
+            onPlaceEntry={(amount) => void placeEntry(amount)}
+          />
 
-            <div className="mt-4 grid grid-cols-3 gap-2">
-              {[1000, 2000, 5000].map((chip) => (
-                <button
-                  key={chip}
-                  onClick={() => setSelectedChip(chip)}
-                  className={
-                    chip === selectedChip
-                      ? "rounded-xl bg-yellow-400 px-3 py-2 font-bold text-slate-950"
-                      : "rounded-xl bg-white/10 px-3 py-2 hover:bg-white/20"
-                  }
-                >
-                  {chip}
-                </button>
-              ))}
-            </div>
+          <PlayersList
+            entries={state.entries}
+            totalEntryAmount={state.currentRound?.totalEntryAmount ?? "0"}
+            winnerEntryId={state.currentRound?.winnerEntryId}
+          />
 
-            <button
-              disabled={
-                isPlacingEntry ||
-                state.currentRound?.status !== "OPEN" ||
-                !meWallet
-              }
-              onClick={() => void placeEntry({ amount: selectedChip })}
-              className="mt-4 w-full rounded-xl bg-emerald-500 px-4 py-3 font-bold text-slate-950 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-            >
-              {meWallet
-                ? isPlacingEntry
-                  ? "Placing..."
-                  : `Enter ${selectedChip}`
-                : "Sign in required"}
-            </button>
-          </section>
-
-          <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
-            <h2 className="text-lg font-bold">Players</h2>
+          <section className="arcadia-surface rounded-lg p-5">
+            <h2 className="font-display text-lg font-black">Recent Rounds</h2>
             <div className="mt-3 space-y-2">
-              {state.entries.length === 0 ? (
-                <p className="text-sm text-slate-400">No entries yet.</p>
+              {roundLog.length === 0 ? (
+                <p className="text-sm text-text-secondary">No settled rounds yet.</p>
               ) : (
-                state.entries.map((entry) => (
-                  <div key={entry.id} className="rounded-xl bg-slate-900 p-3">
+                roundLog.map((result) => (
+                  <div
+                    key={result.round.id}
+                    className="rounded-md border border-[var(--border)] bg-white/[0.04] px-3 py-2 text-sm"
+                  >
                     <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <p className="font-semibold">
-                          {entry.player?.username ?? entry.userId}
-                        </p>
-                        <p className="text-xs text-slate-400">
-                          Tickets {entry.ticketStart ?? "-"}–
-                          {entry.ticketEnd ?? "-"}
-                        </p>
-                      </div>
-                      <p className="font-bold">{formatAmount(entry.amount)}</p>
+                      <span className="font-mono">
+                        Round #{result.round.roundNumber}
+                      </span>
+                      <span className="font-mono text-gold">
+                        {formatCoins(result.round.payoutAmount)}
+                      </span>
                     </div>
+                    <p className="mt-1 truncate text-text-secondary">
+                      Winner{" "}
+                      {result.winnerEntry?.player?.username ??
+                        truncateId(result.winnerEntry?.userId, 6)}
+                    </p>
                   </div>
                 ))
               )}

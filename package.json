@@ -4,6 +4,15 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
+    "start:api": "pnpm --filter api start:prod",
+    "start:web": "pnpm --filter web start",
+    "db:generate": "pnpm --filter @kingspin/db db:generate",
+    "migrate:deploy": "pnpm --filter @kingspin/db migrate:deploy",
+    "migrate:status": "pnpm --filter @kingspin/db migrate:status",
+    "db:diagnose-env": "node scripts/diagnose-db-env.mjs",
+    "env:diagnose": "node scripts/diagnose-env.mjs",
+    "smoke:staging": "node scripts/smoke-check.mjs",
+    "security:static": "node scripts/security-static-check.mjs",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "check-types": "turbo run check-types"

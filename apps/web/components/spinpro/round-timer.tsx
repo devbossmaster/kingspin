@@ -1,74 +1,80 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCountdown } from "../../hooks/use-countdown";
+import { formatMs } from "../../lib/format";
 
 type RoundTimerProps = {
   status: string | null | undefined;
   serverNow: string;
   locksAt: string | null | undefined;
+  durationMs: number;
 };
 
-export function RoundTimer({ status, serverNow, locksAt }: RoundTimerProps) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
+function timerTone(msLeft: number, durationMs: number) {
+  const ratio = durationMs > 0 ? msLeft / durationMs : 0;
 
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 250);
+  if (ratio <= 0.25) {
+    return {
+      text: "text-red-hot",
+      bar: "bg-[var(--red-hot)]",
+      ring: "border-[rgba(248,113,113,0.48)]",
+    };
+  }
 
-    return () => window.clearInterval(interval);
-  }, []);
+  if (ratio <= 0.5) {
+    return {
+      text: "text-gold",
+      bar: "bg-[var(--gold)]",
+      ring: "border-[rgba(246,197,71,0.48)]",
+    };
+  }
 
-  const serverOffsetMs = useMemo(() => {
-    const parsedServerNow = new Date(serverNow).getTime();
+  return {
+    text: "text-green-go",
+    bar: "bg-[var(--green-go)]",
+    ring: "border-[rgba(74,222,128,0.44)]",
+  };
+}
 
-    if (!Number.isFinite(parsedServerNow)) {
-      return 0;
-    }
-
-    return parsedServerNow - Date.now();
-  }, [serverNow]);
-
-  const msUntilLock = useMemo(() => {
-    if (status !== "OPEN" || !locksAt) {
-      return 0;
-    }
-
-    const lockTimeMs = new Date(locksAt).getTime();
-
-    if (!Number.isFinite(lockTimeMs)) {
-      return 0;
-    }
-
-    const estimatedServerNowMs = nowMs + serverOffsetMs;
-
-    return Math.max(0, lockTimeMs - estimatedServerNowMs);
-  }, [locksAt, nowMs, serverOffsetMs, status]);
-
-  const seconds = Math.ceil(msUntilLock / 1000);
-  const progress = Math.max(0, Math.min(1, msUntilLock / 45_000));
+export function RoundTimer({
+  status,
+  serverNow,
+  locksAt,
+  durationMs,
+}: RoundTimerProps) {
+  const { msLeft } = useCountdown({
+    locksAt,
+    serverNow,
+    enabled: status === "OPEN",
+  });
+  const tone = timerTone(msLeft, durationMs);
+  const progress = Math.max(0, Math.min(1, durationMs > 0 ? msLeft / durationMs : 0));
 
   if (status !== "OPEN") {
     return (
-      <div>
-        <p className="mt-1 text-2xl font-bold">-</p>
-        <p className="text-sm text-slate-400">Round is {status ?? "inactive"}</p>
+      <div
+        className={`mt-2 rounded-md border ${tone.ring} bg-white/[0.04] px-3 py-2`}
+        aria-live="polite"
+      >
+        <p className="font-display text-lg font-black">{status ?? "Inactive"}</p>
+        <p className="text-sm text-text-secondary">Entries closed</p>
       </div>
     );
   }
 
   return (
-    <div>
-      <p className="mt-1 text-2xl font-bold">{seconds}s</p>
-      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">
-        <div
-          className="h-full rounded-full bg-yellow-400 transition-[width] duration-200"
-          style={{ width: `${progress * 100}%` }}
-        />
+    <div aria-live="polite">
+      <div className={`mt-1 rounded-md border ${tone.ring} bg-white/[0.04] p-3`}>
+        <p className={`font-mono text-3xl font-black ${tone.text}`}>
+          {formatMs(msLeft)}
+        </p>
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-[var(--bg-raised)]">
+          <div
+            className={`h-full rounded-full ${tone.bar} transition-[width] duration-200`}
+            style={{ width: `${progress * 100}%` }}
+          />
+        </div>
       </div>
-      <p className="mt-2 text-sm text-slate-400">
-        Server clock synced
-      </p>
     </div>
   );
 }

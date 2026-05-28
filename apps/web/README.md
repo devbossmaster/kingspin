@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/create-next-app).
+# SpinPro Web
 
-## Getting Started
+Next.js 16 App Router frontend for SpinPro player auth, lobby, live rooms, and wallet-aware entry actions.
 
-First, run the development server:
+## Environment
+
+Use `apps/web/.env` for local web environment values. The web app no longer
+uses `apps/web/.env.local`.
+
+Set `APP_ENV` (or `DEPLOY_ENV`) explicitly:
+
+- `local` for developer builds, including `next build` with localhost URLs
+- `staging` for closed-alpha/staging builds
+- `production` for real production deploys
+
+Required for auth:
+
+- `BETTER_AUTH_SECRET`
+- `BETTER_AUTH_URL` or `WEB_URL`
+- `DATABASE_URL`
+- `BETTER_AUTH_COOKIE_DOMAIN` when web and API use separate subdomains
+
+Required for game API integration:
+
+- `NEXT_PUBLIC_API_URL`, for example `http://localhost:4000`
+- `NEXT_PUBLIC_SOCKET_URL`, for example `http://localhost:4000/game`
+
+Required for auth email delivery outside local placeholder mode:
+
+- `RESEND_API_KEY`
+- `RESEND_FROM_EMAIL` or `EMAIL_FROM`
+
+When `APP_ENV=production`, `WEB_URL`, `BETTER_AUTH_URL`,
+`NEXT_PUBLIC_API_URL`, and `NEXT_PUBLIC_SOCKET_URL` must use deployed HTTPS
+origins, and Resend credentials plus a sender must be real values. Local
+Resend placeholders are only accepted with `APP_ENV=local`.
+
+Optional:
+
+- `NEXT_PUBLIC_WEB_URL`
+
+## Local Commands
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm --filter web dev
+pnpm --filter web check-types
+pnpm --filter web build
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Protected game and wallet calls use cookies and `credentials: "include"`. The web app does not send `playerKey`, `userId`, `walletId`, role, or balance for player entry actions.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load Inter, a custom Google Font.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+When deployed as `app.example.com` plus `api.example.com`, set
+`BETTER_AUTH_COOKIE_DOMAIN=.example.com` so the API can receive the Better Auth
+session cookie and validate it through AuthBridge.

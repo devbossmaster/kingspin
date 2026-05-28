@@ -1,12 +1,28 @@
 import type {
+  CategorySnapshot,
   CurrentUser,
   LatestRoundResult,
   MeWallet,
   PlaceEntryInput,
+  RoomSnapshot,
   RoomLiveState,
 } from "@kingspin/contracts";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+
+export type CategoryListItem = CategorySnapshot & {
+  isActive?: boolean;
+  sortOrder?: number;
+};
+
+export type RoomListItem = Omit<RoomSnapshot, "name"> & {
+  name: string | null;
+};
+export type AdminRoomCommand =
+  | "activate"
+  | "pause"
+  | "close"
+  | "archive";
 
 async function requestJson<TResponse>(
   path: string,
@@ -37,6 +53,16 @@ async function requestJson<TResponse>(
 }
 
 export const apiClient = {
+  getCategories() {
+    return requestJson<CategoryListItem[]>("/categories");
+  },
+
+  getRoomsByCategory(categorySlug: string) {
+    const params = new URLSearchParams({ categorySlug });
+
+    return requestJson<RoomListItem[]>(`/rooms?${params.toString()}`);
+  },
+
   getMe() {
     return requestJson<CurrentUser>("/me");
   },
@@ -56,9 +82,62 @@ export const apiClient = {
   },
 
   placeEntry(roomId: string, input: PlaceEntryInput) {
+    const body: PlaceEntryInput = input.idempotencyKey
+      ? { amount: input.amount, idempotencyKey: input.idempotencyKey }
+      : { amount: input.amount };
+
     return requestJson(`/rooms/${roomId}/entries`, {
       method: "POST",
-      body: JSON.stringify(input),
+      body: JSON.stringify(body),
     });
+  },
+
+  admin: {
+    startMachine(roomId: string, adminKey: string) {
+      return requestJson(`/admin/rooms/${roomId}/machine/start`, {
+        method: "POST",
+        headers: { "x-admin-dev-key": adminKey },
+      });
+    },
+
+    stopMachine(roomId: string, adminKey: string) {
+      return requestJson(`/admin/rooms/${roomId}/machine/stop`, {
+        method: "POST",
+        headers: { "x-admin-dev-key": adminKey },
+      });
+    },
+
+    getMachineStatus(roomId: string, adminKey: string) {
+      return requestJson(`/admin/rooms/${roomId}/machine/status`, {
+        headers: { "x-admin-dev-key": adminKey },
+      });
+    },
+
+    advanceOnce(roomId: string, adminKey: string, force = false) {
+      const params = new URLSearchParams({ force: String(force) });
+
+      return requestJson(
+        `/admin/rooms/${roomId}/machine/advance-once?${params.toString()}`,
+        {
+          method: "POST",
+          headers: { "x-admin-dev-key": adminKey },
+        },
+      );
+    },
+
+    createRoom(input: unknown, adminKey: string) {
+      return requestJson("/admin/rooms", {
+        method: "POST",
+        headers: { "x-admin-dev-key": adminKey },
+        body: JSON.stringify(input),
+      });
+    },
+
+    updateRoomStatus(roomId: string, command: AdminRoomCommand, adminKey: string) {
+      return requestJson(`/admin/rooms/${roomId}/${command}`, {
+        method: "PATCH",
+        headers: { "x-admin-dev-key": adminKey },
+      });
+    },
   },
 };

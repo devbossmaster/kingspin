@@ -1,102 +1,68 @@
-import Image, { type ImageProps } from "next/image";
-import { Button } from "@repo/ui/button";
-import styles from "./page.module.css";
+"use client";
 
-type Props = Omit<ImageProps, "src"> & {
-  srcLight: string;
-  srcDark: string;
-};
+import Link from "next/link";
+import { NavBar } from "../components/layout/nav-bar";
+import { Badge } from "../components/ui/badge";
+import { useCategories } from "../hooks/use-categories";
+import { formatCoins } from "../lib/format";
 
-const ThemeImage = (props: Props) => {
-  const { srcLight, srcDark, ...rest } = props;
+export default function HomePage() {
+  const { categories, loading, error } = useCategories();
 
   return (
-    <>
-      <Image {...rest} src={srcLight} className="imgLight" />
-      <Image {...rest} src={srcDark} className="imgDark" />
-    </>
-  );
-};
+    <main className="min-h-screen text-text-primary">
+      <NavBar />
 
-export default function Home() {
-  return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <ThemeImage
-          className={styles.logo}
-          srcLight="turborepo-dark.svg"
-          srcDark="turborepo-light.svg"
-          alt="Turborepo logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol>
-          <li>
-            Get started by editing <code>apps/web/app/page.tsx</code>
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
-
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new/clone?demo-description=Learn+to+implement+a+monorepo+with+a+two+Next.js+sites+that+has+installed+three+local+packages.&demo-image=%2F%2Fimages.ctfassets.net%2Fe5382hct74si%2F4K8ZISWAzJ8X1504ca0zmC%2F0b21a1c6246add355e55816278ef54bc%2FBasic.png&demo-title=Monorepo+with+Turborepo&demo-url=https%3A%2F%2Fexamples-basic-web.vercel.sh%2F&from=templates&project-name=Monorepo+with+Turborepo&repository-name=monorepo-turborepo&repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fturborepo%2Ftree%2Fmain%2Fexamples%2Fbasic&root-directory=apps%2Fdocs&skippable-integrations=1&teamSlug=vercel&utm_source=create-turbo"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            href="https://turborepo.dev/docs?utm_source"
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.secondary}
-          >
-            Read our docs
-          </a>
+      <section className="mx-auto w-full max-w-7xl px-4 py-10 md:px-8 md:py-14">
+        <div className="max-w-3xl">
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-gold">
+            SpinPro
+          </p>
+          <h1 className="mt-3 font-display text-5xl font-black tracking-normal md:text-7xl">
+            Server-run wheel rooms.
+          </h1>
+          <p className="mt-5 max-w-2xl text-base leading-7 text-text-secondary">
+            Provably fair · Ledger-based payouts · Real-time
+          </p>
         </div>
-        <Button appName="web" className={styles.secondary}>
-          Open alert
-        </Button>
-      </main>
-      <footer className={styles.footer}>
-        <a
-          href="https://vercel.com/templates?search=turborepo&utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          href="https://turborepo.dev?utm_source=create-turbo"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to turborepo.dev →
-        </a>
-      </footer>
-    </div>
+
+        {error ? (
+          <div className="mt-8 rounded-md border border-[rgba(248,113,113,0.42)] bg-[rgba(248,113,113,0.12)] px-4 py-3 text-sm text-red-hot">
+            {error}
+          </div>
+        ) : null}
+
+        <div className="mt-10 grid gap-4 md:grid-cols-3">
+          {loading ? (
+            <div className="rounded-lg border border-[var(--border)] bg-white/[0.04] p-5 text-text-secondary">
+              Loading categories
+            </div>
+          ) : null}
+
+          {categories.map((category) => (
+            <Link
+              key={category.id}
+              href={`/spinpro/${category.slug}`}
+              className="arcadia-surface rounded-lg p-5 transition hover:border-[var(--border-glow)]"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <h2 className="font-display text-2xl font-black">
+                  {category.name}
+                </h2>
+                <Badge variant="open">Live</Badge>
+              </div>
+              <p className="mt-6 font-mono text-sm text-text-secondary">
+                {formatCoins(category.minEntryAmount)}-
+                {formatCoins(category.maxEntryAmount)} coins
+              </p>
+              <p className="mt-2 text-sm text-text-secondary">
+                Max {category.maxPlayers} players ·{" "}
+                {Math.round(category.roundDurationMs / 1000)}s rounds
+              </p>
+            </Link>
+          ))}
+        </div>
+      </section>
+    </main>
   );
 }

@@ -1,11 +1,38 @@
 {
   "$schema": "https://turborepo.dev/schema.json",
   "ui": "tui",
+  "globalEnv": [
+    "NODE_ENV",
+    "APP_ENV",
+    "DEPLOY_ENV",
+    "DATABASE_URL",
+    "WEB_URL",
+    "BETTER_AUTH_URL",
+    "BETTER_AUTH_SECRET",
+    "RESEND_API_KEY",
+    "RESEND_FROM_EMAIL",
+    "EMAIL_FROM",
+    "BETTER_AUTH_COOKIE_DOMAIN",
+    "API_CORS_ORIGIN",
+    "CORS_ORIGIN",
+    "ADMIN_DEV_KEY",
+    "ROUND_MACHINE_AUTO_START",
+    "ENABLE_DEV_AUTH",
+    "ENABLE_REDIS",
+    "REDIS_URL",
+    "RATE_LIMIT_WINDOW_MS",
+    "RATE_LIMIT_MAX",
+    "SENTRY_DSN",
+    "LOG_LEVEL",
+    "NEXT_PUBLIC_API_URL",
+    "NEXT_PUBLIC_SOCKET_URL",
+    "NEXT_PUBLIC_WEB_URL"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "outputs": [".next/**", "!.next/cache/**"]
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
     },
     "lint": {
       "dependsOn": ["^lint"]

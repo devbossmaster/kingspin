@@ -1,10 +1,11 @@
 "use client";
 
+import { formatCoins } from "../../lib/format";
+
 type RoundPhaseBannerProps = {
   status: string | null | undefined;
   roundNumber: number | null | undefined;
   totalEntryAmount: string | null | undefined;
-  winnerUserId: string | null | undefined;
   winningTicket: string | null | undefined;
 };
 
@@ -12,58 +13,66 @@ function getPhaseCopy(status: string | null | undefined) {
   switch (status) {
     case "OPEN":
       return {
-        title: "Entry window is open",
-        message: "Choose your chip and enter before the timer reaches zero.",
-        tone: "border-emerald-400/30 bg-emerald-400/10 text-emerald-100",
+        icon: "O",
+        title: "Entry window open",
+        message: "Live entries are being accepted.",
+        tone: "border-[rgba(74,222,128,0.35)] bg-[rgba(74,222,128,0.1)] text-green-go",
       };
 
     case "LOCKED":
       return {
+        icon: "L",
         title: "Entries locked",
-        message: "No more entries. The server is assigning final ticket ranges.",
-        tone: "border-yellow-400/30 bg-yellow-400/10 text-yellow-100",
+        message: "Final ticket ranges are being assigned.",
+        tone: "border-[rgba(246,197,71,0.35)] bg-[rgba(246,197,71,0.1)] text-gold",
       };
 
     case "DRAWING":
       return {
+        icon: "D",
         title: "Drawing winner",
-        message: "The server is calculating the winning ticket from the committed seed.",
-        tone: "border-sky-400/30 bg-sky-400/10 text-sky-100",
+        message: "Winning ticket is being calculated.",
+        tone: "border-[rgba(96,165,250,0.38)] bg-[rgba(96,165,250,0.12)] text-blue-300",
       };
 
     case "SPINNING":
       return {
+        icon: "S",
         title: "Wheel spinning",
-        message: "The wheel animation is playing toward the server-selected winner.",
-        tone: "border-fuchsia-400/30 bg-fuchsia-400/10 text-fuchsia-100",
+        message: "Winner reveal is in progress.",
+        tone: "border-[rgba(232,121,249,0.35)] bg-[rgba(232,121,249,0.1)] text-magenta",
       };
 
     case "SETTLING":
       return {
+        icon: "$",
         title: "Settling payout",
-        message: "Ledger payout is being finalized safely and idempotently.",
-        tone: "border-orange-400/30 bg-orange-400/10 text-orange-100",
+        message: "Ledger payout is finalizing.",
+        tone: "border-[rgba(251,146,60,0.42)] bg-[rgba(251,146,60,0.12)] text-orange-300",
       };
 
     case "COMPLETED":
       return {
+        icon: "*",
         title: "Round completed",
-        message: "Winner selected, payout settled, and fairness proof is available.",
-        tone: "border-purple-400/30 bg-purple-400/10 text-purple-100",
+        message: "Winner selected and payout settled.",
+        tone: "border-[rgba(246,197,71,0.42)] bg-[rgba(246,197,71,0.12)] text-gold",
       };
 
     case "CANCELLED":
       return {
+        icon: "!",
         title: "Round cancelled",
-        message: "This round did not complete. Any held entries are refunded/skipped safely.",
-        tone: "border-red-400/30 bg-red-400/10 text-red-100",
+        message: "This round did not complete.",
+        tone: "border-[rgba(248,113,113,0.42)] bg-[rgba(248,113,113,0.12)] text-red-hot",
       };
 
     default:
       return {
+        icon: "-",
         title: "Waiting for round",
-        message: "The room machine is preparing the next round.",
-        tone: "border-slate-400/20 bg-slate-400/10 text-slate-100",
+        message: "Next round is preparing.",
+        tone: "border-[var(--border)] bg-white/[0.04] text-text-secondary",
       };
   }
 }
@@ -72,37 +81,40 @@ export function RoundPhaseBanner({
   status,
   roundNumber,
   totalEntryAmount,
-  winnerUserId,
   winningTicket,
 }: RoundPhaseBannerProps) {
   const copy = getPhaseCopy(status);
 
   return (
-    <div className={`mt-5 rounded-2xl border p-4 ${copy.tone}`}>
+    <div
+      className={`mt-5 rounded-lg border p-4 ${copy.tone}`}
+      aria-live="polite"
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-bold uppercase tracking-[0.2em] opacity-80">
-            {status ?? "NO ROUND"}
-          </p>
-          <h2 className="mt-1 text-lg font-black">{copy.title}</h2>
-          <p className="mt-1 text-sm opacity-90">{copy.message}</p>
+        <div className="flex items-start gap-3">
+          <span className="font-mono text-xl" aria-hidden="true">
+            {copy.icon}
+          </span>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.2em] opacity-80">
+              {status ?? "NO ROUND"}
+            </p>
+            <h2 className="mt-1 font-display text-lg font-black">
+              {copy.title}
+            </h2>
+            <p className="mt-1 text-sm opacity-90">{copy.message}</p>
+          </div>
         </div>
 
-        <div className="rounded-xl bg-black/20 px-3 py-2 text-right text-xs">
+        <div className="rounded-md bg-black/20 px-3 py-2 text-right font-mono text-xs">
           <p>Round #{roundNumber ?? "-"}</p>
-          <p>Pool {Number(totalEntryAmount ?? "0").toLocaleString()}</p>
+          <p>Pool {formatCoins(totalEntryAmount)}</p>
         </div>
       </div>
 
       {status === "COMPLETED" ? (
-        <div className="mt-3 rounded-xl bg-black/20 p-3 text-xs">
-          <p>
-            Winning ticket:{" "}
-            <span className="font-bold">{winningTicket ?? "-"}</span>
-          </p>
-          <p className="mt-1 break-all">
-            Winner user: <span className="font-bold">{winnerUserId ?? "-"}</span>
-          </p>
+        <div className="mt-3 rounded-md bg-black/20 p-3 font-mono text-xs">
+          Winning ticket: <span className="font-bold">{winningTicket ?? "-"}</span>
         </div>
       ) : null}
     </div>

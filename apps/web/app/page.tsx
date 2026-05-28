@@ -411,7 +411,7 @@ export default function HomePage() {
             </Link>
           </div>
 
-          <div className="flex flex-col gap-0.5 px-4">
+          <div className="flex flex-col gap-0.5 px-5">
             {loading ? (
               <div className="rounded-[13px] bg-[#14141f] p-4 text-sm text-[#8888aa]">
                 Loading games...

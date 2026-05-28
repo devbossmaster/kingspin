@@ -1,5 +1,6 @@
 import { ConflictException } from "@nestjs/common";
 import { RoomStatus, RoundStatus } from "@kingspin/db";
+import { resetApiEnvForTesting } from "../../config/api-env";
 import { RoundMachineService } from "./round-machine.service";
 
 const now = new Date("2026-05-26T12:00:00.000Z");
@@ -35,7 +36,10 @@ function buildRound(overrides?: Partial<Record<string, unknown>>) {
 }
 
 function buildService(args?: {
-  lockResult?: { acquired: false; reason: "PROCESS_LOCKED" | "DATABASE_LOCKED" };
+  lockResult?: {
+    acquired: false;
+    reason: "PROCESS_LOCKED" | "DATABASE_LOCKED";
+  };
   currentRound?: ReturnType<typeof buildRound> | null;
   entryCount?: number;
   lockEvents?: string[];
@@ -86,10 +90,7 @@ function buildService(args?: {
 
   const roundMachineLockService = {
     withRoomTickLock: jest.fn(
-      async (
-        _roomId: string,
-        work: () => Promise<Record<string, unknown>>,
-      ) => {
+      async (_roomId: string, work: () => Promise<Record<string, unknown>>) => {
         if (args?.lockResult) {
           return args.lockResult;
         }
@@ -122,6 +123,24 @@ function buildService(args?: {
 describe("RoundMachineService", () => {
   afterEach(() => {
     jest.useRealTimers();
+    delete process.env.ROUND_MACHINE_AUTO_START;
+    delete process.env.APP_ENV;
+    resetApiEnvForTesting();
+  });
+
+  it("does not auto-start machines unless ROUND_MACHINE_AUTO_START=true", () => {
+    jest.useFakeTimers();
+    process.env.APP_ENV = "local";
+    process.env.ROUND_MACHINE_AUTO_START = "false";
+    resetApiEnvForTesting();
+    const { service, prisma } = buildService();
+
+    service.onModuleInit();
+    jest.advanceTimersByTime(2_000);
+
+    expect(prisma.room.findMany).not.toHaveBeenCalled();
+
+    service.onModuleDestroy();
   });
 
   it("does not create duplicate timers when a running room is started again", async () => {

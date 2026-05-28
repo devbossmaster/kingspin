@@ -119,13 +119,13 @@ describe("WalletsService", () => {
         create: jest.fn().mockResolvedValue(holdTransaction),
       },
       walletAccount: {
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        findUniqueOrThrow: jest.fn().mockResolvedValue(updatedWallet),
+        updateManyAndReturn: jest.fn().mockResolvedValue([updatedWallet]),
+        findUnique: jest.fn(),
       },
     };
     const prisma = {
-      $transaction: jest.fn(async (callback: (txClient: typeof tx) => unknown) =>
-        callback(tx),
+      $transaction: jest.fn(
+        async (callback: (txClient: typeof tx) => unknown) => callback(tx),
       ),
     };
 
@@ -142,7 +142,7 @@ describe("WalletsService", () => {
 
     expect(result.reused).toBe(false);
     expect(result.wallet.balanceSnapshot).toBe("9000");
-    expect(tx.walletAccount.updateMany).toHaveBeenCalledWith(
+    expect(tx.walletAccount.updateManyAndReturn).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
           balanceSnapshot: { gte: 1_000n },
@@ -171,12 +171,12 @@ describe("WalletsService", () => {
       },
       walletAccount: {
         findUniqueOrThrow: jest.fn().mockResolvedValue(buildWallet(9_000n)),
-        updateMany: jest.fn(),
+        updateManyAndReturn: jest.fn(),
       },
     };
     const prisma = {
-      $transaction: jest.fn(async (callback: (txClient: typeof tx) => unknown) =>
-        callback(tx),
+      $transaction: jest.fn(
+        async (callback: (txClient: typeof tx) => unknown) => callback(tx),
       ),
     };
 
@@ -192,7 +192,7 @@ describe("WalletsService", () => {
     });
 
     expect(result.reused).toBe(true);
-    expect(tx.walletAccount.updateMany).not.toHaveBeenCalled();
+    expect(tx.walletAccount.updateManyAndReturn).not.toHaveBeenCalled();
   });
 
   it("rejects an entry hold idempotency key with different metadata", async () => {
@@ -211,8 +211,8 @@ describe("WalletsService", () => {
       },
     };
     const prisma = {
-      $transaction: jest.fn(async (callback: (txClient: typeof tx) => unknown) =>
-        callback(tx),
+      $transaction: jest.fn(
+        async (callback: (txClient: typeof tx) => unknown) => callback(tx),
       ),
     };
 
@@ -265,8 +265,8 @@ describe("WalletsService", () => {
       ledgerTransaction: {
         findUnique: jest.fn().mockResolvedValue(holdTransaction),
       },
-      $transaction: jest.fn(async (callback: (txClient: typeof tx) => unknown) =>
-        callback(tx),
+      $transaction: jest.fn(
+        async (callback: (txClient: typeof tx) => unknown) => callback(tx),
       ),
     };
 
@@ -366,7 +366,7 @@ describe("WalletsService", () => {
 
     const prisma = {
       walletAccount: {
-        upsert: jest.fn().mockResolvedValue(wallet),
+        findUnique: jest.fn().mockResolvedValue(wallet),
         findUniqueOrThrow: jest.fn().mockResolvedValue(wallet),
       },
       ledgerTransaction: {
@@ -416,7 +416,7 @@ describe("WalletsService", () => {
         upsert: jest.fn().mockResolvedValue(user),
       },
       walletAccount: {
-        upsert: jest.fn().mockResolvedValue(buildWallet(10_000n)),
+        findUnique: jest.fn().mockResolvedValue(buildWallet(10_000n)),
         findUniqueOrThrow: jest.fn().mockResolvedValue(wallet),
       },
       ledgerTransaction: {

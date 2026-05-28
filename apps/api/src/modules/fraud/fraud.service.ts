@@ -1,4 +1,12 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  Prisma,
+  RiskEventSeverity,
+  RiskEventStatus,
+  RiskEventType,
+  type RiskEvent,
+} from "@kingspin/db";
+import { PrismaService } from "../../prisma/prisma.service";
 
 export type FraudCheckName =
   | "DUPLICATE_IP_BETTING"
@@ -34,6 +42,8 @@ export type FraudEvaluationResult = {
 
 @Injectable()
 export class FraudService {
+  constructor(private readonly prisma: PrismaService) {}
+
   async evaluateEntryAttempt(
     _input: FraudEvaluationInput,
   ): Promise<FraudEvaluationResult> {
@@ -84,5 +94,96 @@ export class FraudService {
       "Add fraud_events table for immutable risk signals tied to users, rooms, rounds, entries, and wallets.",
       "Keep fraud checks advisory until policy, appeals, and admin review workflows exist.",
     ];
+  }
+
+  async createRiskEvent(input: {
+    userId?: string | null;
+    roomId?: string | null;
+    roundId?: string | null;
+    type: keyof typeof RiskEventType | RiskEventType;
+    severity: keyof typeof RiskEventSeverity | RiskEventSeverity;
+    metadata?: Prisma.InputJsonValue;
+  }) {
+    const event = await this.prisma.riskEvent.create({
+      data: {
+        userId: input.userId ?? null,
+        roomId: input.roomId ?? null,
+        roundId: input.roundId ?? null,
+        type: input.type as RiskEventType,
+        severity: input.severity as RiskEventSeverity,
+        metadata: input.metadata,
+      },
+    });
+
+    return this.toRiskEventSnapshot(event);
+  }
+
+  async listRiskEvents(filters: {
+    status?: RiskEventStatus;
+    severity?: RiskEventSeverity;
+    userId?: string;
+    take?: number;
+  } = {}) {
+    const take = Math.max(1, Math.min(filters.take ?? 50, 200));
+    const events = await this.prisma.riskEvent.findMany({
+      where: {
+        status: filters.status,
+        severity: filters.severity,
+        userId: filters.userId,
+      },
+      orderBy: { createdAt: "desc" },
+      take,
+    });
+
+    return events.map((event) => this.toRiskEventSnapshot(event));
+  }
+
+  async reviewRiskEvent(
+    id: string,
+    adminId: string,
+    status: RiskEventStatus,
+  ) {
+    if (
+      status !== RiskEventStatus.REVIEWED &&
+      status !== RiskEventStatus.DISMISSED &&
+      status !== RiskEventStatus.ACTIONED
+    ) {
+      throw new BadRequestException("Invalid risk event review status.");
+    }
+
+    const existing = await this.prisma.riskEvent.findUnique({
+      where: { id },
+    });
+
+    if (!existing) {
+      throw new NotFoundException("Risk event not found.");
+    }
+
+    const event = await this.prisma.riskEvent.update({
+      where: { id },
+      data: {
+        status,
+        reviewedByAdminId: adminId,
+        reviewedAt: new Date(),
+      },
+    });
+
+    return this.toRiskEventSnapshot(event);
+  }
+
+  toRiskEventSnapshot(event: RiskEvent) {
+    return {
+      id: event.id,
+      userId: event.userId,
+      roomId: event.roomId,
+      roundId: event.roundId,
+      type: event.type,
+      severity: event.severity,
+      status: event.status,
+      metadata: event.metadata,
+      createdAt: event.createdAt.toISOString(),
+      reviewedByAdminId: event.reviewedByAdminId,
+      reviewedAt: event.reviewedAt?.toISOString() ?? null,
+    };
   }
 }

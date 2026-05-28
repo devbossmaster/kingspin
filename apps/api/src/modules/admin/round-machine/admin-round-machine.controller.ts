@@ -1,34 +1,71 @@
 import { Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
-import { AdminDevGuard } from "../../../guards/admin-dev.guard";
+import { AdminAuditAction, Role } from "@kingspin/db";
+import { AdminRbacGuard, AdminRoles } from "../../auth-bridge/admin-rbac.guard";
+import { AuthGuard } from "../../auth-bridge/auth.guard";
+import { CurrentAdmin } from "../../auth-bridge/current-admin.decorator";
+import type { AdminBridgeUser } from "../../auth-bridge/auth.types";
+import { AuditService } from "../../audit/audit.service";
 import { RoundMachineService } from "../../rounds/round-machine.service";
 
 @Controller("admin/rooms/:roomId/machine")
-@UseGuards(AdminDevGuard)
+@UseGuards(AuthGuard, AdminRbacGuard)
 export class AdminRoundMachineController {
-  constructor(private readonly roundMachineService: RoundMachineService) {}
+  constructor(
+    private readonly roundMachineService: RoundMachineService,
+    private readonly auditService: AuditService,
+  ) {}
 
   @Post("start")
-  start(@Param("roomId") roomId: string) {
-    return this.roundMachineService.startRoomMachine(roomId);
+  @AdminRoles(Role.ADMIN)
+  async start(@CurrentAdmin() admin: AdminBridgeUser, @Param("roomId") roomId: string) {
+    const result = await this.roundMachineService.startRoomMachine(roomId);
+    await this.auditService.recordAdminAction({
+      actorId: admin.id,
+      action: AdminAuditAction.ROUND_STARTED,
+      targetType: "ROUND_MACHINE",
+      targetId: roomId,
+      after: result,
+    });
+    return result;
   }
 
   @Post("stop")
-  stop(@Param("roomId") roomId: string) {
-    return this.roundMachineService.stopRoomMachine(roomId);
+  @AdminRoles(Role.ADMIN)
+  async stop(@CurrentAdmin() admin: AdminBridgeUser, @Param("roomId") roomId: string) {
+    const result = await this.roundMachineService.stopRoomMachine(roomId);
+    await this.auditService.recordAdminAction({
+      actorId: admin.id,
+      action: AdminAuditAction.ROUND_CANCELLED,
+      targetType: "ROUND_MACHINE",
+      targetId: roomId,
+      after: result,
+    });
+    return result;
   }
 
   @Get("status")
+  @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.VIEWER)
   status(@Param("roomId") roomId: string) {
     return this.roundMachineService.getRoomMachineStatus(roomId);
   }
 
   @Post("advance-once")
-  advanceOnce(
+  @AdminRoles(Role.ADMIN)
+  async advanceOnce(
+    @CurrentAdmin() admin: AdminBridgeUser,
     @Param("roomId") roomId: string,
     @Query("force") force?: string,
   ) {
-    return this.roundMachineService.advanceRoomOnce(roomId, {
+    const result = await this.roundMachineService.advanceRoomOnce(roomId, {
       force: force === "true",
     });
+    await this.auditService.recordAdminAction({
+      actorId: admin.id,
+      action: AdminAuditAction.ROUND_SETTLED,
+      targetType: "ROUND_MACHINE",
+      targetId: roomId,
+      after: result,
+    });
+    return result;
   }
 }

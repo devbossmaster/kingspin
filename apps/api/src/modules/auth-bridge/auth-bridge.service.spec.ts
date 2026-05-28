@@ -31,6 +31,7 @@ describe("AuthBridgeService", () => {
     process.env.RESEND_API_KEY = "resend-test";
     process.env.EMAIL_FROM = "SpinPro <auth@spinpro.com>";
     process.env.ENABLE_DEV_AUTH = "false";
+    process.env.PAYMENT_PROVIDER = "MANUAL";
   }
 
   it("accepts x-dev-user-id only when local dev auth is explicitly enabled", async () => {

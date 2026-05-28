@@ -59,8 +59,7 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     const env = getApiEnv();
-    const shouldAutoStart =
-      env.ROUND_MACHINE_AUTO_START === true || env.NODE_ENV !== "production";
+    const shouldAutoStart = env.ROUND_MACHINE_AUTO_START === true;
 
     if (!shouldAutoStart) {
       this.logger.log(
@@ -135,18 +134,19 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
 
     const state = this.getOrCreateState(roomId);
 
-    const currentRound = await this.prisma.round.findFirst({
-      where: {
-        roomId,
-        status: { in: ACTIVE_ROUND_STATUSES },
-      },
-      orderBy: { roundNumber: "desc" },
-    });
-
-    const latestRound = await this.prisma.round.findFirst({
-      where: { roomId },
-      orderBy: { roundNumber: "desc" },
-    });
+    const [currentRound, latestRound] = await Promise.all([
+      this.prisma.round.findFirst({
+        where: {
+          roomId,
+          status: { in: ACTIVE_ROUND_STATUSES },
+        },
+        orderBy: { roundNumber: "desc" },
+      }),
+      this.prisma.round.findFirst({
+        where: { roomId },
+        orderBy: { roundNumber: "desc" },
+      }),
+    ]);
 
     return {
       roomId,
@@ -288,7 +288,8 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
       if (
         !force &&
         currentRound.lockedAt &&
-        now.getTime() < currentRound.lockedAt.getTime() + MACHINE_TIMINGS_MS.lockedPhase
+        now.getTime() <
+          currentRound.lockedAt.getTime() + MACHINE_TIMINGS_MS.lockedPhase
       ) {
         return {
           action: "WAITING_FOR_LOCKED_PHASE",
@@ -415,13 +416,22 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
 
       const result = await this.advanceRoomOnce(roomId, { force: false });
 
-      await this.roomGateway.broadcastMachineResult(roomId, result);
-
       state.lastAction = result.action;
       this.states.set(roomId, state);
 
       const nextDelayMs = this.getNextDelayMs(result);
       this.scheduleNextTick(roomId, nextDelayMs);
+
+      /**
+       * Important performance fix:
+       *
+       * Do not block the round-machine scheduler on socket broadcasting.
+       * broadcastMachineResult may trigger live-state generation, which can be
+       * slow under Supabase pooler pressure. The state transition is already
+       * committed before this point, so broadcasting can safely happen in the
+       * background.
+       */
+      this.emitMachineResult(roomId, result);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unknown machine error";
@@ -434,6 +444,38 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
 
       this.scheduleNextTick(roomId, 5_000);
     }
+  }
+
+  private emitMachineResult(roomId: string, result: any) {
+    if (!this.shouldBroadcastMachineResult(result)) {
+      return;
+    }
+
+    void this.roomGateway.broadcastMachineResult(roomId, result).catch(
+      (error: unknown) => {
+        const message =
+          error instanceof Error ? error.message : "Unknown broadcast error";
+
+        this.logger.warn(
+          `Room machine broadcast failed for ${roomId} after ${result?.action ?? "UNKNOWN_ACTION"}: ${message}`,
+        );
+      },
+    );
+  }
+
+  private shouldBroadcastMachineResult(result: any) {
+    const action = result?.action;
+
+    /**
+     * These are internal timer/leadership states. Broadcasting them can cause
+     * unnecessary live-state rebuilds without changing what the player sees.
+     */
+    return (
+      action !== "WAITING_FOR_OPEN_TO_EXPIRE" &&
+      action !== "WAITING_FOR_LOCKED_PHASE" &&
+      action !== "WAITING_FOR_DRAWING_PHASE" &&
+      action !== "SKIPPED_NOT_LEADER"
+    );
   }
 
   private scheduleNextTick(roomId: string, delayMs: number) {
@@ -515,11 +557,13 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
   private toLeaderSkipResult(
     roomId: string,
     options: AdvanceRoomOptions,
-    reason: "PROCESS_LOCKED" | "DATABASE_LOCKED",
+    reason: "PROCESS_LOCKED" | "DATABASE_LOCKED" | "REDIS_LOCKED",
   ) {
     const message =
       reason === "PROCESS_LOCKED"
         ? "This process is already advancing this room."
+        : reason === "REDIS_LOCKED"
+          ? "Another API instance is advancing this room."
         : "Another process is advancing this room.";
 
     return {
@@ -574,5 +618,3 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     }
   }
 }
-
-

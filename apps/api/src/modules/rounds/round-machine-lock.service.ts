@@ -1,10 +1,13 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { getApiEnv } from "../../config/api-env";
 import { PrismaService } from "../../prisma/prisma.service";
+import { RealtimeMetricsService } from "../redis/realtime-metrics.service";
+import { RedisService } from "../redis/redis.service";
 
 export type RoundMachineLockSkipReason =
   | "PROCESS_LOCKED"
-  | "DATABASE_LOCKED";
+  | "DATABASE_LOCKED"
+  | "REDIS_LOCKED";
 
 export type RoundMachineLockResult<T> =
   | {
@@ -22,7 +25,11 @@ export class RoundMachineLockService {
   private readonly activeRooms = new Set<string>();
   private hasLoggedProductionPolicy = false;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly redisService?: RedisService,
+    @Optional() private readonly metrics?: RealtimeMetricsService,
+  ) {}
 
   async withRoomTickLock<T>(
     roomId: string,
@@ -40,23 +47,99 @@ export class RoundMachineLockService {
     try {
       this.logProductionPolicy();
 
-      const acquiredDatabaseLeadership =
-        await this.tryAcquireDatabaseLeadership(roomId);
+      /**
+       * Important speed fix:
+       *
+       * Do not hold a PostgreSQL transaction open around the whole round-machine
+       * work loop. Under Supabase pooler load, that can starve normal requests
+       * like POST /entries and /me/wallet.
+       *
+       * For the current single-process/dev setup, the in-process room lock is
+       * the fast path. Production horizontal scaling should use Redis locking or
+       * a proper DB lease table, not a long advisory transaction lock.
+       */
+      const redisLock = await this.tryAcquireRedisLeadership(roomId);
 
-      if (!acquiredDatabaseLeadership) {
+      if (this.redisService?.isAvailable() && !redisLock) {
+        this.metrics?.increment("redisLockContentionCount");
         return {
           acquired: false,
-          reason: "DATABASE_LOCKED",
+          reason: "REDIS_LOCKED",
         };
       }
 
-      return {
-        acquired: true,
-        result: await work(),
-      };
+      const shouldUseDatabaseLeadership =
+        !redisLock && this.shouldUseDatabaseLeadership();
+
+      try {
+        if (shouldUseDatabaseLeadership) {
+          const acquiredDatabaseLeadership =
+            await this.tryAcquireDatabaseLeadership(roomId);
+
+          if (!acquiredDatabaseLeadership) {
+            return {
+              acquired: false,
+              reason: "DATABASE_LOCKED",
+            };
+          }
+        }
+
+        return {
+          acquired: true,
+          result: await work(),
+        };
+      } finally {
+        if (redisLock) {
+          await this.redisService?.releaseLock(redisLock);
+        }
+      }
     } finally {
       this.activeRooms.delete(roomId);
     }
+  }
+
+  private async tryAcquireRedisLeadership(roomId: string) {
+    const env = getApiEnv();
+
+    if (!this.redisService?.isAvailable()) {
+      if (env.APP_ENV === "production") {
+        throw new Error(
+          "Round machine Redis locking is required in production before horizontal scaling.",
+        );
+      }
+
+      return null;
+    }
+
+    const lock = await this.redisService.acquireLock(
+      `round-machine:${roomId}`,
+      20_000,
+    );
+
+    if (lock) {
+      this.metrics?.increment("redisLockAcquiredCount");
+    }
+
+    return lock;
+  }
+
+  private shouldUseDatabaseLeadership() {
+    const env = getApiEnv();
+
+    /**
+     * Keep local/dev fast. Supabase pooler pressure is currently hurting the
+     * player entry path more than this advisory check helps.
+     */
+    if (env.APP_ENV !== "production") {
+      return false;
+    }
+
+    /**
+     * Redis is the production distributed leadership path. The database
+     * advisory helper is kept as a reviewed fallback hook, but it should not
+     * hold a transaction around the full machine tick.
+     */
+    return false;
   }
 
   private async tryAcquireDatabaseLeadership(
@@ -65,30 +148,21 @@ export class RoundMachineLockService {
     const lockKey = `round-machine:${roomId}`;
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
-        const lockResult = await tx.$queryRaw<Array<{ locked: boolean }>>`
-          SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})::bigint)::boolean AS locked
-        `;
+      const lockResult = await this.prisma.$queryRaw<Array<{ locked: boolean }>>`
+        SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})::bigint)::boolean AS locked
+      `;
 
-        return lockResult[0]?.locked === true;
-      });
+      return lockResult[0]?.locked === true;
     } catch (error) {
       const env = getApiEnv();
       const message =
         error instanceof Error ? error.message : "Unknown advisory lock error";
 
-      if (env.APP_ENV !== "local") {
-        this.logger.error(
-          `Round machine advisory leadership check failed in ${env.APP_ENV} for room ${roomId}: ${message}`,
-        );
-        throw error;
-      }
-
       this.logger.warn(
-        `Round machine advisory leadership check unavailable for room ${roomId}; using process-only lock in ${env.APP_ENV}: ${message}`,
+        `Round machine advisory leadership unavailable for room ${roomId}; skipping DB leadership in ${env.APP_ENV}: ${message}`,
       );
 
-      return true;
+      return false;
     }
   }
 
@@ -101,15 +175,8 @@ export class RoundMachineLockService {
 
     this.hasLoggedProductionPolicy = true;
 
-    if (!env.ENABLE_REDIS) {
-      this.logger.warn(
-        "Production round machine is using PostgreSQL advisory locks. Configure Redis locks/adapter before horizontal scaling.",
-      );
-      return;
-    }
-
     this.logger.warn(
-      "ENABLE_REDIS=true, but Redis round-machine locking is not wired yet. PostgreSQL advisory locks remain the active safety layer.",
+      "Round machine requires Redis locking before production horizontal scaling. Set ENABLE_REDIS=true and REDIS_URL for distributed leadership.",
     );
   }
 }

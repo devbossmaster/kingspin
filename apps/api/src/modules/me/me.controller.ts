@@ -27,8 +27,19 @@ export class MeController {
 
   @Get("wallet")
   async wallet(@CurrentUser() currentUser: AuthBridgeUser) {
-    const user = await this.getCurrentUser(currentUser.id);
-    const wallet = await this.walletsService.ensureMainWalletForUserId(user.id);
+    /**
+     * Performance fix:
+     *
+     * This endpoint is used by the frontend HUD and may be called around entry
+     * placement. Do the authenticated user read and wallet read in parallel.
+     *
+     * walletsService.ensureMainWalletForUserId() is now read-first, so the
+     * normal hot path is only a findUnique, not an upsert/write.
+     */
+    const [user, wallet] = await Promise.all([
+      this.getCurrentUser(currentUser.id),
+      this.walletsService.ensureMainWalletForUserId(currentUser.id),
+    ]);
 
     return {
       user: this.toCurrentUserSnapshot(user),

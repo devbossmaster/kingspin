@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import {
@@ -73,13 +74,38 @@ export type EntryHoldCompensationResult = {
   transaction: LedgerTransactionSnapshot | null;
 };
 
+export type MoneyMutationResult = {
+  wallet: WalletSnapshot;
+  transaction: LedgerTransactionSnapshot;
+  reused: boolean;
+};
+
 type LedgerTransactionWithEntries = LedgerTransaction & {
   entries: LedgerEntry[];
 };
 
+type EntryHoldArgs = {
+  walletAccountId: string;
+  userId: string;
+  roundId: string;
+  entryId: string;
+  amount: bigint;
+  idempotencyKey: string;
+  timingTraceId?: string;
+};
+
+const WALLET_HOLD_TIMING_WARN_THRESHOLD_MS = 1_500;
+
 @Injectable()
 export class WalletsService {
+  private readonly logger = new Logger(WalletsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
+
+  private readonly transactionOptions = {
+    maxWait: 5_000,
+    timeout: 10_000,
+  } as const;
 
   static entryHoldCompensationIdempotencyKey(holdTransactionId: string) {
     return `entry-hold-compensation:${holdTransactionId}`;
@@ -216,31 +242,25 @@ export class WalletsService {
 
   async holdEntryAmount(
     tx: Prisma.TransactionClient,
-    args: {
-      walletAccountId: string;
-      userId: string;
-      roundId: string;
-      entryId: string;
-      amount: bigint;
-      idempotencyKey: string;
-    },
+    args: EntryHoldArgs,
   ): Promise<WalletSnapshot> {
-    const result = await this.holdEntryAmountInTransaction(tx, args);
+    const result = await this.holdEntryAmountForEntryInTransaction(tx, args);
 
     return result.wallet;
   }
 
-  async holdEntryAmountForEntry(args: {
-    walletAccountId: string;
-    userId: string;
-    roundId: string;
-    entryId: string;
-    amount: bigint;
-    idempotencyKey: string;
-  }): Promise<EntryHoldResult> {
+  async holdEntryAmountForEntryInTransaction(
+    tx: Prisma.TransactionClient,
+    args: EntryHoldArgs,
+  ): Promise<EntryHoldResult> {
+    return this.holdEntryAmountInTransaction(tx, args);
+  }
+
+  async holdEntryAmountForEntry(args: EntryHoldArgs): Promise<EntryHoldResult> {
     try {
-      return await this.prisma.$transaction((tx) =>
-        this.holdEntryAmountInTransaction(tx, args),
+      return await this.prisma.$transaction(
+        (tx) => this.holdEntryAmountInTransaction(tx, args),
+        this.transactionOptions,
       );
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
@@ -269,19 +289,45 @@ export class WalletsService {
 
   private async holdEntryAmountInTransaction(
     tx: Prisma.TransactionClient,
-    args: {
-      walletAccountId: string;
-      userId: string;
-      roundId: string;
-      entryId: string;
-      amount: bigint;
-      idempotencyKey: string;
-    },
+    args: EntryHoldArgs,
   ): Promise<EntryHoldResult> {
+    const traceId =
+      args.timingTraceId ??
+      `${args.roundId}:${args.userId}:${Date.now().toString(36)}`;
+    const startedAt = Date.now();
+    let previousAt = startedAt;
+    let timingFlushed = false;
+    const timingEvents: string[] = [];
+
+    const flushTimingIfSlow = () => {
+      const totalMs = Date.now() - startedAt;
+
+      if (timingFlushed || totalMs < WALLET_HOLD_TIMING_WARN_THRESHOLD_MS) {
+        return;
+      }
+
+      timingFlushed = true;
+
+      for (const event of timingEvents) {
+        this.logger.warn(`[wallet-hold-timing:${traceId}] ${event}`);
+      }
+    };
+
+    const mark = (label: string) => {
+      const now = Date.now();
+      const stepMs = now - previousAt;
+      const totalMs = now - startedAt;
+      previousAt = now;
+
+      timingEvents.push(`${label} step=${stepMs}ms total=${totalMs}ms`);
+    };
+
     const existingTransaction = await tx.ledgerTransaction.findUnique({
       where: { idempotencyKey: args.idempotencyKey },
       include: { entries: true },
     });
+
+    mark("existing ledger lookup");
 
     if (existingTransaction) {
       this.assertEntryHoldTransactionMatches(existingTransaction, args);
@@ -290,6 +336,9 @@ export class WalletsService {
         where: { id: args.walletAccountId },
       });
 
+      mark("reused wallet read");
+      flushTimingIfSlow();
+
       return {
         wallet: this.toWalletSnapshot(wallet),
         transaction: this.toLedgerTransactionSnapshot(existingTransaction),
@@ -297,7 +346,7 @@ export class WalletsService {
       };
     }
 
-    const debitResult = await tx.walletAccount.updateMany({
+    const updatedWallets = await tx.walletAccount.updateManyAndReturn({
       where: {
         id: args.walletAccountId,
         userId: args.userId,
@@ -312,22 +361,24 @@ export class WalletsService {
         },
       },
     });
+    const updatedWallet = updatedWallets[0];
 
-    if (debitResult.count !== 1) {
+    mark("wallet debit updateManyAndReturn");
+
+    if (!updatedWallet) {
       const wallet = await tx.walletAccount.findUnique({
         where: { id: args.walletAccountId },
       });
 
+      mark("wallet read after failed debit");
+
       const balance = wallet?.balanceSnapshot.toString() ?? "0";
+      flushTimingIfSlow();
 
       throw new BadRequestException(
         `Insufficient MAIN wallet balance. Balance is ${balance}, required is ${args.amount.toString()}.`,
       );
     }
-
-    const updatedWallet = await tx.walletAccount.findUniqueOrThrow({
-      where: { id: args.walletAccountId },
-    });
 
     const transaction = await tx.ledgerTransaction.create({
       data: {
@@ -354,6 +405,9 @@ export class WalletsService {
       },
       include: { entries: true },
     });
+
+    mark("ledger transaction create");
+    flushTimingIfSlow();
 
     return {
       wallet: this.toWalletSnapshot(updatedWallet),
@@ -665,8 +719,9 @@ export class WalletsService {
     entryId: string;
     roundId: string;
   }): Promise<EntryRefundResult> {
-    return this.prisma.$transaction((tx) =>
-      this.refundEntryHolds(tx, args),
+    return this.prisma.$transaction(
+      (tx) => this.refundEntryHolds(tx, args),
+      this.transactionOptions,
     );
   }
 
@@ -774,8 +829,307 @@ export class WalletsService {
       throw error;
     }
   }
+
+  async creditDepositInTransaction(
+    tx: Prisma.TransactionClient,
+    args: {
+      userId: string;
+      depositId: string;
+      amount: bigint;
+      currency: string;
+      provider: string;
+      idempotencyKey?: string;
+    },
+  ): Promise<MoneyMutationResult> {
+    const idempotencyKey =
+      args.idempotencyKey ?? `deposit-credit:${args.depositId}`;
+
+    const existingTransaction = await tx.ledgerTransaction.findUnique({
+      where: { idempotencyKey },
+      include: { entries: true },
+    });
+
+    if (existingTransaction) {
+      this.assertDepositCreditTransactionMatches(existingTransaction, args);
+
+      const walletAccountId = existingTransaction.entries[0]?.walletAccountId;
+      const wallet = await tx.walletAccount.findUniqueOrThrow({
+        where: { id: walletAccountId },
+      });
+
+      return {
+        wallet: this.toWalletSnapshot(wallet),
+        transaction: this.toLedgerTransactionSnapshot(existingTransaction),
+        reused: true,
+      };
+    }
+
+    const wallet = await this.ensureMainWalletForUserIdInTransaction(
+      tx,
+      args.userId,
+    );
+    const updatedWallet = await tx.walletAccount.update({
+      where: { id: wallet.id },
+      data: {
+        balanceSnapshot: {
+          increment: args.amount,
+        },
+      },
+    });
+
+    const transaction = await tx.ledgerTransaction.create({
+      data: {
+        type: LedgerTransactionType.DEPOSIT,
+        referenceType: "DEPOSIT",
+        referenceId: args.depositId,
+        idempotencyKey,
+        metadata: {
+          userId: args.userId,
+          depositId: args.depositId,
+          amount: args.amount.toString(),
+          currency: args.currency,
+          provider: args.provider,
+          walletAccountId: updatedWallet.id,
+        },
+        entries: {
+          create: {
+            walletAccountId: updatedWallet.id,
+            direction: LedgerEntryDirection.CREDIT,
+            amount: args.amount,
+            balanceAfterSnapshot: updatedWallet.balanceSnapshot,
+          },
+        },
+      },
+      include: { entries: true },
+    });
+
+    return {
+      wallet: this.toWalletSnapshot(updatedWallet),
+      transaction: this.toLedgerTransactionSnapshot(transaction),
+      reused: false,
+    };
+  }
+
+  async reserveWithdrawalInTransaction(
+    tx: Prisma.TransactionClient,
+    args: {
+      userId: string;
+      withdrawalId: string;
+      walletAccountId: string;
+      amount: bigint;
+      currency: string;
+      provider: string;
+      idempotencyKey?: string;
+    },
+  ): Promise<MoneyMutationResult> {
+    const idempotencyKey =
+      args.idempotencyKey ?? `withdrawal-reserve:${args.withdrawalId}`;
+
+    const existingTransaction = await tx.ledgerTransaction.findUnique({
+      where: { idempotencyKey },
+      include: { entries: true },
+    });
+
+    if (existingTransaction) {
+      this.assertWithdrawalReserveTransactionMatches(existingTransaction, args);
+
+      const wallet = await tx.walletAccount.findUniqueOrThrow({
+        where: { id: args.walletAccountId },
+      });
+
+      return {
+        wallet: this.toWalletSnapshot(wallet),
+        transaction: this.toLedgerTransactionSnapshot(existingTransaction),
+        reused: true,
+      };
+    }
+
+    const updatedWallets = await tx.walletAccount.updateManyAndReturn({
+      where: {
+        id: args.walletAccountId,
+        userId: args.userId,
+        type: WalletAccountType.MAIN,
+        balanceSnapshot: {
+          gte: args.amount,
+        },
+      },
+      data: {
+        balanceSnapshot: {
+          decrement: args.amount,
+        },
+      },
+    });
+    const updatedWallet = updatedWallets[0];
+
+    if (!updatedWallet) {
+      const wallet = await tx.walletAccount.findUnique({
+        where: { id: args.walletAccountId },
+      });
+      const balance = wallet?.balanceSnapshot.toString() ?? "0";
+
+      throw new BadRequestException(
+        `Insufficient MAIN wallet balance. Balance is ${balance}, required is ${args.amount.toString()}.`,
+      );
+    }
+
+    const transaction = await tx.ledgerTransaction.create({
+      data: {
+        type: LedgerTransactionType.WITHDRAWAL_REQUEST,
+        referenceType: "WITHDRAWAL",
+        referenceId: args.withdrawalId,
+        idempotencyKey,
+        metadata: {
+          userId: args.userId,
+          withdrawalId: args.withdrawalId,
+          amount: args.amount.toString(),
+          currency: args.currency,
+          provider: args.provider,
+          walletAccountId: updatedWallet.id,
+          reserveState: "RESERVED",
+        },
+        entries: {
+          create: {
+            walletAccountId: updatedWallet.id,
+            direction: LedgerEntryDirection.DEBIT,
+            amount: args.amount,
+            balanceAfterSnapshot: updatedWallet.balanceSnapshot,
+          },
+        },
+      },
+      include: { entries: true },
+    });
+
+    return {
+      wallet: this.toWalletSnapshot(updatedWallet),
+      transaction: this.toLedgerTransactionSnapshot(transaction),
+      reused: false,
+    };
+  }
+
+  async refundWithdrawalInTransaction(
+    tx: Prisma.TransactionClient,
+    args: {
+      userId: string;
+      withdrawalId: string;
+      walletAccountId: string;
+      amount: bigint;
+      currency: string;
+      provider: string;
+      reason: string;
+      idempotencyKey?: string;
+    },
+  ): Promise<MoneyMutationResult> {
+    const idempotencyKey =
+      args.idempotencyKey ?? `withdrawal-refund:${args.withdrawalId}`;
+
+    const existingTransaction = await tx.ledgerTransaction.findUnique({
+      where: { idempotencyKey },
+      include: { entries: true },
+    });
+
+    if (existingTransaction) {
+      this.assertWithdrawalRefundTransactionMatches(existingTransaction, args);
+
+      const wallet = await tx.walletAccount.findUniqueOrThrow({
+        where: { id: args.walletAccountId },
+      });
+
+      return {
+        wallet: this.toWalletSnapshot(wallet),
+        transaction: this.toLedgerTransactionSnapshot(existingTransaction),
+        reused: true,
+      };
+    }
+
+    const updatedWallet = await tx.walletAccount.update({
+      where: { id: args.walletAccountId },
+      data: {
+        balanceSnapshot: {
+          increment: args.amount,
+        },
+      },
+    });
+
+    const transaction = await tx.ledgerTransaction.create({
+      data: {
+        type: LedgerTransactionType.WITHDRAWAL_REFUND,
+        referenceType: "WITHDRAWAL",
+        referenceId: args.withdrawalId,
+        idempotencyKey,
+        metadata: {
+          userId: args.userId,
+          withdrawalId: args.withdrawalId,
+          amount: args.amount.toString(),
+          currency: args.currency,
+          provider: args.provider,
+          walletAccountId: updatedWallet.id,
+          reason: args.reason,
+        },
+        entries: {
+          create: {
+            walletAccountId: updatedWallet.id,
+            direction: LedgerEntryDirection.CREDIT,
+            amount: args.amount,
+            balanceAfterSnapshot: updatedWallet.balanceSnapshot,
+          },
+        },
+      },
+      include: { entries: true },
+    });
+
+    return {
+      wallet: this.toWalletSnapshot(updatedWallet),
+      transaction: this.toLedgerTransactionSnapshot(transaction),
+      reused: false,
+    };
+  }
+
   async ensureMainWalletForUserId(userId: string): Promise<WalletAccount> {
-    return this.prisma.walletAccount.upsert({
+    if (!userId) {
+      throw new BadRequestException("userId is required.");
+    }
+
+    const existingWallet = await this.prisma.walletAccount.findUnique({
+      where: {
+        userId_type: {
+          userId,
+          type: WalletAccountType.MAIN,
+        },
+      },
+    });
+
+    if (existingWallet) {
+      return existingWallet;
+    }
+
+    try {
+      return await this.prisma.walletAccount.create({
+        data: {
+          userId,
+          type: WalletAccountType.MAIN,
+        },
+      });
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return this.prisma.walletAccount.findUniqueOrThrow({
+          where: {
+            userId_type: {
+              userId,
+              type: WalletAccountType.MAIN,
+            },
+          },
+        });
+      }
+
+      throw error;
+    }
+  }
+
+  private async ensureMainWalletForUserIdInTransaction(
+    tx: Prisma.TransactionClient,
+    userId: string,
+  ): Promise<WalletAccount> {
+    return tx.walletAccount.upsert({
       where: {
         userId_type: {
           userId,
@@ -908,17 +1262,19 @@ export class WalletsService {
       walletAccountId: string;
       userId: string;
       roundId: string;
-      entryId: string;
       amount: bigint;
     },
   ) {
+    const transactionEntryId =
+      this.getMetadataString(transaction.metadata, "entryId") ??
+      transaction.referenceId;
+
     const matches =
       transaction.type === LedgerTransactionType.ENTRY_HOLD &&
       transaction.referenceType === "ENTRY" &&
-      transaction.referenceId === args.entryId &&
+      typeof transactionEntryId === "string" &&
       this.getMetadataString(transaction.metadata, "roundId") === args.roundId &&
       this.getMetadataString(transaction.metadata, "userId") === args.userId &&
-      this.getMetadataString(transaction.metadata, "entryId") === args.entryId &&
       this.getMetadataString(transaction.metadata, "walletAccountId") ===
         args.walletAccountId &&
       this.getMetadataString(transaction.metadata, "amount") ===
@@ -1011,6 +1367,105 @@ export class WalletsService {
     }
   }
 
+  private assertDepositCreditTransactionMatches(
+    transaction: LedgerTransactionWithEntries,
+    args: {
+      userId: string;
+      depositId: string;
+      amount: bigint;
+      currency: string;
+      provider: string;
+    },
+  ) {
+    const matches =
+      transaction.type === LedgerTransactionType.DEPOSIT &&
+      transaction.referenceType === "DEPOSIT" &&
+      transaction.referenceId === args.depositId &&
+      this.getMetadataString(transaction.metadata, "userId") === args.userId &&
+      this.getMetadataString(transaction.metadata, "depositId") ===
+        args.depositId &&
+      this.getMetadataString(transaction.metadata, "amount") ===
+        args.amount.toString() &&
+      this.getMetadataString(transaction.metadata, "currency") ===
+        args.currency &&
+      this.getMetadataString(transaction.metadata, "provider") ===
+        args.provider;
+
+    if (!matches) {
+      throw new BadRequestException(
+        "Idempotency key was already used for a different deposit credit.",
+      );
+    }
+  }
+
+  private assertWithdrawalReserveTransactionMatches(
+    transaction: LedgerTransactionWithEntries,
+    args: {
+      userId: string;
+      withdrawalId: string;
+      walletAccountId: string;
+      amount: bigint;
+      currency: string;
+      provider: string;
+    },
+  ) {
+    const matches =
+      transaction.type === LedgerTransactionType.WITHDRAWAL_REQUEST &&
+      transaction.referenceType === "WITHDRAWAL" &&
+      transaction.referenceId === args.withdrawalId &&
+      this.getMetadataString(transaction.metadata, "userId") === args.userId &&
+      this.getMetadataString(transaction.metadata, "withdrawalId") ===
+        args.withdrawalId &&
+      this.getMetadataString(transaction.metadata, "walletAccountId") ===
+        args.walletAccountId &&
+      this.getMetadataString(transaction.metadata, "amount") ===
+        args.amount.toString() &&
+      this.getMetadataString(transaction.metadata, "currency") ===
+        args.currency &&
+      this.getMetadataString(transaction.metadata, "provider") ===
+        args.provider;
+
+    if (!matches) {
+      throw new BadRequestException(
+        "Idempotency key was already used for a different withdrawal reserve.",
+      );
+    }
+  }
+
+  private assertWithdrawalRefundTransactionMatches(
+    transaction: LedgerTransactionWithEntries,
+    args: {
+      userId: string;
+      withdrawalId: string;
+      walletAccountId: string;
+      amount: bigint;
+      currency: string;
+      provider: string;
+    },
+  ) {
+    const matches =
+      transaction.type === LedgerTransactionType.WITHDRAWAL_REFUND &&
+      transaction.referenceType === "WITHDRAWAL" &&
+      transaction.referenceId === args.withdrawalId &&
+      this.getMetadataString(transaction.metadata, "userId") === args.userId &&
+      this.getMetadataString(transaction.metadata, "withdrawalId") ===
+        args.withdrawalId &&
+      this.getMetadataString(transaction.metadata, "walletAccountId") ===
+        args.walletAccountId &&
+      this.getMetadataString(transaction.metadata, "amount") ===
+        args.amount.toString() &&
+      this.getMetadataString(transaction.metadata, "currency") ===
+        args.currency &&
+      this.getMetadataString(transaction.metadata, "provider") ===
+        args.provider;
+
+    if (!matches) {
+      throw new BadRequestException(
+        "Idempotency key was already used for a different withdrawal refund.",
+      );
+    }
+  }
+
   private sumEntries(entries: LedgerEntry[]) {
     return entries.reduce((sum, entry) => sum + entry.amount, 0n);
   }
@@ -1048,6 +1503,7 @@ export class WalletsService {
     };
   }
 }
+
 
 
 

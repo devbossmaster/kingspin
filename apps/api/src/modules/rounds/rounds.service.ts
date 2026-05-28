@@ -2,21 +2,22 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
-} from "@nestjs/common";
-import { RoundStatus, type Entry, type Round } from "@kingspin/db";
-import { createHash, randomBytes } from "node:crypto";
+} from '@nestjs/common';
+import { Prisma, RoundStatus, type Entry } from '@kingspin/db';
+import { createHash, randomBytes } from 'node:crypto';
 import {
   calculateSpinAngle as calculateGameSpinAngle,
   selectWinner,
   verifyTicketRanges,
   type TicketRange,
-} from "@kingspin/game-engine";
-import { PrismaService } from "../../prisma/prisma.service";
+} from '@kingspin/game-engine';
+import { PrismaService } from '../../prisma/prisma.service';
 import {
   WalletsService,
   type EntryRefundResult,
-} from "../wallets/wallets.service";
+} from '../wallets/wallets.service';
 
 const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
   RoundStatus.OPEN,
@@ -33,6 +34,8 @@ const CANCELLABLE_ROUND_STATUSES: RoundStatus[] = [
   RoundStatus.SPINNING,
   RoundStatus.SETTLING,
 ];
+
+const LATEST_RESULT_TIMING_WARN_THRESHOLD_MS = 1_000;
 
 export type RoundSnapshot = {
   id: string;
@@ -69,8 +72,85 @@ type EntrySnapshot = {
   updatedAt: string;
 };
 
+type RoundSnapshotSource = {
+  id: string;
+  roomId: string;
+  roundNumber: number;
+  status: RoundStatus;
+  totalEntryAmount: bigint;
+  houseFeeAmount: bigint;
+  payoutAmount: bigint;
+  openedAt: Date;
+  locksAt: Date | null;
+  lockedAt: Date | null;
+  drawingAt: Date | null;
+  spinningAt: Date | null;
+  settlingAt: Date | null;
+  completedAt: Date | null;
+  cancelledAt: Date | null;
+  serverSeedHash: string | null;
+  winningTicket: bigint | null;
+  winnerUserId: string | null;
+  winnerEntryId: string | null;
+  spinAngle: number | null;
+};
+
+type TicketRangeEntrySource = {
+  id: string;
+  userId: string;
+  amount: bigint;
+  ticketStart: bigint | null;
+  ticketEnd: bigint | null;
+};
+
+type LatestRoundResultRow = {
+  roundId: string;
+  roundRoomId: string;
+  roundNumber: number;
+  roundStatus: string;
+  roundOpenedAt: Date;
+  roundLocksAt: Date | null;
+  roundLockedAt: Date | null;
+  roundDrawingAt: Date | null;
+  roundSpinningAt: Date | null;
+  roundSettlingAt: Date | null;
+  roundCompletedAt: Date | null;
+  roundCancelledAt: Date | null;
+  roundTotalEntryAmount: bigint;
+  roundHouseFeeAmount: bigint;
+  roundPayoutAmount: bigint;
+  roundServerSeedHash: string | null;
+  roundServerSeedReveal: string | null;
+  roundWinningTicket: bigint | null;
+  roundWinnerUserId: string | null;
+  roundWinnerEntryId: string | null;
+  roundSpinAngle: number | null;
+  entryId: string | null;
+  entryRoundId: string | null;
+  entryUserId: string | null;
+  entryAmount: bigint | null;
+  entryTicketStart: bigint | null;
+  entryTicketEnd: bigint | null;
+  entryIsWinner: boolean | null;
+  entryCreatedAt: Date | null;
+  entryUpdatedAt: Date | null;
+  entryPlayerId: string | null;
+  entryPlayerUsername: string | null;
+  entryPlayerFullName: string | null;
+};
+
+type LatestRoundResultRound = RoundSnapshotSource & {
+  serverSeedReveal: string | null;
+};
+
 @Injectable()
 export class RoundsService {
+  private readonly logger = new Logger(RoundsService.name);
+  private readonly inFlightLatestResultByRoom = new Map<
+    string,
+    Promise<Awaited<ReturnType<RoundsService['buildLatestRoundResultForRoom']>>>
+  >();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly walletsService: WalletsService,
@@ -78,7 +158,7 @@ export class RoundsService {
 
   async startOpenRoundForRoom(roomId: string) {
     if (!roomId) {
-      throw new BadRequestException("roomId is required.");
+      throw new BadRequestException('roomId is required.');
     }
 
     const round = await this.prisma.$transaction(async (tx) => {
@@ -90,7 +170,7 @@ export class RoundsService {
 
       if (!hasLock) {
         throw new ConflictException(
-          "Another round start is already running for this room.",
+          'Another round start is already running for this room.',
         );
       }
 
@@ -104,11 +184,11 @@ export class RoundsService {
       });
 
       if (!room) {
-        throw new NotFoundException("Room not found.");
+        throw new NotFoundException('Room not found.');
       }
 
-      if (room.status !== "ACTIVE") {
-        throw new BadRequestException("Only ACTIVE rooms can start rounds.");
+      if (room.status !== 'ACTIVE') {
+        throw new BadRequestException('Only ACTIVE rooms can start rounds.');
       }
 
       const existingCurrentRound = await tx.round.findFirst({
@@ -116,7 +196,7 @@ export class RoundsService {
           roomId,
           status: { in: ACTIVE_ROUND_STATUSES },
         },
-        orderBy: { roundNumber: "desc" },
+        orderBy: { roundNumber: 'desc' },
       });
 
       if (existingCurrentRound) {
@@ -125,7 +205,7 @@ export class RoundsService {
 
       const latestRound = await tx.round.findFirst({
         where: { roomId },
-        orderBy: { roundNumber: "desc" },
+        orderBy: { roundNumber: 'desc' },
         select: { roundNumber: true },
       });
 
@@ -133,10 +213,10 @@ export class RoundsService {
       const openedAt = new Date();
       const locksAt = new Date(openedAt.getTime() + room.roundDurationMs);
 
-      const serverSeed = randomBytes(32).toString("hex");
-      const serverSeedHash = createHash("sha256")
+      const serverSeed = randomBytes(32).toString('hex');
+      const serverSeedHash = createHash('sha256')
         .update(serverSeed)
-        .digest("hex");
+        .digest('hex');
 
       return tx.round.create({
         data: {
@@ -157,7 +237,7 @@ export class RoundsService {
 
   async findCurrentRoundForRoom(roomId: string): Promise<RoundSnapshot | null> {
     if (!roomId) {
-      throw new BadRequestException("roomId is required.");
+      throw new BadRequestException('roomId is required.');
     }
 
     const round = await this.prisma.round.findFirst({
@@ -165,7 +245,7 @@ export class RoundsService {
         roomId,
         status: { in: ACTIVE_ROUND_STATUSES },
       },
-      orderBy: { roundNumber: "desc" },
+      orderBy: { roundNumber: 'desc' },
     });
 
     return round ? this.toRoundSnapshot(round) : null;
@@ -173,7 +253,7 @@ export class RoundsService {
 
   async lockCurrentRoundForRoom(roomId: string) {
     if (!roomId) {
-      throw new BadRequestException("roomId is required.");
+      throw new BadRequestException('roomId is required.');
     }
 
     const currentRound = await this.prisma.round.findFirst({
@@ -181,14 +261,20 @@ export class RoundsService {
         roomId,
         status: RoundStatus.OPEN,
       },
-      orderBy: { roundNumber: "desc" },
+      orderBy: { roundNumber: 'desc' },
     });
 
     if (!currentRound) {
-      throw new BadRequestException("Room does not have an OPEN round to lock.");
+      throw new BadRequestException(
+        'Room does not have an OPEN round to lock.',
+      );
     }
 
-    const result = await this.prisma.$transaction(async (tx) => {
+    const finalRound = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        SELECT pg_advisory_xact_lock(hashtext(${currentRound.id})::bigint)
+      `;
+
       const lockResult = await tx.round.updateMany({
         where: {
           id: currentRound.id,
@@ -201,65 +287,81 @@ export class RoundsService {
       });
 
       if (lockResult.count !== 1) {
-        throw new BadRequestException("Round is no longer OPEN.");
+        throw new BadRequestException('Round is no longer OPEN.');
       }
 
-      const entries = await tx.entry.findMany({
-        where: { roundId: currentRound.id },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      });
+      const [assignment] = await tx.$queryRaw<
+        Array<{ entryCount: bigint; totalAmount: bigint }>
+      >`
+        WITH ordered AS (
+          SELECT
+            e.id,
+            COALESCE(
+              SUM(e.amount) OVER (
+                ORDER BY e."createdAt", e.id
+                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+              ),
+              0
+            )::bigint AS "ticketStart",
+            (SUM(e.amount) OVER (ORDER BY e."createdAt", e.id) - 1)::bigint AS "ticketEnd"
+          FROM entries e
+          WHERE e."roundId" = ${currentRound.id}
+        ),
+        updated AS (
+          UPDATE entries e
+          SET
+            "ticketStart" = ordered."ticketStart",
+            "ticketEnd" = ordered."ticketEnd",
+            "updatedAt" = now()
+          FROM ordered
+          WHERE e.id = ordered.id
+          RETURNING e.id
+        )
+        SELECT
+          (SELECT COUNT(*)::bigint FROM updated) AS "entryCount",
+          COALESCE(MAX(ordered."ticketEnd") + 1, 0)::bigint AS "totalAmount"
+        FROM ordered
+      `;
 
-      if (entries.length === 0) {
-        throw new BadRequestException("Cannot lock a round with no entries.");
+      if (!assignment || assignment.entryCount === 0n) {
+        throw new BadRequestException('Cannot lock a round with no entries.');
       }
 
-      let cursor = 0n;
+      const finalTotal = assignment.totalAmount;
 
-      for (const entry of entries) {
-        const ticketStart = cursor;
-        const ticketEnd = cursor + entry.amount - 1n;
-
-        await tx.entry.update({
-          where: { id: entry.id },
-          data: {
-            ticketStart,
-            ticketEnd,
-          },
-        });
-
-        cursor = ticketEnd + 1n;
-      }
-
-      const finalRound = await tx.round.findUniqueOrThrow({
+      const updatedRound = await tx.round.update({
         where: { id: currentRound.id },
+        data: {
+          totalEntryAmount: finalTotal,
+          houseFeeAmount: 0n,
+          payoutAmount: finalTotal,
+          updatedAt: new Date(),
+        },
       });
 
-      if (cursor !== finalRound.totalEntryAmount) {
+      if (finalTotal !== updatedRound.totalEntryAmount) {
         throw new BadRequestException(
-          "Ticket assignment mismatch. Round total does not equal assigned tickets.",
+          'Ticket assignment mismatch. Round total does not equal assigned tickets.',
         );
       }
 
-      const finalEntries = await tx.entry.findMany({
-        where: { roundId: currentRound.id },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      });
+      return updatedRound;
+    });
 
-      return {
-        round: finalRound,
-        entries: finalEntries,
-      };
+    const finalEntries = await this.prisma.entry.findMany({
+      where: { roundId: currentRound.id },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
 
     return {
-      currentRound: this.toRoundSnapshot(result.round),
-      entries: result.entries.map((entry) => this.toEntrySnapshot(entry)),
+      currentRound: this.toRoundSnapshot(finalRound),
+      entries: finalEntries.map((entry) => this.toEntrySnapshot(entry)),
     };
   }
 
   async drawCurrentRoundForRoom(roomId: string) {
     if (!roomId) {
-      throw new BadRequestException("roomId is required.");
+      throw new BadRequestException('roomId is required.');
     }
 
     const currentRound = await this.prisma.round.findFirst({
@@ -267,26 +369,26 @@ export class RoundsService {
         roomId,
         status: { in: [RoundStatus.LOCKED, RoundStatus.DRAWING] },
       },
-      orderBy: { roundNumber: "desc" },
+      orderBy: { roundNumber: 'desc' },
     });
 
     if (!currentRound) {
       throw new BadRequestException(
-        "Room does not have a LOCKED round ready to draw.",
+        'Room does not have a LOCKED round ready to draw.',
       );
     }
 
     const entries = await this.prisma.entry.findMany({
       where: { roundId: currentRound.id },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
 
     if (entries.length === 0) {
-      throw new BadRequestException("Cannot draw a round with no entries.");
+      throw new BadRequestException('Cannot draw a round with no entries.');
     }
 
     if (currentRound.totalEntryAmount <= 0n) {
-      throw new BadRequestException("Cannot draw a round with zero total.");
+      throw new BadRequestException('Cannot draw a round with zero total.');
     }
 
     const invalidRangeEntry = entries.find(
@@ -295,13 +397,13 @@ export class RoundsService {
 
     if (invalidRangeEntry) {
       throw new BadRequestException(
-        "Cannot draw before ticket ranges are assigned. Lock the round first.",
+        'Cannot draw before ticket ranges are assigned. Lock the round first.',
       );
     }
 
     if (!currentRound.serverSeedReveal) {
       throw new BadRequestException(
-        "Round is missing server seed reveal. Cannot draw safely.",
+        'Round is missing server seed reveal. Cannot draw safely.',
       );
     }
 
@@ -318,8 +420,8 @@ export class RoundsService {
         currentRound: this.toRoundSnapshot(currentRound),
         winningTicket: currentRound.winningTicket.toString(),
         winnerEntry: winnerEntry
-        ? this.toEntryWithPlayerSnapshot(winnerEntry)
-        : null,
+          ? this.toEntryWithPlayerSnapshot(winnerEntry)
+          : null,
         entries: entries.map((entry) => this.toEntryWithPlayerSnapshot(entry)),
         reused: true,
       };
@@ -343,7 +445,7 @@ export class RoundsService {
 
     if (!winnerEntry) {
       throw new BadRequestException(
-        "Winning ticket did not match any entry. Manual review required.",
+        'Winning ticket did not match any entry. Manual review required.',
       );
     }
 
@@ -387,7 +489,7 @@ export class RoundsService {
         }
 
         throw new BadRequestException(
-          "Round changed while drawing. Retry or review manually.",
+          'Round changed while drawing. Retry or review manually.',
         );
       }
 
@@ -402,7 +504,7 @@ export class RoundsService {
 
       const finalEntries = await tx.entry.findMany({
         where: { roundId: currentRound.id },
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       });
 
       const finalWinnerEntry = finalEntries.find(
@@ -410,7 +512,7 @@ export class RoundsService {
       );
 
       if (!finalWinnerEntry) {
-        throw new BadRequestException("Winner entry disappeared after draw.");
+        throw new BadRequestException('Winner entry disappeared after draw.');
       }
 
       return {
@@ -432,7 +534,7 @@ export class RoundsService {
 
   async settleCurrentRoundForRoom(roomId: string) {
     if (!roomId) {
-      throw new BadRequestException("roomId is required.");
+      throw new BadRequestException('roomId is required.');
     }
 
     let currentRound = await this.prisma.round.findFirst({
@@ -440,7 +542,7 @@ export class RoundsService {
         roomId,
         status: { in: [RoundStatus.DRAWING, RoundStatus.SETTLING] },
       },
-      orderBy: { roundNumber: "desc" },
+      orderBy: { roundNumber: 'desc' },
     });
 
     if (!currentRound) {
@@ -451,7 +553,7 @@ export class RoundsService {
           winnerEntryId: { not: null },
           winnerUserId: { not: null },
         },
-        orderBy: { roundNumber: "desc" },
+        orderBy: { roundNumber: 'desc' },
       });
 
       if (completedRound) {
@@ -466,8 +568,8 @@ export class RoundsService {
         return {
           currentRound: this.toRoundSnapshot(completedRound),
           winnerEntry: winnerEntry
-        ? this.toEntryWithPlayerSnapshot(winnerEntry)
-        : null,
+            ? this.toEntryWithPlayerSnapshot(winnerEntry)
+            : null,
           payoutAmount: completedRound.payoutAmount.toString(),
           payout: null,
           reused: true,
@@ -475,7 +577,7 @@ export class RoundsService {
       }
 
       throw new BadRequestException(
-        "Room does not have a DRAWING round ready to settle.",
+        'Room does not have a DRAWING round ready to settle.',
       );
     }
 
@@ -484,12 +586,14 @@ export class RoundsService {
 
     if (!winnerEntryId || !winnerUserId) {
       throw new BadRequestException(
-        "Round has no winner yet. Draw the round before settlement.",
+        'Round has no winner yet. Draw the round before settlement.',
       );
     }
 
     if (currentRound.payoutAmount <= 0n) {
-      throw new BadRequestException("Round payout amount must be greater than zero.");
+      throw new BadRequestException(
+        'Round payout amount must be greater than zero.',
+      );
     }
 
     const winnerEntry = await this.prisma.entry.findUnique({
@@ -497,12 +601,12 @@ export class RoundsService {
     });
 
     if (!winnerEntry) {
-      throw new BadRequestException("Winner entry not found.");
+      throw new BadRequestException('Winner entry not found.');
     }
 
     if (winnerEntry.userId !== winnerUserId) {
       throw new BadRequestException(
-        "Winner entry user does not match round winner user. Manual review required.",
+        'Winner entry user does not match round winner user. Manual review required.',
       );
     }
 
@@ -525,7 +629,7 @@ export class RoundsService {
 
         if (currentRound.status !== RoundStatus.SETTLING) {
           throw new BadRequestException(
-            "Round changed while settlement was starting. Retry settlement.",
+            'Round changed while settlement was starting. Retry settlement.',
           );
         }
       } else {
@@ -560,7 +664,7 @@ export class RoundsService {
 
       if (round.status !== RoundStatus.COMPLETED) {
         throw new BadRequestException(
-          "Payout was created but round could not be marked COMPLETED. Retry settlement.",
+          'Payout was created but round could not be marked COMPLETED. Retry settlement.',
         );
       }
     }
@@ -583,7 +687,7 @@ export class RoundsService {
   }
   async cancelCurrentRoundForRoom(roomId: string) {
     if (!roomId) {
-      throw new BadRequestException("roomId is required.");
+      throw new BadRequestException('roomId is required.');
     }
 
     const currentRound = await this.prisma.round.findFirst({
@@ -591,35 +695,41 @@ export class RoundsService {
         roomId,
         status: { in: CANCELLABLE_ROUND_STATUSES },
       },
-      orderBy: { roundNumber: "desc" },
+      orderBy: { roundNumber: 'desc' },
     });
 
     if (!currentRound) {
-      throw new BadRequestException("Room does not have a cancellable round.");
+      throw new BadRequestException('Room does not have a cancellable round.');
     }
 
     if (currentRound.status === RoundStatus.OPEN) {
-      const stopEntryResult = await this.prisma.round.updateMany({
-        where: {
-          id: currentRound.id,
-          status: RoundStatus.OPEN,
-        },
-        data: {
-          status: RoundStatus.LOCKED,
-          lockedAt: new Date(),
-        },
+      const stopEntryResult = await this.prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`
+          SELECT pg_advisory_xact_lock(hashtext(${currentRound.id})::bigint)
+        `;
+
+        return tx.round.updateMany({
+          where: {
+            id: currentRound.id,
+            status: RoundStatus.OPEN,
+          },
+          data: {
+            status: RoundStatus.LOCKED,
+            lockedAt: new Date(),
+          },
+        });
       });
 
       if (stopEntryResult.count !== 1) {
         throw new BadRequestException(
-          "Round changed while cancellation was starting. Retry cancel.",
+          'Round changed while cancellation was starting. Retry cancel.',
         );
       }
     }
 
     const entries = await this.prisma.entry.findMany({
       where: { roundId: currentRound.id },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
 
     const refundResults: EntryRefundResult[] = [];
@@ -651,7 +761,7 @@ export class RoundsService {
 
       if (round.status !== RoundStatus.CANCELLED) {
         throw new BadRequestException(
-          "Round could not be marked CANCELLED. Manual review required.",
+          'Round could not be marked CANCELLED. Manual review required.',
         );
       }
     }
@@ -660,12 +770,14 @@ export class RoundsService {
       where: { id: currentRound.id },
     });
 
-    const refundedCount = refundResults.filter((result) => result.refunded).length;
+    const refundedCount = refundResults.filter(
+      (result) => result.refunded,
+    ).length;
     const skippedCount = refundResults.filter(
-      (result) => result.reason === "NO_HOLD_FOUND",
+      (result) => result.reason === 'NO_HOLD_FOUND',
     ).length;
     const alreadyRefundedCount = refundResults.filter(
-      (result) => result.reason === "ALREADY_REFUNDED",
+      (result) => result.reason === 'ALREADY_REFUNDED',
     ).length;
     const refundedAmount = refundResults.reduce(
       (sum, result) => sum + result.amount,
@@ -689,44 +801,231 @@ export class RoundsService {
 
   async getLatestRoundResultForRoom(roomId: string) {
     if (!roomId) {
-      throw new BadRequestException("roomId is required.");
+      throw new BadRequestException('roomId is required.');
     }
 
-    const round = await this.prisma.round.findFirst({
-      where: {
-        roomId,
-        status: RoundStatus.COMPLETED,
-      },
-      orderBy: { roundNumber: "desc" },
+    const existing = this.inFlightLatestResultByRoom.get(roomId);
+
+    if (existing) {
+      return existing;
+    }
+
+    const request = this.measureLatestResult(roomId, () =>
+      this.buildLatestRoundResultForRoom(roomId),
+    ).finally(() => {
+      if (this.inFlightLatestResultByRoom.get(roomId) === request) {
+        this.inFlightLatestResultByRoom.delete(roomId);
+      }
     });
 
-    if (!round) {
-      throw new NotFoundException("No completed round result found for this room.");
+    this.inFlightLatestResultByRoom.set(roomId, request);
+
+    return request;
+  }
+
+  private async measureLatestResult<T>(roomId: string, work: () => Promise<T>) {
+    const startedAt = Date.now();
+
+    try {
+      return await work();
+    } finally {
+      const durationMs = Date.now() - startedAt;
+
+      if (durationMs >= LATEST_RESULT_TIMING_WARN_THRESHOLD_MS) {
+        this.logger.warn(
+          `[latest-result-timing:${roomId}] build duration=${durationMs}ms`,
+        );
+      }
+    }
+  }
+
+  private async measureLatestResultPart<T>(
+    roomId: string,
+    label: string,
+    work: () => Promise<T> | T,
+  ) {
+    const startedAt = Date.now();
+
+    try {
+      return await work();
+    } finally {
+      this.logLatestResultPart(roomId, label, Date.now() - startedAt);
+    }
+  }
+
+  private logLatestResultPart(
+    roomId: string,
+    label: string,
+    durationMs: number,
+    details?: string,
+  ) {
+    if (durationMs < LATEST_RESULT_TIMING_WARN_THRESHOLD_MS) {
+      return;
     }
 
-    const entries = await this.prisma.entry.findMany({
-      where: { roundId: round.id },
-      include: {
+    this.logger.warn(
+      `[latest-result-timing:${roomId}] ${label} duration=${durationMs}ms${
+        details ? ` ${details}` : ''
+      }`,
+    );
+  }
+
+  private async buildLatestRoundResultForRoom(roomId: string) {
+    const rows = await this.measureLatestResultPart(roomId, 'round query', () =>
+      this.queryLatestRoundResultRows(roomId),
+    );
+
+    const entryRowCount = rows.filter((row) => row.entryId).length;
+
+    this.logLatestResultPart(
+      roomId,
+      'entries query',
+      0,
+      `source=joined rows=${entryRowCount}`,
+    );
+
+    return this.measureLatestResultPart(roomId, 'serialization', () =>
+      this.serializeLatestRoundResultRows(rows),
+    );
+  }
+
+  private async queryLatestRoundResultRows(roomId: string) {
+    return this.prisma.$queryRaw<LatestRoundResultRow[]>(Prisma.sql`
+      WITH latest_round AS (
+        SELECT
+          ro.id,
+          ro."roomId",
+          ro."roundNumber",
+          ro.status,
+          ro."openedAt",
+          ro."locksAt",
+          ro."lockedAt",
+          ro."drawingAt",
+          ro."spinningAt",
+          ro."settlingAt",
+          ro."completedAt",
+          ro."cancelledAt",
+          ro."totalEntryAmount",
+          ro."houseFeeAmount",
+          ro."payoutAmount",
+          ro."serverSeedHash",
+          ro."serverSeedReveal",
+          ro."winningTicket",
+          ro."winnerUserId",
+          ro."winnerEntryId",
+          ro."spinAngle"
+        FROM rounds ro
+        WHERE ro."roomId" = ${roomId}
+          AND ro.status = CAST(${RoundStatus.COMPLETED} AS "RoundStatus")
+        ORDER BY ro."roundNumber" DESC, ro."completedAt" DESC NULLS LAST
+        LIMIT 1
+      )
+      SELECT
+        lr.id AS "roundId",
+        lr."roomId" AS "roundRoomId",
+        lr."roundNumber" AS "roundNumber",
+        lr.status::text AS "roundStatus",
+        lr."openedAt" AS "roundOpenedAt",
+        lr."locksAt" AS "roundLocksAt",
+        lr."lockedAt" AS "roundLockedAt",
+        lr."drawingAt" AS "roundDrawingAt",
+        lr."spinningAt" AS "roundSpinningAt",
+        lr."settlingAt" AS "roundSettlingAt",
+        lr."completedAt" AS "roundCompletedAt",
+        lr."cancelledAt" AS "roundCancelledAt",
+        lr."totalEntryAmount" AS "roundTotalEntryAmount",
+        lr."houseFeeAmount" AS "roundHouseFeeAmount",
+        lr."payoutAmount" AS "roundPayoutAmount",
+        lr."serverSeedHash" AS "roundServerSeedHash",
+        lr."serverSeedReveal" AS "roundServerSeedReveal",
+        lr."winningTicket" AS "roundWinningTicket",
+        lr."winnerUserId" AS "roundWinnerUserId",
+        lr."winnerEntryId" AS "roundWinnerEntryId",
+        lr."spinAngle" AS "roundSpinAngle",
+        e.id AS "entryId",
+        e."roundId" AS "entryRoundId",
+        e."userId" AS "entryUserId",
+        e.amount AS "entryAmount",
+        e."ticketStart" AS "entryTicketStart",
+        e."ticketEnd" AS "entryTicketEnd",
+        e."isWinner" AS "entryIsWinner",
+        e."createdAt" AS "entryCreatedAt",
+        e."updatedAt" AS "entryUpdatedAt",
+        u.id AS "entryPlayerId",
+        u.username AS "entryPlayerUsername",
+        u."fullName" AS "entryPlayerFullName"
+      FROM latest_round lr
+      LEFT JOIN entries e ON e."roundId" = lr.id
+      LEFT JOIN users u ON u.id = e."userId"
+      ORDER BY e."createdAt" ASC NULLS LAST, e.id ASC NULLS LAST
+    `);
+  }
+
+  private serializeLatestRoundResultRows(rows: LatestRoundResultRow[]) {
+    const first = rows[0];
+
+    if (!first) {
+      throw new NotFoundException(
+        'No completed round result found for this room.',
+      );
+    }
+
+    const round: LatestRoundResultRound = {
+      id: first.roundId,
+      roomId: first.roundRoomId,
+      roundNumber: first.roundNumber,
+      status: first.roundStatus as RoundStatus,
+      openedAt: first.roundOpenedAt,
+      locksAt: first.roundLocksAt,
+      lockedAt: first.roundLockedAt,
+      drawingAt: first.roundDrawingAt,
+      spinningAt: first.roundSpinningAt,
+      settlingAt: first.roundSettlingAt,
+      completedAt: first.roundCompletedAt,
+      cancelledAt: first.roundCancelledAt,
+      totalEntryAmount: first.roundTotalEntryAmount,
+      houseFeeAmount: first.roundHouseFeeAmount,
+      payoutAmount: first.roundPayoutAmount,
+      serverSeedHash: first.roundServerSeedHash,
+      serverSeedReveal: first.roundServerSeedReveal,
+      winningTicket: first.roundWinningTicket,
+      winnerUserId: first.roundWinnerUserId,
+      winnerEntryId: first.roundWinnerEntryId,
+      spinAngle: first.roundSpinAngle,
+    };
+
+    const entries = rows.flatMap((row) => {
+      if (!row.entryId) {
+        return [];
+      }
+
+      return {
+        id: row.entryId,
+        roundId: row.entryRoundId ?? round.id,
+        userId: row.entryUserId ?? '',
+        amount: row.entryAmount ?? 0n,
+        ticketStart: row.entryTicketStart,
+        ticketEnd: row.entryTicketEnd,
+        isWinner: row.entryIsWinner ?? false,
+        createdAt: row.entryCreatedAt ?? round.openedAt,
+        updatedAt: row.entryUpdatedAt ?? round.openedAt,
         user: {
-          select: {
-            id: true,
-            username: true,
-            fullName: true,
-          },
+          id: row.entryPlayerId ?? row.entryUserId ?? '',
+          username: row.entryPlayerUsername ?? '',
+          fullName: row.entryPlayerFullName,
         },
-      },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      };
     });
 
     const winnerEntry = round.winnerEntryId
-      ? entries.find((entry) => entry.id === round.winnerEntryId) ?? null
+      ? (entries.find((entry) => entry.id === round.winnerEntryId) ?? null)
       : null;
 
     const serverSeedReveal = round.serverSeedReveal;
     const serverSeedHash = round.serverSeedHash;
 
     const recomputedServerSeedHash = serverSeedReveal
-      ? createHash("sha256").update(serverSeedReveal).digest("hex")
+      ? createHash('sha256').update(serverSeedReveal).digest('hex')
       : null;
 
     const seedHashMatches =
@@ -741,11 +1040,11 @@ export class RoundsService {
             round.id,
             round.roundNumber.toString(),
             round.totalEntryAmount.toString(),
-          ].join(":")
+          ].join(':')
         : null;
 
     const drawHash = drawInput
-      ? createHash("sha256").update(drawInput).digest("hex")
+      ? createHash('sha256').update(drawInput).digest('hex')
       : null;
 
     const recomputedWinningTicket =
@@ -789,7 +1088,8 @@ export class RoundsService {
       entries: entries.map((entry) => this.toEntryWithPlayerSnapshot(entry)),
     };
   }
-  toRoundSnapshot(round: Round): RoundSnapshot {
+
+  toRoundSnapshot(round: RoundSnapshotSource): RoundSnapshot {
     return {
       id: round.id,
       roomId: round.roomId,
@@ -828,7 +1128,9 @@ export class RoundsService {
     };
   }
 
-  private toTicketRangesFromEntries(entries: Entry[]): TicketRange[] {
+  private toTicketRangesFromEntries(
+    entries: TicketRangeEntrySource[],
+  ): TicketRange[] {
     return entries.map((entry) => {
       if (entry.ticketStart === null || entry.ticketEnd === null) {
         throw new BadRequestException(
@@ -845,7 +1147,10 @@ export class RoundsService {
       };
     });
   }
-  private verifyEntryRanges(entries: Entry[], expectedTotal: bigint) {
+  private verifyEntryRanges(
+    entries: TicketRangeEntrySource[],
+    expectedTotal: bigint,
+  ) {
     return verifyTicketRanges(
       this.toTicketRangesFromEntries(entries),
       expectedTotal,
@@ -891,15 +1196,3 @@ export class RoundsService {
     };
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-

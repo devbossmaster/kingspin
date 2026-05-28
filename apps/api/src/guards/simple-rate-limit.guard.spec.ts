@@ -25,14 +25,14 @@ function buildContext(args: {
 }
 
 describe("SimpleRateLimitGuard", () => {
-  it("applies a stricter production limit to entry placement", () => {
+  it("keeps entry placement coarse IP limits high enough for shared networks", () => {
     const guard = new SimpleRateLimitGuard({
       defaultWindowMs: 60_000,
       defaultMaxRequests: 1_000,
       isProduction: true,
     });
 
-    for (let index = 0; index < 10; index += 1) {
+    for (let index = 0; index < 240; index += 1) {
       expect(
         guard.canActivate(
           buildContext({

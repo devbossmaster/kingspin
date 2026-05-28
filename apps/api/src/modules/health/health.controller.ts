@@ -14,4 +14,14 @@ export class HealthController {
   getDbHealth() {
     return this.healthService.getDbHealth();
   }
+
+  @Get("redis")
+  getRedisHealth() {
+    return this.healthService.getRedisHealth();
+  }
+
+  @Get("realtime")
+  getRealtimeHealth() {
+    return this.healthService.getRealtimeHealth();
+  }
 }

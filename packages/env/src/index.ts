@@ -146,6 +146,9 @@ const ApiEnvBaseSchema = z
     ENABLE_DEV_AUTH: BooleanStringSchema.default(false),
     ENABLE_REDIS: BooleanStringSchema.default(false),
     REDIS_URL: OptionalStringSchema,
+    PAYMENT_PROVIDER: z
+      .enum(["MANUAL", "MOCK", "NOWPAYMENTS", "CHAPA", "STRIPE", "CUSTOM"])
+      .default("MOCK"),
     BETTER_AUTH_SECRET: OptionalStringSchema,
     BETTER_AUTH_URL: OptionalUrlSchema,
     RESEND_API_KEY: OptionalStringSchema,
@@ -173,11 +176,20 @@ export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
     });
   }
 
-  if (env.ENABLE_REDIS && !env.REDIS_URL) {
+  if (env.APP_ENV === "production" && env.ENABLE_REDIS && !env.REDIS_URL) {
     context.addIssue({
       code: "custom",
       path: ["REDIS_URL"],
-      message: "REDIS_URL is required when ENABLE_REDIS=true.",
+      message: "REDIS_URL is required when ENABLE_REDIS=true in production.",
+    });
+  }
+
+  if (env.APP_ENV === "production" && env.PAYMENT_PROVIDER === "MOCK") {
+    context.addIssue({
+      code: "custom",
+      path: ["PAYMENT_PROVIDER"],
+      message:
+        "PAYMENT_PROVIDER=MOCK is local-only. Use MANUAL or a configured real adapter stub in production.",
     });
   }
 

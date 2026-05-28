@@ -1,706 +1,360 @@
 import { BadRequestException } from "@nestjs/common";
-import { LedgerTransactionType, RoundStatus } from "@kingspin/db";
+import { RoundStatus } from "@kingspin/db";
 import { EntriesService } from "./entries.service";
 
 const now = new Date("2026-05-26T12:00:00.000Z");
 
-function buildUser() {
+function buildPreflight(overrides?: Record<string, unknown>) {
   return {
-    id: "user-1",
-    email: "dev+player-1@kingspin.local",
-    username: "dev_player-1",
-    fullName: "Dev Player player-1",
-    emailVerified: true,
-    role: "PLAYER",
-    image: null,
-    bannedAt: null,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-function buildWallet(balanceSnapshot = 10_000n) {
-  return {
-    id: "wallet-1",
     userId: "user-1",
-    type: "MAIN",
-    balanceSnapshot,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-function toWalletSnapshot(wallet = buildWallet()) {
-  return {
-    id: wallet.id,
-    userId: wallet.userId,
-    type: wallet.type,
-    balanceSnapshot: wallet.balanceSnapshot.toString(),
-    createdAt: wallet.createdAt.toISOString(),
-    updatedAt: wallet.updatedAt.toISOString(),
-  };
-}
-
-function buildRound() {
-  return {
-    id: "round-1",
+    userEmail: "dev+player-1@kingspin.local",
+    userUsername: "dev_player-1",
+    userFullName: "Dev Player player-1",
+    userImage: null,
+    userBannedAt: null,
+    userCreatedAt: now,
+    userUpdatedAt: now,
     roomId: "room-1",
-    roundNumber: 1,
-    status: RoundStatus.OPEN,
-    openedAt: now,
-    locksAt: new Date("2026-05-26T12:00:45.000Z"),
-    lockedAt: null,
-    drawingAt: null,
-    spinningAt: null,
-    settlingAt: null,
-    completedAt: null,
-    cancelledAt: null,
-    totalEntryAmount: 0n,
-    houseFeeAmount: 0n,
-    payoutAmount: 0n,
-    serverSeedHash: "hash",
-    serverSeedReveal: "seed",
-    winningTicket: null,
-    winnerUserId: null,
-    winnerEntryId: null,
-    spinAngle: null,
-    idempotencyKey: "round:start:room-1:1",
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
-function buildEntry(amount = 1_000n) {
-  return {
-    id: "entry-1",
+    roomStatus: "ACTIVE",
+    roomGameMode: "FLEXIBLE_PROPORTIONAL",
+    roomFixedEntryAmount: null,
+    categoryIsActive: true,
+    categoryMinEntryAmount: 1_000n,
+    categoryMaxEntryAmount: 5_000n,
     roundId: "round-1",
-    userId: "user-1",
-    amount,
-    ticketStart: null,
-    ticketEnd: null,
-    isWinner: false,
-    createdAt: now,
-    updatedAt: now,
+    roundStatus: RoundStatus.OPEN,
+    walletId: "wallet-1",
+    walletBalanceSnapshot: 10_000n,
+    ...overrides,
   };
 }
 
-function buildRoom() {
+function buildPlacementRow(overrides?: Record<string, unknown>) {
   return {
-    id: "room-1",
-    status: "ACTIVE",
-    category: {
-      isActive: true,
-      minEntryAmount: 1_000n,
-      maxEntryAmount: 5_000n,
-    },
+    status: "SUCCESS",
+    reused: false,
+    existingEntryAmount: null,
+    walletBalanceSnapshot: 9_000n,
+    entryId: "entry-1",
+    entryRoundId: "round-1",
+    entryUserId: "user-1",
+    entryAmount: 1_000n,
+    entryTicketStart: null,
+    entryTicketEnd: null,
+    entryIsWinner: false,
+    entryCreatedAt: now,
+    entryUpdatedAt: now,
+    walletId: "wallet-1",
+    walletUserId: "user-1",
+    walletType: "MAIN",
+    walletCreatedAt: now,
+    walletUpdatedAt: now,
+    roundId: "round-1",
+    roundRoomId: "room-1",
+    roundNumber: 1,
+    roundStatus: RoundStatus.OPEN,
+    roundOpenedAt: now,
+    roundLocksAt: new Date("2026-05-26T12:00:45.000Z"),
+    roundLockedAt: null,
+    roundDrawingAt: null,
+    roundSpinningAt: null,
+    roundSettlingAt: null,
+    roundCompletedAt: null,
+    roundCancelledAt: null,
+    roundTotalEntryAmount: 1_000n,
+    roundHouseFeeAmount: 0n,
+    roundPayoutAmount: 1_000n,
+    roundServerSeedHash: "hash",
+    roundServerSeedReveal: "seed",
+    roundWinningTicket: null,
+    roundWinnerUserId: null,
+    roundWinnerEntryId: null,
+    roundSpinAngle: null,
+    roundIdempotencyKey: "round:start:room-1:1",
+    roundCreatedAt: now,
+    roundUpdatedAt: now,
+    ...overrides,
   };
 }
 
-function buildHoldSnapshot(entryId = "entry-1", amount = "1000") {
-  return {
-    id: "ledger-1",
-    type: LedgerTransactionType.ENTRY_HOLD,
-    referenceType: "ENTRY",
-    referenceId: entryId,
-    idempotencyKey: "entry-key-1",
-    metadata: {
-      userId: "user-1",
-      roundId: "round-1",
-      entryId,
-      walletAccountId: "wallet-1",
-      amount,
-      holdState: "HELD",
-    },
-    createdAt: now.toISOString(),
-    entries: [],
+function buildService(args?: {
+  preflight?: Record<string, unknown>;
+  placementRows?: Record<string, unknown>[];
+}) {
+  const tx = {
+    $queryRaw: jest
+      .fn()
+      .mockResolvedValueOnce([buildPlacementRow(args?.placementRows?.[0])])
+      .mockResolvedValueOnce([buildPlacementRow(args?.placementRows?.[1])]),
   };
-}
 
-function buildAppliedHoldTransaction(entryId = "entry-1", amount = "1000") {
-  return {
-    id: "ledger-1",
-    type: LedgerTransactionType.ENTRY_HOLD,
-    referenceType: "ENTRY",
-    referenceId: entryId,
-    metadata: {
-      userId: "user-1",
-      roundId: "round-1",
-      entryId,
-      walletAccountId: "wallet-1",
-      amount,
-      holdState: "APPLIED",
-      appliedAt: now.toISOString(),
-    },
+  const prisma = {
+    $queryRaw: jest.fn().mockResolvedValue([buildPreflight(args?.preflight)]),
+    $transaction: jest.fn(async (callback: (txClient: typeof tx) => unknown) =>
+      callback(tx),
+    ),
   };
-}
 
-function buildRoundsService() {
-  return {
-    toRoundSnapshot: jest.fn((value) => ({
-      id: value.id,
-      status: value.status,
-      totalEntryAmount: value.totalEntryAmount.toString(),
-      payoutAmount: value.payoutAmount.toString(),
+  const roundsService = {
+    toRoundSnapshot: jest.fn((round) => ({
+      id: round.id,
+      roomId: round.roomId,
+      status: round.status,
+      totalEntryAmount: round.totalEntryAmount.toString(),
+      payoutAmount: round.payoutAmount.toString(),
     })),
   };
-}
-
-function buildWriteTx(args?: {
-  existingEntry?: ReturnType<typeof buildEntry> | null;
-  updatedEntry?: ReturnType<typeof buildEntry>;
-  roundUpdateCount?: number;
-}) {
-  const round = buildRound();
-  const existingEntry = args?.existingEntry ?? null;
-  const updatedEntry = args?.updatedEntry ?? buildEntry();
 
   return {
-    entry: {
-      findUnique: jest.fn().mockResolvedValue(existingEntry),
-      create: jest.fn().mockResolvedValue(updatedEntry),
-      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-      findUniqueOrThrow: jest.fn().mockResolvedValue(updatedEntry),
-    },
-    round: {
-      updateMany: jest.fn().mockResolvedValue({
-        count: args?.roundUpdateCount ?? 1,
-      }),
-      findUniqueOrThrow: jest.fn().mockResolvedValue({
-        ...round,
-        totalEntryAmount: updatedEntry.amount,
-        payoutAmount: updatedEntry.amount,
-      }),
-    },
-    ledgerTransaction: {
-      update: jest.fn().mockResolvedValue({ id: "ledger-1" }),
-    },
+    service: new EntriesService(prisma as any, roundsService as any),
+    prisma,
+    tx,
+    roundsService,
   };
 }
 
-describe("EntriesService", () => {
-  it("places an entry with wallet hold outside the entry write transaction", async () => {
-    const user = buildUser();
-    const wallet = buildWallet();
-    const round = buildRound();
-    const entry = buildEntry();
-    const tx = buildWriteTx({ updatedEntry: entry });
-
-    const prisma = {
-      user: {
-        findUnique: jest.fn().mockResolvedValue(user),
-      },
-      room: {
-        findUnique: jest.fn().mockResolvedValue(buildRoom()),
-      },
-      round: {
-        findFirst: jest.fn().mockResolvedValue(round),
-      },
-      entry: {
-        findUnique: jest.fn().mockResolvedValue(null),
-      },
-      ledgerTransaction: {
-        findUnique: jest.fn().mockResolvedValue(null),
-      },
-      $transaction: jest.fn(async (callback: (txClient: typeof tx) => unknown) =>
-        callback(tx),
-      ),
-    };
-
-    const walletsService = {
-      ensureMainWalletForUserId: jest.fn().mockResolvedValue(wallet),
-      holdEntryAmountForEntry: jest.fn().mockResolvedValue({
-        wallet: toWalletSnapshot(buildWallet(9_000n)),
-        transaction: buildHoldSnapshot(entry.id),
-        reused: false,
-      }),
-      refundEntryHoldByIdempotencyKey: jest.fn(),
-    };
-
-    const service = new EntriesService(
-      prisma as any,
-      buildRoundsService() as any,
-      walletsService as any,
-    );
+describe("EntriesService hot path", () => {
+  it("first entry returns the authoritative debited wallet and round total", async () => {
+    const { service, prisma, tx } = buildService();
 
     const result = await service.placeEntryForUser({
       roomId: "room-1",
-      userId: user.id,
+      userId: "user-1",
       amount: 1_000,
       idempotencyKey: "entry-key-1",
     });
 
     expect(result.reused).toBe(false);
-    expect(result.entry.id).toBe("entry-1");
     expect(result.wallet.balanceSnapshot).toBe("9000");
-    expect(walletsService.holdEntryAmountForEntry).toHaveBeenCalledWith({
-      walletAccountId: wallet.id,
-      userId: user.id,
-      roundId: round.id,
-      entryId: expect.any(String),
-      amount: 1_000n,
-      idempotencyKey: "entry-key-1",
-    });
-    expect(tx.round.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          totalEntryAmount: { increment: 1_000n },
-          payoutAmount: { increment: 1_000n },
-        }),
-      }),
-    );
-    expect(tx.ledgerTransaction.update).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { idempotencyKey: "entry-key-1" },
-        data: expect.objectContaining({
-          metadata: expect.objectContaining({
-            holdState: "APPLIED",
-            entryAmountAfter: "1000",
-          }),
-        }),
-      }),
-    );
-    expect(walletsService.refundEntryHoldByIdempotencyKey).not.toHaveBeenCalled();
+    expect(result.entry.amount).toBe("1000");
+    expect(result.currentRound?.totalEntryAmount).toBe("1000");
+    expect(result.player.id).toBe("user-1");
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    const hotPathSql =
+      tx.$queryRaw.mock.calls[0]?.[0]?.strings?.join(' ') ??
+      String(tx.$queryRaw.mock.calls[0]?.[0] ?? '');
+    expect(hotPathSql).toContain('pg_advisory_xact_lock_shared');
+    expect(hotPathSql).not.toContain('UPDATE rounds r');
   });
 
-  it("uses only the authenticated user id for production-shaped entry placement", async () => {
-    const user = buildUser();
-    const wallet = buildWallet();
-    const tx = buildWriteTx({ updatedEntry: buildEntry() });
-
-    const prisma = {
-      user: {
-        findUnique: jest.fn().mockResolvedValue(user),
-      },
-      room: {
-        findUnique: jest.fn().mockResolvedValue(buildRoom()),
-      },
-      round: {
-        findFirst: jest.fn().mockResolvedValue(buildRound()),
-      },
-      entry: {
-        findUnique: jest.fn().mockResolvedValue(null),
-      },
-      ledgerTransaction: {
-        findUnique: jest.fn().mockResolvedValue(null),
-      },
-      $transaction: jest.fn(async (callback: (txClient: typeof tx) => unknown) =>
-        callback(tx),
-      ),
-    };
-
-    const walletsService = {
-      ensureMainWalletForUserId: jest.fn().mockResolvedValue(wallet),
-      holdEntryAmountForEntry: jest.fn().mockResolvedValue({
-        wallet: toWalletSnapshot(buildWallet(9_000n)),
-        transaction: buildHoldSnapshot("entry-1"),
-        reused: false,
-      }),
-      refundEntryHoldByIdempotencyKey: jest.fn(),
-    };
-
-    const service = new EntriesService(
-      prisma as any,
-      buildRoundsService() as any,
-      walletsService as any,
-    );
-
-    await service.placeEntryForUser({
-      roomId: "room-1",
-      userId: user.id,
-      amount: 1_000,
-      idempotencyKey: "entry-key-1",
-      playerKey: "evil-player",
-      walletId: "evil-wallet",
-    } as any);
-
-    expect(prisma.user.findUnique).toHaveBeenCalledWith({
-      where: { id: user.id },
+  it("top-up increments the existing entry and round total by the request amount", async () => {
+    const { service } = buildService({
+      placementRows: [
+        {
+          existingEntryAmount: 1_000n,
+          walletBalanceSnapshot: 8_000n,
+          entryAmount: 3_000n,
+          roundTotalEntryAmount: 3_000n,
+          roundPayoutAmount: 3_000n,
+        },
+      ],
     });
-    expect(walletsService.holdEntryAmountForEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: user.id,
-        walletAccountId: wallet.id,
-      }),
-    );
-    expect(tx.entry.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          userId: user.id,
-        }),
-      }),
-    );
-  });
-
-  it("replays an applied idempotency key without another hold or write transaction", async () => {
-    const user = buildUser();
-    const wallet = buildWallet(9_000n);
-    const round = {
-      ...buildRound(),
-      totalEntryAmount: 1_000n,
-      payoutAmount: 1_000n,
-    };
-    const entry = buildEntry();
-
-    const prisma = {
-      user: {
-        findUnique: jest.fn().mockResolvedValue(user),
-      },
-      room: {
-        findUnique: jest.fn().mockResolvedValue(buildRoom()),
-      },
-      round: {
-        findFirst: jest.fn().mockResolvedValue(round),
-        findUniqueOrThrow: jest.fn().mockResolvedValue(round),
-      },
-      ledgerTransaction: {
-        findUnique: jest
-          .fn()
-          .mockResolvedValueOnce(buildAppliedHoldTransaction(entry.id))
-          .mockResolvedValueOnce(null),
-      },
-      entry: {
-        findUniqueOrThrow: jest.fn().mockResolvedValue(entry),
-      },
-      walletAccount: {
-        findUniqueOrThrow: jest.fn().mockResolvedValue(wallet),
-      },
-      $transaction: jest.fn(),
-    };
-
-    const walletsService = {
-      ensureMainWalletForUserId: jest.fn().mockResolvedValue(wallet),
-      holdEntryAmountForEntry: jest.fn(),
-    };
-
-    const service = new EntriesService(
-      prisma as any,
-      buildRoundsService() as any,
-      walletsService as any,
-    );
 
     const result = await service.placeEntryForUser({
       roomId: "room-1",
-      userId: user.id,
+      userId: "user-1",
+      amount: 2_000,
+      idempotencyKey: "entry-key-2",
+    });
+
+    expect(result.entry.amount).toBe("3000");
+    expect(result.wallet.balanceSnapshot).toBe("8000");
+    expect(result.currentRound?.totalEntryAmount).toBe("3000");
+  });
+
+  it("duplicate idempotency replay returns the existing result without another debit", async () => {
+    const { service, tx } = buildService({
+      placementRows: [
+        {
+          status: "REPLAY",
+          reused: true,
+          walletBalanceSnapshot: 9_000n,
+          entryAmount: 1_000n,
+          roundTotalEntryAmount: 1_000n,
+        },
+      ],
+    });
+
+    const result = await service.placeEntryForUser({
+      roomId: "room-1",
+      userId: "user-1",
       amount: 1_000,
       idempotencyKey: "entry-key-1",
     });
 
     expect(result.reused).toBe(true);
-    expect(walletsService.holdEntryAmountForEntry).not.toHaveBeenCalled();
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(result.wallet.balanceSnapshot).toBe("9000");
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses the original entry id when retrying an unapplied wallet hold", async () => {
-    const user = buildUser();
-    const wallet = buildWallet(9_000n);
-    const pendingHold = {
-      ...buildAppliedHoldTransaction("entry-1"),
-      metadata: {
-        userId: user.id,
-        roundId: "round-1",
-        entryId: "entry-1",
-        walletAccountId: wallet.id,
-        amount: "1000",
-        holdState: "HELD",
-      },
-    };
-    const tx = buildWriteTx({ updatedEntry: buildEntry() });
+  it("idempotency key reused with different request details fails safely", async () => {
+    const { service } = buildService({
+      placementRows: [{ status: "IDEMPOTENCY_MISMATCH" }],
+    });
 
-    const prisma = {
-      user: {
-        findUnique: jest.fn().mockResolvedValue(user),
-      },
-      room: {
-        findUnique: jest.fn().mockResolvedValue(buildRoom()),
-      },
-      round: {
-        findFirst: jest.fn().mockResolvedValue(buildRound()),
-      },
-      entry: {
-        findUnique: jest.fn().mockResolvedValue(null),
-      },
-      ledgerTransaction: {
-        findUnique: jest.fn(({ where }: { where: { idempotencyKey: string } }) =>
-          Promise.resolve(
-            where.idempotencyKey === "entry-key-1" ? pendingHold : null,
-          ),
-        ),
-      },
-      $transaction: jest.fn(async (callback: (txClient: typeof tx) => unknown) =>
-        callback(tx),
-      ),
-    };
-
-    const walletsService = {
-      ensureMainWalletForUserId: jest.fn().mockResolvedValue(wallet),
-      holdEntryAmountForEntry: jest.fn().mockResolvedValue({
-        wallet: toWalletSnapshot(wallet),
-        transaction: buildHoldSnapshot("entry-1"),
-        reused: true,
+    await expect(
+      service.placeEntryForUser({
+        roomId: "room-1",
+        userId: "user-1",
+        amount: 2_000,
+        idempotencyKey: "entry-key-1",
       }),
-      refundEntryHoldByIdempotencyKey: jest.fn(),
-    };
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
 
-    const service = new EntriesService(
-      prisma as any,
-      buildRoundsService() as any,
-      walletsService as any,
-    );
+  it("insufficient balance creates no committed entry response or ledger drift", async () => {
+    const { service, tx } = buildService({
+      preflight: { walletBalanceSnapshot: 500n },
+      placementRows: [
+        {
+          status: "INSUFFICIENT_BALANCE",
+          walletBalanceSnapshot: 500n,
+          entryId: null,
+          roundId: null,
+        },
+      ],
+    });
 
-    await service.placeEntryForUser({
+    await expect(
+      service.placeEntryForUser({
+        roomId: "room-1",
+        userId: "user-1",
+        amount: 1_000,
+        idempotencyKey: "entry-key-1",
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("round not OPEN rejects inside the compact transaction", async () => {
+    const { service } = buildService({
+      placementRows: [
+        {
+          status: "ROUND_NOT_OPEN",
+          entryId: null,
+          roundId: null,
+        },
+      ],
+    });
+
+    await expect(
+      service.placeEntryForUser({
+        roomId: "room-1",
+        userId: "user-1",
+        amount: 1_000,
+        idempotencyKey: "entry-key-1",
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("fixed equal-chance mode rejects custom amounts inside the transaction", async () => {
+    const { service } = buildService({
+      preflight: {
+        roomGameMode: "FIXED_EQUAL_CHANCE",
+        roomFixedEntryAmount: 1_000n,
+      },
+      placementRows: [
+        {
+          status: "FIXED_ENTRY_AMOUNT_MISMATCH",
+          entryId: null,
+          roundId: null,
+        },
+      ],
+    });
+
+    await expect(
+      service.placeEntryForUser({
+        roomId: "room-1",
+        userId: "user-1",
+        amount: 2_000,
+        idempotencyKey: "fixed-entry-key-1",
+      }),
+    ).rejects.toThrow("exact configured entry amount");
+  });
+
+  it("fixed equal-chance mode rejects top-ups inside the transaction", async () => {
+    const { service } = buildService({
+      preflight: {
+        roomGameMode: "FIXED_EQUAL_CHANCE",
+        roomFixedEntryAmount: 1_000n,
+      },
+      placementRows: [
+        {
+          status: "FIXED_TOP_UP_NOT_ALLOWED",
+          existingEntryAmount: 1_000n,
+          entryId: null,
+          roundId: null,
+        },
+      ],
+    });
+
+    await expect(
+      service.placeEntryForUser({
+        roomId: "room-1",
+        userId: "user-1",
+        amount: 1_000,
+        idempotencyKey: "fixed-entry-key-2",
+      }),
+    ).rejects.toThrow("does not allow top-ups");
+  });
+
+  it("same-key concurrent double click resolves as one write plus one replay", async () => {
+    const { service, tx } = buildService({
+      placementRows: [
+        {
+          status: "SUCCESS",
+          reused: false,
+          walletBalanceSnapshot: 9_000n,
+        },
+        {
+          status: "REPLAY",
+          reused: true,
+          walletBalanceSnapshot: 9_000n,
+        },
+      ],
+    });
+
+    const first = service.placeEntryForUser({
       roomId: "room-1",
-      userId: user.id,
+      userId: "user-1",
+      amount: 1_000,
+      idempotencyKey: "entry-key-1",
+    });
+    const second = service.placeEntryForUser({
+      roomId: "room-1",
+      userId: "user-1",
       amount: 1_000,
       idempotencyKey: "entry-key-1",
     });
 
-    expect(walletsService.holdEntryAmountForEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entryId: "entry-1",
-      }),
-    );
-    expect(tx.entry.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          id: "entry-1",
-        }),
-      }),
-    );
+    const results = await Promise.all([first, second]);
+
+    expect(results.map((result) => result.reused)).toEqual([false, true]);
+    expect(results.map((result) => result.wallet.balanceSnapshot)).toEqual([
+      "9000",
+      "9000",
+    ]);
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
   });
 
-  it("does not enter the entry write transaction when wallet hold fails", async () => {
-    const user = buildUser();
-    const wallet = buildWallet(500n);
-
-    const prisma = {
-      user: {
-        findUnique: jest.fn().mockResolvedValue(user),
+  it("prevalidation rejects rooms without an OPEN round before money writes", async () => {
+    const { service, prisma } = buildService({
+      preflight: {
+        roundId: null,
+        roundStatus: null,
       },
-      room: {
-        findUnique: jest.fn().mockResolvedValue(buildRoom()),
-      },
-      round: {
-        findFirst: jest.fn().mockResolvedValue(buildRound()),
-      },
-      entry: {
-        findUnique: jest.fn().mockResolvedValue(null),
-      },
-      ledgerTransaction: {
-        findUnique: jest.fn().mockResolvedValue(null),
-      },
-      $transaction: jest.fn(),
-    };
-
-    const walletsService = {
-      ensureMainWalletForUserId: jest.fn().mockResolvedValue(wallet),
-      holdEntryAmountForEntry: jest
-        .fn()
-        .mockRejectedValue(
-          new BadRequestException("Insufficient MAIN wallet balance."),
-        ),
-      refundEntryHoldByIdempotencyKey: jest.fn(),
-    };
-
-    const service = new EntriesService(
-      prisma as any,
-      buildRoundsService() as any,
-      walletsService as any,
-    );
+    });
 
     await expect(
       service.placeEntryForUser({
         roomId: "room-1",
-        userId: user.id,
+        userId: "user-1",
         amount: 1_000,
         idempotencyKey: "entry-key-1",
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
-
-    expect(prisma.$transaction).not.toHaveBeenCalled();
-    expect(walletsService.refundEntryHoldByIdempotencyKey).not.toHaveBeenCalled();
-  });
-
-  it("top-up mode increments by the requested amount only", async () => {
-    const user = buildUser();
-    const wallet = buildWallet();
-    const existingEntry = buildEntry(1_000n);
-    const updatedEntry = buildEntry(3_000n);
-    const tx = buildWriteTx({
-      existingEntry,
-      updatedEntry,
-    });
-
-    const prisma = {
-      user: {
-        findUnique: jest.fn().mockResolvedValue(user),
-      },
-      room: {
-        findUnique: jest.fn().mockResolvedValue(buildRoom()),
-      },
-      round: {
-        findFirst: jest.fn().mockResolvedValue({
-          ...buildRound(),
-          totalEntryAmount: 1_000n,
-          payoutAmount: 1_000n,
-        }),
-      },
-      entry: {
-        findUnique: jest.fn().mockResolvedValue(existingEntry),
-      },
-      ledgerTransaction: {
-        findUnique: jest.fn().mockResolvedValue(null),
-      },
-      $transaction: jest.fn(async (callback: (txClient: typeof tx) => unknown) =>
-        callback(tx),
-      ),
-    };
-
-    const walletsService = {
-      ensureMainWalletForUserId: jest.fn().mockResolvedValue(wallet),
-      holdEntryAmountForEntry: jest.fn().mockResolvedValue({
-        wallet: toWalletSnapshot(buildWallet(8_000n)),
-        transaction: buildHoldSnapshot(existingEntry.id, "2000"),
-        reused: false,
-      }),
-      refundEntryHoldByIdempotencyKey: jest.fn(),
-    };
-
-    const service = new EntriesService(
-      prisma as any,
-      buildRoundsService() as any,
-      walletsService as any,
-    );
-
-    const result = await service.placeEntryForUser({
-      roomId: "room-1",
-      userId: user.id,
-      amount: 2_000,
-      idempotencyKey: "entry-key-1",
-    });
-
-    expect(result.entry.amount).toBe("3000");
-    expect(walletsService.holdEntryAmountForEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entryId: existingEntry.id,
-        amount: 2_000n,
-      }),
-    );
-    expect(tx.entry.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          amount: { increment: 2_000n },
-        }),
-      }),
-    );
-    expect(tx.round.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          totalEntryAmount: { increment: 2_000n },
-          payoutAmount: { increment: 2_000n },
-        }),
-      }),
-    );
-  });
-
-  it("compensates the wallet hold when the entry write fails", async () => {
-    const user = buildUser();
-    const wallet = buildWallet();
-    const tx = buildWriteTx({
-      updatedEntry: buildEntry(),
-      roundUpdateCount: 0,
-    });
-
-    const prisma = {
-      user: {
-        findUnique: jest.fn().mockResolvedValue(user),
-      },
-      room: {
-        findUnique: jest.fn().mockResolvedValue(buildRoom()),
-      },
-      round: {
-        findFirst: jest.fn().mockResolvedValue(buildRound()),
-      },
-      entry: {
-        findUnique: jest.fn().mockResolvedValue(null),
-      },
-      ledgerTransaction: {
-        findUnique: jest.fn().mockResolvedValue(null),
-      },
-      $transaction: jest.fn(async (callback: (txClient: typeof tx) => unknown) =>
-        callback(tx),
-      ),
-    };
-
-    const walletsService = {
-      ensureMainWalletForUserId: jest.fn().mockResolvedValue(wallet),
-      holdEntryAmountForEntry: jest.fn().mockResolvedValue({
-        wallet: toWalletSnapshot(buildWallet(9_000n)),
-        transaction: buildHoldSnapshot("entry-1"),
-        reused: false,
-      }),
-      refundEntryHoldByIdempotencyKey: jest.fn().mockResolvedValue({
-        refunded: true,
-      }),
-    };
-
-    const service = new EntriesService(
-      prisma as any,
-      buildRoundsService() as any,
-      walletsService as any,
-    );
-
-    await expect(
-      service.placeEntryForUser({
-        roomId: "room-1",
-        userId: user.id,
-        amount: 1_000,
-        idempotencyKey: "entry-key-1",
-      }),
-    ).rejects.toBeInstanceOf(BadRequestException);
-
-    expect(walletsService.refundEntryHoldByIdempotencyKey).toHaveBeenCalledWith({
-      holdIdempotencyKey: "entry-key-1",
-      reason: "Round is no longer OPEN. Entry was not accepted.",
-    });
-  });
-
-  it("rejects an idempotency key reused for a different entry request", async () => {
-    const user = buildUser();
-    const wallet = buildWallet();
-
-    const prisma = {
-      user: {
-        findUnique: jest.fn().mockResolvedValue(user),
-      },
-      room: {
-        findUnique: jest.fn().mockResolvedValue(buildRoom()),
-      },
-      round: {
-        findFirst: jest.fn().mockResolvedValue(buildRound()),
-      },
-      ledgerTransaction: {
-        findUnique: jest.fn().mockResolvedValue({
-          ...buildAppliedHoldTransaction("entry-1", "2000"),
-        }),
-      },
-      $transaction: jest.fn(),
-    };
-
-    const service = new EntriesService(
-      prisma as any,
-      { toRoundSnapshot: jest.fn() } as any,
-      { ensureMainWalletForUserId: jest.fn().mockResolvedValue(wallet) } as any,
-    );
-
-    await expect(
-      service.placeEntryForUser({
-        roomId: "room-1",
-        userId: user.id,
-        amount: 1_000,
-        idempotencyKey: "entry-key-1",
-      }),
-    ).rejects.toBeInstanceOf(BadRequestException);
-
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 });

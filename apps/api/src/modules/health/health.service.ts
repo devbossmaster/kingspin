@@ -1,9 +1,15 @@
 import { Injectable, ServiceUnavailableException } from "@nestjs/common";
+import { RealtimeMetricsService } from "../redis/realtime-metrics.service";
+import { RedisService } from "../redis/redis.service";
 import { PrismaService } from "../../prisma/prisma.service";
 
 @Injectable()
 export class HealthService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly redisService: RedisService,
+    private readonly realtimeMetrics: RealtimeMetricsService,
+  ) {}
 
   getHealth() {
     return {
@@ -39,5 +45,24 @@ export class HealthService {
         },
       });
     }
+  }
+
+  async getRedisHealth() {
+    return {
+      status: "ok",
+      service: "kingspin-api",
+      redis: await this.redisService.ping(),
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  async getRealtimeHealth() {
+    return {
+      status: "ok",
+      service: "kingspin-api",
+      redis: await this.redisService.ping(),
+      metrics: this.realtimeMetrics.snapshot(),
+      timestamp: new Date().toISOString(),
+    };
   }
 }

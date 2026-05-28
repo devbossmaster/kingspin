@@ -59,8 +59,7 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
 
   onModuleInit() {
     const env = getApiEnv();
-    const shouldAutoStart =
-      env.ROUND_MACHINE_AUTO_START === true || env.NODE_ENV !== "production";
+    const shouldAutoStart = env.ROUND_MACHINE_AUTO_START === true;
 
     if (!shouldAutoStart) {
       this.logger.log(
@@ -558,11 +557,13 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
   private toLeaderSkipResult(
     roomId: string,
     options: AdvanceRoomOptions,
-    reason: "PROCESS_LOCKED" | "DATABASE_LOCKED",
+    reason: "PROCESS_LOCKED" | "DATABASE_LOCKED" | "REDIS_LOCKED",
   ) {
     const message =
       reason === "PROCESS_LOCKED"
         ? "This process is already advancing this room."
+        : reason === "REDIS_LOCKED"
+          ? "Another API instance is advancing this room."
         : "Another process is advancing this room.";
 
     return {

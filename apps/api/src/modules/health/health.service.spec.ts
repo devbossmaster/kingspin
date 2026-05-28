@@ -2,8 +2,26 @@ import { ServiceUnavailableException } from "@nestjs/common";
 import { HealthService } from "./health.service";
 
 describe("HealthService", () => {
+  function buildService(prisma: any) {
+    return new HealthService(
+      prisma,
+      {
+        ping: jest.fn().mockResolvedValue({
+          enabled: false,
+          available: false,
+          latencyMs: null,
+        }),
+      } as any,
+      {
+        snapshot: jest.fn().mockReturnValue({
+          liveStateBuildCount: 0,
+        }),
+      } as any,
+    );
+  }
+
   it("returns basic API health", () => {
-    const service = new HealthService({} as any);
+    const service = buildService({} as any);
 
     expect(service.getHealth()).toEqual(
       expect.objectContaining({
@@ -19,7 +37,7 @@ describe("HealthService", () => {
     const prisma = {
       $queryRaw: jest.fn().mockResolvedValue([{ "?column?": 1 }]),
     };
-    const service = new HealthService(prisma as any);
+    const service = buildService(prisma as any);
 
     await expect(service.getDbHealth()).resolves.toEqual(
       expect.objectContaining({
@@ -36,10 +54,25 @@ describe("HealthService", () => {
     const prisma = {
       $queryRaw: jest.fn().mockRejectedValue(new Error("db down")),
     };
-    const service = new HealthService(prisma as any);
+    const service = buildService(prisma as any);
 
     await expect(service.getDbHealth()).rejects.toBeInstanceOf(
       ServiceUnavailableException,
+    );
+  });
+
+  it("reports Redis and realtime metric health", async () => {
+    const service = buildService({} as any);
+
+    await expect(service.getRealtimeHealth()).resolves.toEqual(
+      expect.objectContaining({
+        status: "ok",
+        redis: expect.objectContaining({
+          enabled: false,
+          available: false,
+        }),
+        metrics: expect.any(Object),
+      }),
     );
   });
 });

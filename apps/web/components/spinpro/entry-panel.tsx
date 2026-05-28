@@ -15,6 +15,8 @@ type EntryPanelProps = {
   roomHref: string;
   chipOptions: number[];
   selectedChip: number;
+  gameMode?: string | null;
+  fixedEntryAmount?: string | null;
   myEntry: EntryWithPlayerSnapshot | null;
   isPlacingEntry: boolean;
   onSelectChip: (amount: number) => void;
@@ -29,18 +31,29 @@ export function EntryPanel({
   roomHref,
   chipOptions,
   selectedChip,
+  gameMode,
+  fixedEntryAmount,
   myEntry,
   isPlacingEntry,
   onSelectChip,
   onPlaceEntry,
 }: EntryPanelProps) {
-  const min = chipOptions[0] ?? 1;
-  const max = chipOptions[chipOptions.length - 1] ?? min;
+  const isFixedMode = gameMode === "FIXED_EQUAL_CHANCE";
+  const parsedFixedAmount = Number(fixedEntryAmount ?? 0);
+  const fixedModeAmount =
+    isFixedMode &&
+    Number.isSafeInteger(parsedFixedAmount) &&
+    parsedFixedAmount > 0
+      ? parsedFixedAmount
+      : null;
+  const visibleChipOptions = fixedModeAmount ? [fixedModeAmount] : chipOptions;
+  const min = visibleChipOptions[0] ?? 1;
+  const max = visibleChipOptions[visibleChipOptions.length - 1] ?? min;
 
   const [customAmount, setCustomAmount] = useState("");
 
   const customAmountText = customAmount.trim();
-  const hasCustomAmount = customAmountText.length > 0;
+  const hasCustomAmount = !isFixedMode && customAmountText.length > 0;
   const parsedCustomAmount = Number(customAmountText);
 
   const boundedCustomAmount = useMemo(() => {
@@ -51,7 +64,7 @@ export function EntryPanel({
     return parsedCustomAmount;
   }, [hasCustomAmount, max, min, parsedCustomAmount]);
 
-  const entryAmount = boundedCustomAmount ?? selectedChip;
+  const entryAmount = fixedModeAmount ?? boundedCustomAmount ?? selectedChip;
   const walletBalance = Number(wallet?.balanceSnapshot ?? 0);
 
   const entriesOpen = status === "OPEN";
@@ -60,11 +73,16 @@ export function EntryPanel({
   const hasWallet = Boolean(wallet);
   const hasEnoughBalance = hasWallet && walletBalance >= entryAmount;
   const insufficientBalance = hasWallet && !hasEnoughBalance;
+  const fixedModeAlreadyEntered = isFixedMode && Boolean(myEntry);
 
   const disabledReason = useMemo(() => {
     if (!entriesOpen) return "Entries are currently closed.";
     if (!hasWallet) return "Wallet is unavailable.";
     if (needsVerification) return "Verify your email before entering.";
+    if (isFixedMode && !fixedModeAmount) {
+      return "Fixed entry amount is not configured.";
+    }
+    if (fixedModeAlreadyEntered) return "Fixed mode allows one entry per round.";
     if (customAmountInvalid) {
       return `Enter a whole amount between ${formatCoins(min)} and ${formatCoins(max)}.`;
     }
@@ -76,8 +94,11 @@ export function EntryPanel({
   }, [
     customAmountInvalid,
     entriesOpen,
+    fixedModeAlreadyEntered,
+    fixedModeAmount,
     hasWallet,
     insufficientBalance,
+    isFixedMode,
     max,
     min,
     needsVerification,
@@ -89,6 +110,7 @@ export function EntryPanel({
     entriesOpen &&
     hasWallet &&
     !needsVerification &&
+    !fixedModeAlreadyEntered &&
     !customAmountInvalid &&
     !insufficientBalance &&
     !isPlacingEntry;
@@ -104,7 +126,9 @@ export function EntryPanel({
           : insufficientBalance
             ? "Insufficient balance"
             : myEntry
-              ? `Add ${formatCoins(entryAmount)} more`
+              ? isFixedMode
+                ? "Entry placed"
+                : `Add ${formatCoins(entryAmount)} more`
               : `Enter ${formatCoins(entryAmount)}`;
 
   const submitEntry = () => {
@@ -146,7 +170,9 @@ export function EntryPanel({
           </div>
           {entriesOpen ? (
             <p className="mt-1 text-xs text-text-secondary">
-              You can still add more while the round is open.
+              {isFixedMode
+                ? "Fixed mode allows one entry per round."
+                : "You can still add more while the round is open."}
             </p>
           ) : null}
         </div>
@@ -164,7 +190,7 @@ export function EntryPanel({
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
-        {chipOptions.map((chip) => (
+        {visibleChipOptions.map((chip) => (
           <Chip
             key={chip}
             amount={chip}
@@ -180,6 +206,7 @@ export function EntryPanel({
       <label className="mt-4 block text-sm font-semibold text-text-secondary">
         Custom amount
         <input
+          disabled={isFixedMode}
           type="number"
           inputMode="numeric"
           min={min}
@@ -193,7 +220,11 @@ export function EntryPanel({
               submitEntry();
             }
           }}
-          placeholder={`${formatCoins(min)}-${formatCoins(max)}`}
+          placeholder={
+            isFixedMode
+              ? "Fixed amount"
+              : `${formatCoins(min)}-${formatCoins(max)}`
+          }
           className="mt-2 w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-3 font-mono text-sm text-text-primary outline-none transition placeholder:text-text-dim focus:border-[var(--gold)] focus:ring-2 focus:ring-[rgba(250,204,21,0.15)]"
         />
       </label>

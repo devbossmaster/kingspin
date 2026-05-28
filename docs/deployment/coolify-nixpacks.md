@@ -161,9 +161,10 @@ ENABLE_REDIS=true
 REDIS_URL=redis://...
 ```
 
-The Socket.IO Redis adapter is wired when Redis is enabled. Round-machine Redis
-locking remains a future hardening item; PostgreSQL advisory locks are the
-active multi-process safety layer.
+The Socket.IO Redis adapter, short TTL public live-state cache,
+round-machine Redis lock, entry spam limiter, and room presence use Redis when
+it is enabled. Postgres remains the source of truth for money, entries, rounds,
+payouts, and winners.
 
 ## Smoke Test
 

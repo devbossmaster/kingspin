@@ -12,10 +12,17 @@ export const RoomStatusSchema = z.enum([
   "ARCHIVED",
 ]);
 
+export const GameModeSchema = z.enum([
+  "FLEXIBLE_PROPORTIONAL",
+  "FIXED_EQUAL_CHANCE",
+]);
+
 export const CreateRoomSchema = z.object({
   categoryId: z.string().min(1),
   code: z.string().min(1).max(20),
   name: z.string().min(1).max(120).optional(),
+  gameMode: GameModeSchema.optional(),
+  fixedEntryAmount: z.number().int().positive().optional(),
   isPermanent: z.boolean().optional(),
   maxPlayers: z.number().int().positive().optional(),
   roundDurationMs: z.number().int().positive().optional(),
@@ -27,6 +34,8 @@ export const RoomSnapshotSchema = z.object({
   code: z.string(),
   name: z.string(),
   status: RoomStatusSchema,
+  gameMode: GameModeSchema,
+  fixedEntryAmount: BigIntStringSchema.nullable(),
   isPermanent: z.boolean(),
   maxPlayers: z.number().int().positive(),
   roundDurationMs: z.number().int().positive(),
@@ -52,6 +61,7 @@ export const RoomLiveStateSchema = z.object({
 });
 
 export type RoomStatus = z.infer<typeof RoomStatusSchema>;
+export type GameMode = z.infer<typeof GameModeSchema>;
 export type CreateRoomInput = z.infer<typeof CreateRoomSchema>;
 export type RoomSnapshot = z.infer<typeof RoomSnapshotSchema>;
 export type CategorySnapshot = z.infer<typeof CategorySnapshotSchema>;

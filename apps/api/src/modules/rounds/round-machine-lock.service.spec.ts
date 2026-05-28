@@ -2,23 +2,23 @@ import { RoundMachineLockService } from "./round-machine-lock.service";
 
 function buildPrisma(locked = true, events: string[] = []) {
   const tx = {
-    $queryRaw: jest
-      .fn()
-      .mockImplementation(async () => {
-        events.push("advisory-check");
-        return [{ locked }];
-      }),
+    $queryRaw: jest.fn().mockImplementation(async () => {
+      events.push("advisory-check");
+      return [{ locked }];
+    }),
   };
 
   return {
     tx,
     prisma: {
-      $transaction: jest.fn(async (callback: (txClient: typeof tx) => unknown) => {
-        events.push("transaction:start");
-        const result = await callback(tx);
-        events.push("transaction:end");
-        return result;
-      }),
+      $transaction: jest.fn(
+        async (callback: (txClient: typeof tx) => unknown) => {
+          events.push("transaction:start");
+          const result = await callback(tx);
+          events.push("transaction:end");
+          return result;
+        },
+      ),
     },
   };
 }
@@ -60,22 +60,23 @@ describe("RoundMachineLockService", () => {
     });
   });
 
-  it("skips work when another database session owns the advisory lock", async () => {
+  it("does not use a database advisory transaction for the local fast path", async () => {
     const { prisma, tx } = buildPrisma(false);
     const service = new RoundMachineLockService(prisma as any);
-    const work = jest.fn();
+    const work = jest.fn().mockResolvedValue("advanced");
 
     const result = await service.withRoomTickLock("room-1", work);
 
     expect(result).toEqual({
-      acquired: false,
-      reason: "DATABASE_LOCKED",
+      acquired: true,
+      result: "advanced",
     });
-    expect(work).not.toHaveBeenCalled();
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(work).toHaveBeenCalledTimes(1);
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it("commits the advisory transaction before running tick work", async () => {
+  it("runs tick work without holding a PostgreSQL transaction open", async () => {
     const events: string[] = [];
     const { prisma, tx } = buildPrisma(true, events);
     const service = new RoundMachineLockService(prisma as any);
@@ -89,13 +90,9 @@ describe("RoundMachineLockService", () => {
       acquired: true,
       result: "advanced",
     });
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
-    expect(events).toEqual([
-      "transaction:start",
-      "advisory-check",
-      "transaction:end",
-      "work",
-    ]);
+    expect(tx.$queryRaw).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(events).toEqual(["work"]);
   });
 
   it("allows different rooms to advance independently", async () => {
@@ -132,5 +129,47 @@ describe("RoundMachineLockService", () => {
       acquired: true,
       result: "room-1-advanced",
     });
+  });
+
+  it("uses Redis leadership when Redis is available", async () => {
+    const { prisma } = buildPrisma();
+    const lock = { key: "round-machine:room-1", value: "lock-value" };
+    const redis = {
+      isAvailable: jest.fn().mockReturnValue(true),
+      acquireLock: jest.fn().mockResolvedValue(lock),
+      releaseLock: jest.fn().mockResolvedValue(true),
+    };
+    const service = new RoundMachineLockService(prisma as any, redis as any);
+    const work = jest.fn().mockResolvedValue("advanced");
+
+    const result = await service.withRoomTickLock("room-1", work);
+
+    expect(result).toEqual({
+      acquired: true,
+      result: "advanced",
+    });
+    expect(redis.acquireLock).toHaveBeenCalledWith("round-machine:room-1", 20_000);
+    expect(redis.releaseLock).toHaveBeenCalledWith(lock);
+    expect(work).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips tick work when another instance owns the Redis lock", async () => {
+    const { prisma } = buildPrisma();
+    const redis = {
+      isAvailable: jest.fn().mockReturnValue(true),
+      acquireLock: jest.fn().mockResolvedValue(null),
+      releaseLock: jest.fn(),
+    };
+    const service = new RoundMachineLockService(prisma as any, redis as any);
+    const work = jest.fn();
+
+    const result = await service.withRoomTickLock("room-1", work);
+
+    expect(result).toEqual({
+      acquired: false,
+      reason: "REDIS_LOCKED",
+    });
+    expect(work).not.toHaveBeenCalled();
+    expect(redis.releaseLock).not.toHaveBeenCalled();
   });
 });

@@ -22,6 +22,14 @@ describe("HealthController", () => {
               status: "ok",
               database: { status: "ok" },
             }),
+            getRedisHealth: jest.fn().mockResolvedValue({
+              status: "ok",
+              redis: { enabled: false, available: false },
+            }),
+            getRealtimeHealth: jest.fn().mockResolvedValue({
+              status: "ok",
+              metrics: {},
+            }),
           },
         },
       ],
@@ -52,6 +60,16 @@ describe("HealthController", () => {
       .expect({
         status: "ok",
         database: { status: "ok" },
+      });
+  });
+
+  it("serves GET /health/realtime", async () => {
+    await request(app.getHttpServer())
+      .get("/health/realtime")
+      .expect(200)
+      .expect({
+        status: "ok",
+        metrics: {},
       });
   });
 });

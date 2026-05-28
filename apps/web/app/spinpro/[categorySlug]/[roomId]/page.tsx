@@ -204,6 +204,8 @@ export default function LiveRoomPage() {
             roomHref={roomHref}
             chipOptions={chipOptions}
             selectedChip={selectedChip}
+            gameMode={state.room.gameMode}
+            fixedEntryAmount={state.room.fixedEntryAmount}
             myEntry={myEntry}
             isPlacingEntry={isPlacingEntry}
             onSelectChip={setSelectedChip}

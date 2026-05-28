@@ -18,7 +18,7 @@ export class RoomsService {
       throw new BadRequestException("categorySlug is required.");
     }
 
-    return this.prisma.room.findMany({
+    const rooms = await this.prisma.room.findMany({
       where: {
         category: {
           slug: categorySlug,
@@ -33,12 +33,20 @@ export class RoomsService {
         code: true,
         name: true,
         status: true,
+        gameMode: true,
+        fixedEntryAmount: true,
         isPermanent: true,
         maxPlayers: true,
         roundDurationMs: true,
         activatedAt: true,
       },
     });
+
+    return rooms.map((room) => ({
+      ...room,
+      fixedEntryAmount: room.fixedEntryAmount?.toString() ?? null,
+      activatedAt: room.activatedAt?.toISOString() ?? null,
+    }));
   }
 
   async getRoomState(roomId: string) {
@@ -66,6 +74,8 @@ export class RoomsService {
         code: room.code,
         name: room.name,
         status: room.status,
+        gameMode: room.gameMode,
+        fixedEntryAmount: room.fixedEntryAmount?.toString() ?? null,
         isPermanent: room.isPermanent,
         maxPlayers: room.maxPlayers,
         roundDurationMs: room.roundDurationMs,

@@ -1,28 +1,44 @@
-import { Body, Controller, Logger, Param, Post, UseGuards } from "@nestjs/common";
-import { PlaceEntrySchema, type PlaceEntryInput } from "@kingspin/contracts";
-import { RoomGateway } from "../../gateways/room.gateway";
-import { AuthGuard } from "../auth-bridge/auth.guard";
-import { CurrentUser } from "../auth-bridge/current-user.decorator";
-import type { AuthBridgeUser } from "../auth-bridge/auth.types";
-import { ZodValidationPipe } from "../../pipes/zod-validation.pipe";
-import { EntriesService } from "./entries.service";
+import {
+  Body,
+  Controller,
+  Logger,
+  Param,
+  Post,
+  Optional,
+  UseGuards,
+} from '@nestjs/common';
+import { PlaceEntrySchema, type PlaceEntryInput } from '@kingspin/contracts';
+import { RoomGateway } from '../../gateways/room.gateway';
+import { AuthGuard } from '../auth-bridge/auth.guard';
+import { CurrentUser } from '../auth-bridge/current-user.decorator';
+import type { AuthBridgeUser } from '../auth-bridge/auth.types';
+import { ZodValidationPipe } from '../../pipes/zod-validation.pipe';
+import { EntryRateLimitService } from './entry-rate-limit.service';
+import { EntriesService } from './entries.service';
 
-@Controller("rooms/:roomId/entries")
+@Controller('rooms/:roomId/entries')
 export class EntriesController {
   private readonly logger = new Logger(EntriesController.name);
 
   constructor(
     private readonly entriesService: EntriesService,
     private readonly roomGateway: RoomGateway,
+    @Optional() private readonly entryRateLimitService?: EntryRateLimitService,
   ) {}
 
   @Post()
   @UseGuards(AuthGuard)
   async placeEntry(
-    @Param("roomId") roomId: string,
+    @Param('roomId') roomId: string,
     @CurrentUser() user: AuthBridgeUser,
     @Body(new ZodValidationPipe(PlaceEntrySchema)) body: PlaceEntryInput,
   ) {
+    await this.entryRateLimitService?.assertAllowed({
+      roomId,
+      userId: user.id,
+      idempotencyKey: body.idempotencyKey,
+    });
+
     const result = await this.entriesService.placeEntryForUser({
       roomId,
       userId: user.id,
@@ -30,7 +46,9 @@ export class EntriesController {
       idempotencyKey: body.idempotencyKey,
     });
 
-    const eventType = result.reused ? "ENTRY_REUSED" : "ENTRY_PLACED";
+    const eventType = result.reused ? 'ENTRY_REUSED' : 'ENTRY_PLACED';
+
+    this.roomGateway.invalidateRoomState(roomId);
 
     /**
      * Important performance fix:

@@ -1,9 +1,12 @@
 import { Module } from "@nestjs/common";
+import { PrismaModule } from "../../prisma/prisma.module";
+import { AdminRbacGuard } from "./admin-rbac.guard";
 import { AuthBridgeService } from "./auth-bridge.service";
 import { AuthGuard } from "./auth.guard";
 
 @Module({
-  providers: [AuthBridgeService, AuthGuard],
-  exports: [AuthBridgeService, AuthGuard],
+  imports: [PrismaModule],
+  providers: [AuthBridgeService, AuthGuard, AdminRbacGuard],
+  exports: [AuthBridgeService, AuthGuard, AdminRbacGuard],
 })
 export class AuthBridgeModule {}

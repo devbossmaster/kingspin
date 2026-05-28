@@ -1,38 +1,102 @@
 import { Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
-import { AdminDevGuard } from "../../../guards/admin-dev.guard";
+import { AdminAuditAction, Role } from "@kingspin/db";
+import { AdminRbacGuard, AdminRoles } from "../../auth-bridge/admin-rbac.guard";
+import { AuthGuard } from "../../auth-bridge/auth.guard";
+import { CurrentAdmin } from "../../auth-bridge/current-admin.decorator";
+import type { AdminBridgeUser } from "../../auth-bridge/auth.types";
+import { AuditService } from "../../audit/audit.service";
 import { RoundsService } from "../../rounds/rounds.service";
 
 @Controller("admin/rooms/:roomId/rounds")
-@UseGuards(AdminDevGuard)
+@UseGuards(AuthGuard, AdminRbacGuard)
 export class AdminRoundsController {
-  constructor(private readonly roundsService: RoundsService) {}
+  constructor(
+    private readonly roundsService: RoundsService,
+    private readonly auditService: AuditService,
+  ) {}
 
   @Post("start")
-  startRound(@Param("roomId") roomId: string) {
-    return this.roundsService.startOpenRoundForRoom(roomId);
+  @AdminRoles(Role.ADMIN)
+  async startRound(@CurrentAdmin() admin: AdminBridgeUser, @Param("roomId") roomId: string) {
+    const result = await this.roundsService.startOpenRoundForRoom(roomId);
+
+    await this.auditService.recordAdminAction({
+      actorId: admin.id,
+      action: AdminAuditAction.ROUND_STARTED,
+      targetType: "ROOM",
+      targetId: roomId,
+      after: result,
+    });
+
+    return result;
   }
 
   @Post("lock-current")
-  lockCurrentRound(@Param("roomId") roomId: string) {
-    return this.roundsService.lockCurrentRoundForRoom(roomId);
+  @AdminRoles(Role.ADMIN)
+  async lockCurrentRound(@CurrentAdmin() admin: AdminBridgeUser, @Param("roomId") roomId: string) {
+    const result = await this.roundsService.lockCurrentRoundForRoom(roomId);
+
+    await this.auditService.recordAdminAction({
+      actorId: admin.id,
+      action: AdminAuditAction.ROUND_LOCKED,
+      targetType: "ROOM",
+      targetId: roomId,
+      after: result,
+    });
+
+    return result;
   }
 
   @Post("draw-current")
-  drawCurrentRound(@Param("roomId") roomId: string) {
-    return this.roundsService.drawCurrentRoundForRoom(roomId);
+  @AdminRoles(Role.ADMIN)
+  async drawCurrentRound(@CurrentAdmin() admin: AdminBridgeUser, @Param("roomId") roomId: string) {
+    const result = await this.roundsService.drawCurrentRoundForRoom(roomId);
+
+    await this.auditService.recordAdminAction({
+      actorId: admin.id,
+      action: AdminAuditAction.ROUND_DRAWN,
+      targetType: "ROOM",
+      targetId: roomId,
+      after: result,
+    });
+
+    return result;
   }
 
   @Post("settle-current")
-  settleCurrentRound(@Param("roomId") roomId: string) {
-    return this.roundsService.settleCurrentRoundForRoom(roomId);
+  @AdminRoles(Role.ADMIN)
+  async settleCurrentRound(@CurrentAdmin() admin: AdminBridgeUser, @Param("roomId") roomId: string) {
+    const result = await this.roundsService.settleCurrentRoundForRoom(roomId);
+
+    await this.auditService.recordAdminAction({
+      actorId: admin.id,
+      action: AdminAuditAction.ROUND_SETTLED,
+      targetType: "ROOM",
+      targetId: roomId,
+      after: result,
+    });
+
+    return result;
   }
 
   @Post("cancel-current")
-  cancelCurrentRound(@Param("roomId") roomId: string) {
-    return this.roundsService.cancelCurrentRoundForRoom(roomId);
+  @AdminRoles(Role.ADMIN)
+  async cancelCurrentRound(@CurrentAdmin() admin: AdminBridgeUser, @Param("roomId") roomId: string) {
+    const result = await this.roundsService.cancelCurrentRoundForRoom(roomId);
+
+    await this.auditService.recordAdminAction({
+      actorId: admin.id,
+      action: AdminAuditAction.ROUND_CANCELLED,
+      targetType: "ROOM",
+      targetId: roomId,
+      after: result,
+    });
+
+    return result;
   }
 
   @Get("latest-result")
+  @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.RISK, Role.VIEWER)
   latestResult(@Param("roomId") roomId: string) {
     return this.roundsService.getLatestRoundResultForRoom(roomId);
   }

@@ -35,6 +35,8 @@ export type PlaceEntryResponse = {
   reused: boolean;
 };
 
+const inFlightRequests = new Map<string, Promise<unknown>>();
+
 async function requestJson<TResponse>(
   path: string,
   init?: RequestInit,
@@ -63,6 +65,26 @@ async function requestJson<TResponse>(
   return payload as TResponse;
 }
 
+function requestJsonDeduped<TResponse>(
+  key: string,
+  path: string,
+  init?: RequestInit,
+): Promise<TResponse> {
+  const existing = inFlightRequests.get(key);
+
+  if (existing) {
+    return existing as Promise<TResponse>;
+  }
+
+  const request = requestJson<TResponse>(path, init).finally(() => {
+    inFlightRequests.delete(key);
+  });
+
+  inFlightRequests.set(key, request);
+
+  return request;
+}
+
 export const apiClient = {
   getCategories() {
     return requestJson<CategoryListItem[]>("/categories");
@@ -75,19 +97,23 @@ export const apiClient = {
   },
 
   getMe() {
-    return requestJson<CurrentUser>("/me");
+    return requestJsonDeduped<CurrentUser>("me", "/me");
   },
 
   getMeWallet() {
-    return requestJson<MeWallet>("/me/wallet");
+    return requestJsonDeduped<MeWallet>("me-wallet", "/me/wallet");
   },
 
   getRoomLiveState(roomId: string) {
-    return requestJson<RoomLiveState>(`/rooms/${roomId}/live-state`);
+    return requestJsonDeduped<RoomLiveState>(
+      `room-live-state:${roomId}`,
+      `/rooms/${roomId}/live-state`,
+    );
   },
 
   getLatestRoundResult(roomId: string) {
-    return requestJson<LatestRoundResult>(
+    return requestJsonDeduped<LatestRoundResult>(
+      `latest-round-result:${roomId}`,
       `/rooms/${roomId}/rounds/latest-result`,
     );
   },
@@ -104,50 +130,113 @@ export const apiClient = {
   },
 
   admin: {
-    startMachine(roomId: string, adminKey: string) {
+    getDashboard() {
+      return requestJson("/admin/dashboard");
+    },
+
+    getUsers(search?: string) {
+      const params = new URLSearchParams();
+      if (search) params.set("search", search);
+      const query = params.toString();
+
+      return requestJson(`/admin/users${query ? `?${query}` : ""}`);
+    },
+
+    getRooms() {
+      return requestJson("/admin/rooms");
+    },
+
+    getRounds() {
+      return requestJson("/admin/rounds");
+    },
+
+    getLedger() {
+      return requestJson("/admin/ledger");
+    },
+
+    getDeposits() {
+      return requestJson("/admin/payments/deposits");
+    },
+
+    approveDeposit(id: string) {
+      return requestJson(`/admin/payments/deposits/${id}/approve`, {
+        method: "PATCH",
+      });
+    },
+
+    getWithdrawals() {
+      return requestJson("/admin/payments/withdrawals");
+    },
+
+    approveWithdrawal(id: string) {
+      return requestJson(`/admin/payments/withdrawals/${id}/approve`, {
+        method: "PATCH",
+      });
+    },
+
+    rejectWithdrawal(id: string, reason: string) {
+      return requestJson(`/admin/payments/withdrawals/${id}/reject`, {
+        method: "PATCH",
+        body: JSON.stringify({ reason }),
+      });
+    },
+
+    getRiskEvents() {
+      return requestJson("/admin/risk");
+    },
+
+    reviewRiskEvent(id: string, status: string) {
+      return requestJson(`/admin/risk/${id}/review`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      });
+    },
+
+    getAuditLogs() {
+      return requestJson("/admin/audit");
+    },
+
+    getJobs() {
+      return requestJson("/admin/jobs");
+    },
+
+    startMachine(roomId: string) {
       return requestJson(`/admin/rooms/${roomId}/machine/start`, {
         method: "POST",
-        headers: { "x-admin-dev-key": adminKey },
       });
     },
 
-    stopMachine(roomId: string, adminKey: string) {
+    stopMachine(roomId: string) {
       return requestJson(`/admin/rooms/${roomId}/machine/stop`, {
         method: "POST",
-        headers: { "x-admin-dev-key": adminKey },
       });
     },
 
-    getMachineStatus(roomId: string, adminKey: string) {
-      return requestJson(`/admin/rooms/${roomId}/machine/status`, {
-        headers: { "x-admin-dev-key": adminKey },
-      });
+    getMachineStatus(roomId: string) {
+      return requestJson(`/admin/rooms/${roomId}/machine/status`);
     },
 
-    advanceOnce(roomId: string, adminKey: string, force = false) {
+    advanceOnce(roomId: string, force = false) {
       const params = new URLSearchParams({ force: String(force) });
 
       return requestJson(
         `/admin/rooms/${roomId}/machine/advance-once?${params.toString()}`,
         {
           method: "POST",
-          headers: { "x-admin-dev-key": adminKey },
         },
       );
     },
 
-    createRoom(input: unknown, adminKey: string) {
+    createRoom(input: unknown) {
       return requestJson("/admin/rooms", {
         method: "POST",
-        headers: { "x-admin-dev-key": adminKey },
         body: JSON.stringify(input),
       });
     },
 
-    updateRoomStatus(roomId: string, command: AdminRoomCommand, adminKey: string) {
+    updateRoomStatus(roomId: string, command: AdminRoomCommand) {
       return requestJson(`/admin/rooms/${roomId}/${command}`, {
         method: "PATCH",
-        headers: { "x-admin-dev-key": adminKey },
       });
     },
   },

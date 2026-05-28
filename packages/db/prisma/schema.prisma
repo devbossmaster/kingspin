@@ -3,14 +3,19 @@ generator client {
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 enum Role {
   PLAYER
   ADMIN
   SUPER_ADMIN
+  OWNER
+  SUPPORT
+  FINANCE
+  RISK
+  VIEWER
 }
 
 enum RoomStatus {
@@ -49,6 +54,7 @@ enum LedgerTransactionType {
   WITHDRAWAL_REQUEST
   WITHDRAWAL_APPROVED
   WITHDRAWAL_REJECTED
+  WITHDRAWAL_REFUND
 }
 
 enum LedgerEntryDirection {
@@ -62,30 +68,122 @@ enum AdminAuditAction {
   ROOM_PAUSED
   ROOM_CLOSED
   ROOM_ARCHIVED
+  ROOM_CONFIGURED
   CATEGORY_CREATED
   CATEGORY_UPDATED
   ADMIN_CREDIT
   ADMIN_DEBIT
+  DEPOSIT_APPROVED
+  DEPOSIT_CANCELLED
+  WITHDRAWAL_APPROVED
+  WITHDRAWAL_REJECTED
+  WITHDRAWAL_MARKED_PROCESSING
+  WITHDRAWAL_MARKED_PAID
+  WITHDRAWAL_MARKED_FAILED
+  RISK_EVENT_REVIEWED
+  RISK_EVENT_DISMISSED
+  RISK_EVENT_ACTIONED
+  USER_SUSPENDED
+  USER_UNSUSPENDED
+  ROUND_STARTED
+  ROUND_LOCKED
+  ROUND_DRAWN
+  ROUND_SETTLED
+  ROUND_CANCELLED
+}
+
+enum GameMode {
+  FLEXIBLE_PROPORTIONAL
+  FIXED_EQUAL_CHANCE
+}
+
+enum PaymentProvider {
+  MANUAL
+  MOCK
+  NOWPAYMENTS
+  CHAPA
+  STRIPE
+  CUSTOM
+}
+
+enum DepositStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  EXPIRED
+  CANCELLED
+}
+
+enum WithdrawalStatus {
+  PENDING_REVIEW
+  APPROVED
+  PROCESSING
+  PAID
+  REJECTED
+  FAILED
+  CANCELLED
+}
+
+enum RiskEventType {
+  IDEMPOTENCY_MISMATCH
+  ENTRY_RATE_LIMIT_HIT
+  INSUFFICIENT_BALANCE_SPAM
+  DUPLICATE_IP_DEVICE
+  DEPOSIT_WEBHOOK_MISMATCH
+  WITHDRAWAL_AMOUNT_SPIKE
+  FAST_DEPOSIT_WITHDRAWAL
+  ABNORMAL_WIN_PATTERN
+  ADMIN_ROUND_INTERVENTION
+  PAYMENT_FAILURE_PATTERN
+  MANUAL_FLAG
+}
+
+enum RiskEventSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum RiskEventStatus {
+  OPEN
+  REVIEWED
+  DISMISSED
+  ACTIONED
+}
+
+enum WorkerJobStatus {
+  QUEUED
+  ACTIVE
+  COMPLETED
+  RETRYING
+  FAILED
+  DEAD_LETTER
 }
 
 model User {
-  id            String   @id @default(cuid())
-  email         String   @unique
-  username      String   @unique
+  id            String    @id @default(cuid())
+  email         String    @unique
+  username      String    @unique
   fullName      String
-  emailVerified Boolean  @default(false)
-  role          Role     @default(PLAYER)
+  emailVerified Boolean   @default(false)
+  role          Role      @default(PLAYER)
   image         String?
   bannedAt      DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   walletAccounts WalletAccount[]
-  entries         Entry[]
-  sessions        Session[]
-  accounts        Account[]
-  createdRooms    Room[]          @relation("RoomCreatedByAdmin")
-  adminAuditLogs  AdminAuditLog[] @relation("AdminAuditActor")
+  entries        Entry[]
+  deposits       Deposit[]
+  withdrawals    Withdrawal[]   @relation("WithdrawalUser")
+  reviewedWithdrawals Withdrawal[] @relation("WithdrawalReviewedByAdmin")
+  riskEvents     RiskEvent[]    @relation("RiskEventUser")
+  reviewedRiskEvents RiskEvent[] @relation("RiskEventReviewedByAdmin")
+  sessions       Session[]
+  accounts       Account[]
+  createdRooms   Room[]          @relation("RoomCreatedByAdmin")
+  adminAuditLogs AdminAuditLog[] @relation("AdminAuditActor")
 
   @@map("users")
 }
@@ -165,7 +263,9 @@ model Room {
   code             String
   name             String?
   status           RoomStatus @default(DRAFT)
-  isPermanent      Boolean @default(false)
+  gameMode         GameMode   @default(FLEXIBLE_PROPORTIONAL)
+  fixedEntryAmount BigInt?
+  isPermanent      Boolean    @default(false)
   maxPlayers       Int        @default(24)
   roundDurationMs  Int        @default(45000)
   createdByAdminId String?
@@ -182,46 +282,48 @@ model Room {
 
   @@unique([categoryId, code])
   @@index([categoryId, status])
+  @@index([gameMode])
   @@index([status])
   @@index([isPermanent])
   @@map("rooms")
 }
 
 model Round {
-  id               String      @id @default(cuid())
-  roomId           String
-  roundNumber      Int
-  status           RoundStatus @default(OPEN)
+  id          String      @id @default(cuid())
+  roomId      String
+  roundNumber Int
+  status      RoundStatus @default(OPEN)
 
-  openedAt         DateTime    @default(now())
-  locksAt          DateTime?
-  lockedAt         DateTime?
-  drawingAt        DateTime?
-  spinningAt       DateTime?
-  settlingAt       DateTime?
-  completedAt      DateTime?
-  cancelledAt      DateTime?
+  openedAt    DateTime  @default(now())
+  locksAt     DateTime?
+  lockedAt    DateTime?
+  drawingAt   DateTime?
+  spinningAt  DateTime?
+  settlingAt  DateTime?
+  completedAt DateTime?
+  cancelledAt DateTime?
 
-  totalEntryAmount BigInt      @default(0)
-  houseFeeAmount    BigInt      @default(0)
-  payoutAmount      BigInt      @default(0)
+  totalEntryAmount BigInt @default(0)
+  houseFeeAmount   BigInt @default(0)
+  payoutAmount     BigInt @default(0)
 
-  serverSeedHash    String?
-  serverSeedReveal  String?
-  winningTicket     BigInt?
-  winnerUserId      String?
-  winnerEntryId     String?
-  spinAngle         Float?
+  serverSeedHash   String?
+  serverSeedReveal String?
+  winningTicket    BigInt?
+  winnerUserId     String?
+  winnerEntryId    String?
+  spinAngle        Float?
 
-  idempotencyKey    String?     @unique
-  createdAt         DateTime    @default(now())
-  updatedAt         DateTime    @updatedAt
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   room    Room    @relation(fields: [roomId], references: [id])
   entries Entry[]
 
   @@unique([roomId, roundNumber])
-  @@index([roomId, status])
+  @@index([roomId, status, roundNumber])
+  @@index([roomId, status, roundNumber, completedAt])
   @@index([status])
   @@map("rounds")
 }
@@ -242,7 +344,7 @@ model Entry {
 
   @@unique([roundId, userId])
   @@index([userId, createdAt])
-  @@index([roundId])
+  @@index([roundId, createdAt, id])
   @@map("entries")
 }
 
@@ -256,6 +358,7 @@ model WalletAccount {
 
   user          User?         @relation(fields: [userId], references: [id])
   ledgerEntries LedgerEntry[]
+  withdrawals   Withdrawal[]
 
   @@unique([userId, type])
   @@index([type])
@@ -279,7 +382,7 @@ model LedgerTransaction {
 }
 
 model LedgerEntry {
-  id                  String               @id @default(cuid())
+  id                   String               @id @default(cuid())
   transactionId        String
   walletAccountId      String
   direction            LedgerEntryDirection
@@ -295,16 +398,115 @@ model LedgerEntry {
   @@map("ledger_entries")
 }
 
-model AdminAuditLog {
-  id          String           @id @default(cuid())
-  actorId     String?
-  action      AdminAuditAction
-  targetType  String
-  targetId    String?
-  before      Json?
-  after       Json?
+model Deposit {
+  id                String          @id @default(cuid())
+  userId            String
+  provider          PaymentProvider
+  providerReference String?
+  amount            BigInt
+  currency          String          @default("COIN")
+  status            DepositStatus   @default(PENDING)
+  idempotencyKey    String          @unique
+  metadata          Json?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  confirmedAt       DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([provider, providerReference])
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([provider, status, createdAt])
+  @@map("deposits")
+}
+
+model Withdrawal {
+  id                String           @id @default(cuid())
+  userId            String
+  walletAccountId   String
+  provider          PaymentProvider
+  amount            BigInt
+  currency          String           @default("COIN")
+  destination       Json
+  status            WithdrawalStatus @default(PENDING_REVIEW)
+  providerReference String?
+  requestedAt       DateTime         @default(now())
+  reviewedAt        DateTime?
+  reviewedByAdminId String?
+  paidAt            DateTime?
+  rejectionReason   String?
+  idempotencyKey    String           @unique
+  metadata          Json?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  user            User          @relation("WithdrawalUser", fields: [userId], references: [id])
+  walletAccount   WalletAccount @relation(fields: [walletAccountId], references: [id])
+  reviewedByAdmin User?         @relation("WithdrawalReviewedByAdmin", fields: [reviewedByAdminId], references: [id])
+
+  @@index([userId, requestedAt])
+  @@index([walletAccountId, requestedAt])
+  @@index([status, requestedAt])
+  @@index([provider, status, requestedAt])
+  @@map("withdrawals")
+}
+
+model RiskEvent {
+  id                String            @id @default(cuid())
+  userId            String?
+  roomId            String?
+  roundId           String?
+  type              RiskEventType
+  severity          RiskEventSeverity
+  status            RiskEventStatus   @default(OPEN)
+  metadata          Json?
+  createdAt         DateTime          @default(now())
+  reviewedByAdminId String?
+  reviewedAt        DateTime?
+
+  user            User? @relation("RiskEventUser", fields: [userId], references: [id])
+  reviewedByAdmin User? @relation("RiskEventReviewedByAdmin", fields: [reviewedByAdminId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([roomId, createdAt])
+  @@index([roundId, createdAt])
+  @@index([type, createdAt])
+  @@index([severity, status, createdAt])
+  @@map("risk_events")
+}
+
+model WorkerJobLog {
+  id          String          @id @default(cuid())
+  queue       String
+  jobId       String
+  name        String
+  status      WorkerJobStatus @default(QUEUED)
+  attempts    Int             @default(0)
+  maxAttempts Int             @default(1)
+  error       String?
   metadata    Json?
-  createdAt   DateTime         @default(now())
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  completedAt DateTime?
+  failedAt    DateTime?
+
+  @@unique([queue, jobId])
+  @@index([queue, status, createdAt])
+  @@index([status, createdAt])
+  @@map("worker_job_logs")
+}
+
+model AdminAuditLog {
+  id         String           @id @default(cuid())
+  actorId    String?
+  action     AdminAuditAction
+  targetType String
+  targetId   String?
+  before     Json?
+  after      Json?
+  metadata   Json?
+  createdAt  DateTime         @default(now())
 
   actor User? @relation("AdminAuditActor", fields: [actorId], references: [id])
 

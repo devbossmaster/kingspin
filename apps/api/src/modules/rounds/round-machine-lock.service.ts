@@ -1,10 +1,13 @@
-import { Injectable, Logger } from "@nestjs/common";
+import { Injectable, Logger, Optional } from "@nestjs/common";
 import { getApiEnv } from "../../config/api-env";
 import { PrismaService } from "../../prisma/prisma.service";
+import { RealtimeMetricsService } from "../redis/realtime-metrics.service";
+import { RedisService } from "../redis/redis.service";
 
 export type RoundMachineLockSkipReason =
   | "PROCESS_LOCKED"
-  | "DATABASE_LOCKED";
+  | "DATABASE_LOCKED"
+  | "REDIS_LOCKED";
 
 export type RoundMachineLockResult<T> =
   | {
@@ -22,12 +25,11 @@ export class RoundMachineLockService {
   private readonly activeRooms = new Set<string>();
   private hasLoggedProductionPolicy = false;
 
-  private readonly transactionOptions = {
-    maxWait: 2_000,
-    timeout: 15_000,
-  } as const;
-
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly redisService?: RedisService,
+    @Optional() private readonly metrics?: RealtimeMetricsService,
+  ) {}
 
   async withRoomTickLock<T>(
     roomId: string,
@@ -45,88 +47,122 @@ export class RoundMachineLockService {
     try {
       this.logProductionPolicy();
 
-      return await this.runWithDatabaseLeadership(roomId, work);
-    } finally {
-      this.activeRooms.delete(roomId);
-    }
-  }
+      /**
+       * Important speed fix:
+       *
+       * Do not hold a PostgreSQL transaction open around the whole round-machine
+       * work loop. Under Supabase pooler load, that can starve normal requests
+       * like POST /entries and /me/wallet.
+       *
+       * For the current single-process/dev setup, the in-process room lock is
+       * the fast path. Production horizontal scaling should use Redis locking or
+       * a proper DB lease table, not a long advisory transaction lock.
+       */
+      const redisLock = await this.tryAcquireRedisLeadership(roomId);
 
-  private async runWithDatabaseLeadership<T>(
-    roomId: string,
-    work: () => Promise<T>,
-  ): Promise<RoundMachineLockResult<T>> {
-    const lockKey = `round-machine:${roomId}`;
+      if (this.redisService?.isAvailable() && !redisLock) {
+        this.metrics?.increment("redisLockContentionCount");
+        return {
+          acquired: false,
+          reason: "REDIS_LOCKED",
+        };
+      }
 
-    try {
-      return await this.prisma.$transaction(
-        async (tx) => {
-          const lockResult = await tx.$queryRaw<Array<{ locked: boolean }>>`
-            SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})::bigint)::boolean AS locked
-          `;
+      const shouldUseDatabaseLeadership =
+        !redisLock && this.shouldUseDatabaseLeadership();
 
-          const locked = lockResult[0]?.locked === true;
+      try {
+        if (shouldUseDatabaseLeadership) {
+          const acquiredDatabaseLeadership =
+            await this.tryAcquireDatabaseLeadership(roomId);
 
-          if (!locked) {
+          if (!acquiredDatabaseLeadership) {
             return {
               acquired: false,
-              reason: "DATABASE_LOCKED" as const,
+              reason: "DATABASE_LOCKED",
             };
           }
-
-          /**
-           * Important correctness fix:
-           *
-           * pg_try_advisory_xact_lock is held only until this transaction ends.
-           * Therefore work() must run before this transaction returns.
-           *
-           * The old code acquired the xact lock inside a tiny transaction, ended
-           * that transaction, released the lock, and only then ran work().
-           */
-          const result = await work();
-
-          return {
-            acquired: true,
-            result,
-          };
-        },
-        this.transactionOptions,
-      );
-    } catch (error) {
-      const env = getApiEnv();
-      const message =
-        error instanceof Error ? error.message : "Unknown advisory lock error";
-
-      /**
-       * In local development, keep the app usable even if Postgres advisory locks
-       * are unavailable.
-       */
-      if (env.APP_ENV === "local") {
-        this.logger.warn(
-          `Round machine advisory leadership unavailable for room ${roomId}; using process-only lock in ${env.APP_ENV}: ${message}`,
-        );
+        }
 
         return {
           acquired: true,
           result: await work(),
         };
+      } finally {
+        if (redisLock) {
+          await this.redisService?.releaseLock(redisLock);
+        }
+      }
+    } finally {
+      this.activeRooms.delete(roomId);
+    }
+  }
+
+  private async tryAcquireRedisLeadership(roomId: string) {
+    const env = getApiEnv();
+
+    if (!this.redisService?.isAvailable()) {
+      if (env.APP_ENV === "production") {
+        throw new Error(
+          "Round machine Redis locking is required in production before horizontal scaling.",
+        );
       }
 
-      /**
-       * In deployed environments, do not crash the round-machine loop just
-       * because Supabase pooler could not start this tiny transaction. Skip this
-       * tick and try again on the next scheduler pass.
-       *
-       * This directly addresses noisy logs like:
-       * "Unable to start a transaction."
-       */
+      return null;
+    }
+
+    const lock = await this.redisService.acquireLock(
+      `round-machine:${roomId}`,
+      20_000,
+    );
+
+    if (lock) {
+      this.metrics?.increment("redisLockAcquiredCount");
+    }
+
+    return lock;
+  }
+
+  private shouldUseDatabaseLeadership() {
+    const env = getApiEnv();
+
+    /**
+     * Keep local/dev fast. Supabase pooler pressure is currently hurting the
+     * player entry path more than this advisory check helps.
+     */
+    if (env.APP_ENV !== "production") {
+      return false;
+    }
+
+    /**
+     * Redis is the production distributed leadership path. The database
+     * advisory helper is kept as a reviewed fallback hook, but it should not
+     * hold a transaction around the full machine tick.
+     */
+    return false;
+  }
+
+  private async tryAcquireDatabaseLeadership(
+    roomId: string,
+  ): Promise<boolean> {
+    const lockKey = `round-machine:${roomId}`;
+
+    try {
+      const lockResult = await this.prisma.$queryRaw<Array<{ locked: boolean }>>`
+        SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})::bigint)::boolean AS locked
+      `;
+
+      return lockResult[0]?.locked === true;
+    } catch (error) {
+      const env = getApiEnv();
+      const message =
+        error instanceof Error ? error.message : "Unknown advisory lock error";
+
       this.logger.warn(
-        `Round machine skipped tick for room ${roomId}; advisory leadership transaction unavailable in ${env.APP_ENV}: ${message}`,
+        `Round machine advisory leadership unavailable for room ${roomId}; skipping DB leadership in ${env.APP_ENV}: ${message}`,
       );
 
-      return {
-        acquired: false,
-        reason: "DATABASE_LOCKED",
-      };
+      return false;
     }
   }
 
@@ -139,15 +175,8 @@ export class RoundMachineLockService {
 
     this.hasLoggedProductionPolicy = true;
 
-    if (!env.ENABLE_REDIS) {
-      this.logger.warn(
-        "Production round machine is using PostgreSQL advisory transaction locks. Configure Redis locks/adapter before horizontal scaling.",
-      );
-      return;
-    }
-
     this.logger.warn(
-      "ENABLE_REDIS=true, but Redis round-machine locking is not wired yet. PostgreSQL advisory transaction locks remain the active safety layer.",
+      "Round machine requires Redis locking before production horizontal scaling. Set ENABLE_REDIS=true and REDIS_URL for distributed leadership.",
     );
   }
 }

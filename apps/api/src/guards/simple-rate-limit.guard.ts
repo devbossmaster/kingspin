@@ -45,7 +45,7 @@ export class SimpleRateLimitGuard implements CanActivate {
         methods: ["POST"],
         pattern: /^\/rooms\/[^/]+\/entries\/?$/,
         windowMs: 60_000,
-        maxRequests: options.isProduction ? 10 : 60,
+        maxRequests: options.isProduction ? 240 : 600,
       },
       {
         name: "public-live-state",

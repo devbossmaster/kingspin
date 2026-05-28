@@ -88,6 +88,7 @@ describe("HttpExceptionFilter", () => {
       ADMIN_DEV_KEY: "admin-secret",
       RESEND_API_KEY: "resend-test",
       EMAIL_FROM: "SpinPro <auth@spinpro.com>",
+      PAYMENT_PROVIDER: "MANUAL",
     };
     resetApiEnvForTesting();
 

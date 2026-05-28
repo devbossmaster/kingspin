@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   EntryWithPlayerSnapshot,
   LatestRoundResult,
@@ -46,13 +46,16 @@ export function useRoom(roomId: string) {
   const [walletError, setWalletError] = useState<string | null>(null);
   const [isPlacingEntry, setIsPlacingEntry] = useState(false);
   const [fastWallet, setFastWallet] = useState<WalletSnapshot | null>(null);
+  const placingEntryRef = useRef(false);
 
   const user = useAuthStore((store) => store.user);
   const wallet = useAuthStore((store) => store.wallet);
   const fetchMe = useAuthStore((store) => store.fetchMe);
   const fetchWallet = useAuthStore((store) => store.fetchWallet);
 
-  const setConnectionStatus = useRoomStore((store) => store.setConnectionStatus);
+  const setConnectionStatus = useRoomStore(
+    (store) => store.setConnectionStatus,
+  );
   const setChipOptions = useRoomStore((store) => store.setChipOptions);
   const showWinner = useRoomStore((store) => store.showWinner);
   const dismissWinner = useRoomStore((store) => store.dismissWinner);
@@ -72,42 +75,45 @@ export function useRoom(roomId: string) {
     [setChipOptions],
   );
 
-  const applyEntryPlacementResult = useCallback((result: PlaceEntryResponse) => {
-    setState((currentState) => {
-      if (!currentState) {
-        return currentState;
-      }
-
-      const confirmedEntry: LiveEntry = {
-        ...result.entry,
-        player: result.player,
-      };
-
-      const entriesWithoutDuplicate = currentState.entries.filter((entry) => {
-        if (entry.id === confirmedEntry.id) {
-          return false;
+  const applyEntryPlacementResult = useCallback(
+    (result: PlaceEntryResponse) => {
+      setState((currentState) => {
+        if (!currentState) {
+          return currentState;
         }
 
-        return !(
-          entry.roundId === confirmedEntry.roundId &&
-          entry.userId === confirmedEntry.userId
+        const confirmedEntry: LiveEntry = {
+          ...result.entry,
+          player: result.player,
+        };
+
+        const entriesWithoutDuplicate = currentState.entries.filter((entry) => {
+          if (entry.id === confirmedEntry.id) {
+            return false;
+          }
+
+          return !(
+            entry.roundId === confirmedEntry.roundId &&
+            entry.userId === confirmedEntry.userId
+          );
+        });
+
+        const entries = [...entriesWithoutDuplicate, confirmedEntry].sort(
+          compareEntriesByCreatedAt,
         );
+
+        return {
+          ...currentState,
+          currentRound: result.currentRound ?? currentState.currentRound,
+          entries,
+        };
       });
 
-      const entries = [...entriesWithoutDuplicate, confirmedEntry].sort(
-        compareEntriesByCreatedAt,
-      );
-
-      return {
-        ...currentState,
-        currentRound: result.currentRound ?? currentState.currentRound,
-        entries,
-      };
-    });
-
-    setFastWallet(result.wallet);
-    setWalletError(null);
-  }, []);
+      setFastWallet(result.wallet);
+      setWalletError(null);
+    },
+    [],
+  );
 
   const refresh = useCallback(async () => {
     if (!roomId) return;
@@ -117,7 +123,9 @@ export function useRoom(roomId: string) {
       const nextState = await apiClient.getRoomLiveState(roomId);
       applyState(nextState);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Failed to load room.");
+      setError(
+        caught instanceof Error ? caught.message : "Failed to load room.",
+      );
     }
   }, [applyState, roomId]);
 
@@ -259,13 +267,14 @@ export function useRoom(roomId: string) {
 
   const placeEntry = useCallback(
     async (amount: number) => {
-      if (!roomId || isPlacingEntry) return;
+      if (!roomId || placingEntryRef.current) return;
 
       if (!visibleWallet) {
         setError("Sign in required.");
         return;
       }
 
+      placingEntryRef.current = true;
       setIsPlacingEntry(true);
       setError(null);
 
@@ -284,7 +293,9 @@ export function useRoom(roomId: string) {
         }
       } catch (caught) {
         setFastWallet(null);
-        setError(caught instanceof Error ? caught.message : "Failed to place entry.");
+        setError(
+          caught instanceof Error ? caught.message : "Failed to place entry.",
+        );
 
         void refreshWallet();
 
@@ -292,21 +303,17 @@ export function useRoom(roomId: string) {
           void refresh();
         }
       } finally {
+        placingEntryRef.current = false;
         setIsPlacingEntry(false);
       }
     },
-    [
-      applyEntryPlacementResult,
-      isPlacingEntry,
-      refresh,
-      refreshWallet,
-      roomId,
-      visibleWallet,
-    ],
+    [applyEntryPlacementResult, refresh, refreshWallet, roomId, visibleWallet],
   );
 
   const entriesTotal = useMemo(() => {
-    return state?.entries.reduce((sum, entry) => sum + Number(entry.amount), 0) ?? 0;
+    return (
+      state?.entries.reduce((sum, entry) => sum + Number(entry.amount), 0) ?? 0
+    );
   }, [state?.entries]);
 
   const myEntry = useMemo<EntryWithPlayerSnapshot | null>(() => {

@@ -1,6 +1,10 @@
-import { Injectable, Logger } from "@nestjs/common";
-import { AdminAuditAction, Prisma } from "@kingspin/db";
-import { PrismaService } from "../../prisma/prisma.service";
+import {
+  Injectable,
+  InternalServerErrorException,
+  Logger,
+} from '@nestjs/common';
+import { AdminAuditAction, Prisma } from '@kingspin/db';
+import { PrismaService } from '../../prisma/prisma.service';
 
 export type RecordAdminAuditInput = {
   actorId?: string | null;
@@ -12,17 +16,11 @@ export type RecordAdminAuditInput = {
   metadata?: Prisma.InputJsonValue;
 };
 
-export type RecordAdminAuditResult =
-  | {
-      recorded: true;
-      auditLogId: string;
-      createdAt: string;
-    }
-  | {
-      recorded: false;
-      reason: string;
-      migrationTodo: string;
-    };
+export type RecordAdminAuditResult = {
+  recorded: true;
+  auditLogId: string;
+  createdAt: string;
+};
 
 @Injectable()
 export class AuditService {
@@ -57,27 +55,24 @@ export class AuditService {
       };
     } catch (error) {
       const reason =
-        error instanceof Error ? error.message : "Unknown audit write error";
+        error instanceof Error ? error.message : 'Unknown audit write error';
 
       this.logger.warn(
-        `Admin audit write failed for ${input.action} on ${input.targetType}:${input.targetId ?? "unknown"}: ${reason}`,
+        `Admin audit write failed for ${input.action} on ${input.targetType}:${input.targetId ?? 'unknown'}: ${reason}`,
       );
 
-      return {
-        recorded: false,
-        reason,
-        migrationTodo:
-          "Expand AdminAuditAction and AdminAuditLog fields when admin actions outgrow the current enum/schema.",
-      };
+      throw new InternalServerErrorException(
+        `Admin audit write failed. Mutation result requires manual review: ${reason}`,
+      );
     }
   }
 
   getMigrationTodos() {
     return [
-      "Add audit actor resolution from real admin auth once Better Auth/admin roles are fully wired.",
-      "Consider replacing the AdminAuditAction enum with a string action field or broaden the enum before adding many operational actions.",
-      "Add requestId, ipAddress, userAgent, and correlation metadata columns for production audit investigations.",
-      "Add retention/export strategy for compliance-grade audit logs.",
+      'Add audit actor resolution from real admin auth once Better Auth/admin roles are fully wired.',
+      'Consider replacing the AdminAuditAction enum with a string action field or broaden the enum before adding many operational actions.',
+      'Add requestId, ipAddress, userAgent, and correlation metadata columns for production audit investigations.',
+      'Add retention/export strategy for compliance-grade audit logs.',
     ];
   }
 }

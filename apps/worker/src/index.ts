@@ -23,7 +23,13 @@ function toJsonValue(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(serialized) as Prisma.InputJsonValue;
 }
 
-function logJob(queue: string, jobId: string, name: string, status: WorkerJobStatus, error?: unknown) {
+function logJob(
+  queue: string,
+  jobId: string,
+  name: string,
+  status: WorkerJobStatus,
+  error?: unknown,
+) {
   return prisma.workerJobLog.upsert({
     where: {
       queue_jobId: { queue, jobId },
@@ -32,8 +38,10 @@ function logJob(queue: string, jobId: string, name: string, status: WorkerJobSta
       name,
       status,
       attempts: { increment: 1 },
-      error: error instanceof Error ? error.message : error ? String(error) : null,
-      completedAt: status === WorkerJobStatus.COMPLETED ? new Date() : undefined,
+      error:
+        error instanceof Error ? error.message : error ? String(error) : null,
+      completedAt:
+        status === WorkerJobStatus.COMPLETED ? new Date() : undefined,
       failedAt:
         status === WorkerJobStatus.FAILED ||
         status === WorkerJobStatus.DEAD_LETTER
@@ -47,18 +55,59 @@ function logJob(queue: string, jobId: string, name: string, status: WorkerJobSta
       status,
       attempts: 1,
       maxAttempts: 5,
-      error: error instanceof Error ? error.message : error ? String(error) : null,
+      error:
+        error instanceof Error ? error.message : error ? String(error) : null,
     },
   });
 }
 
-function createWorker(queue: string, handler: (jobId: string, data: unknown) => Promise<void>) {
+function logJobResult(
+  queue: string,
+  jobId: string,
+  name: string,
+  metadata: Prisma.InputJsonValue,
+) {
+  return prisma.workerJobLog.upsert({
+    where: {
+      queue_jobId: { queue: `${queue}:result`, jobId: `result:${jobId}` },
+    },
+    update: {
+      name,
+      status: WorkerJobStatus.COMPLETED,
+      attempts: { increment: 1 },
+      error: null,
+      metadata,
+      completedAt: new Date(),
+      failedAt: null,
+    },
+    create: {
+      queue: `${queue}:result`,
+      jobId: `result:${jobId}`,
+      name,
+      status: WorkerJobStatus.COMPLETED,
+      attempts: 1,
+      maxAttempts: 5,
+      metadata,
+      completedAt: new Date(),
+    },
+  });
+}
+
+function createWorker(
+  queue: string,
+  handler: (jobId: string, data: unknown) => Promise<void>,
+) {
   const worker = new Worker(
     queue,
     async (job) => {
       await logJob(queue, job.id ?? job.name, job.name, WorkerJobStatus.ACTIVE);
       await handler(job.id ?? job.name, job.data);
-      await logJob(queue, job.id ?? job.name, job.name, WorkerJobStatus.COMPLETED);
+      await logJob(
+        queue,
+        job.id ?? job.name,
+        job.name,
+        WorkerJobStatus.COMPLETED,
+      );
     },
     {
       connection,
@@ -83,63 +132,48 @@ function createWorker(queue: string, handler: (jobId: string, data: unknown) => 
 }
 
 const workers = [
-  createWorker(queueNames.reconciliation, async (_jobId, data) => {
+  createWorker(queueNames.reconciliation, async (jobId, data) => {
     // Reports drift only. Corrections must stay admin-reviewed.
-    await prisma.workerJobLog.create({
-      data: {
-        queue: `${queueNames.reconciliation}:result`,
-        jobId: `result:${Date.now()}`,
-        name: "reconciliation-result-placeholder",
-        status: WorkerJobStatus.COMPLETED,
-        metadata: toJsonValue({ data, autoCorrected: false }),
-      },
-    });
+    await logJobResult(
+      queueNames.reconciliation,
+      jobId,
+      "reconciliation-result-placeholder",
+      toJsonValue({ data, autoCorrected: false }),
+    );
   }),
-  createWorker(queueNames.settlementRetry, async (_jobId, data) => {
+  createWorker(queueNames.settlementRetry, async (jobId, data) => {
     // Intentionally does not decide winners. API/round services own settlement.
-    await prisma.workerJobLog.create({
-      data: {
-        queue: `${queueNames.settlementRetry}:result`,
-        jobId: `result:${Date.now()}`,
-        name: "settlement-retry-placeholder",
-        status: WorkerJobStatus.COMPLETED,
-        metadata: toJsonValue({ data, sourceOfTruth: "postgres-round-service" }),
-      },
-    });
+    await logJobResult(
+      queueNames.settlementRetry,
+      jobId,
+      "settlement-retry-placeholder",
+      toJsonValue({ data, sourceOfTruth: "postgres-round-service" }),
+    );
   }),
-  createWorker(queueNames.refundRetry, async (_jobId, data) => {
+  createWorker(queueNames.refundRetry, async (jobId, data) => {
     // Refund execution must call existing idempotent wallet methods when wired.
-    await prisma.workerJobLog.create({
-      data: {
-        queue: `${queueNames.refundRetry}:result`,
-        jobId: `result:${Date.now()}`,
-        name: "refund-retry-placeholder",
-        status: WorkerJobStatus.COMPLETED,
-        metadata: toJsonValue({ data, idempotentWalletServiceRequired: true }),
-      },
-    });
+    await logJobResult(
+      queueNames.refundRetry,
+      jobId,
+      "refund-retry-placeholder",
+      toJsonValue({ data, idempotentWalletServiceRequired: true }),
+    );
   }),
-  createWorker(queueNames.fraudCheck, async (_jobId, data) => {
-    await prisma.workerJobLog.create({
-      data: {
-        queue: `${queueNames.fraudCheck}:result`,
-        jobId: `result:${Date.now()}`,
-        name: "fraud-check-placeholder",
-        status: WorkerJobStatus.COMPLETED,
-        metadata: toJsonValue({ data, advisoryOnly: true }),
-      },
-    });
+  createWorker(queueNames.fraudCheck, async (jobId, data) => {
+    await logJobResult(
+      queueNames.fraudCheck,
+      jobId,
+      "fraud-check-placeholder",
+      toJsonValue({ data, advisoryOnly: true }),
+    );
   }),
-  createWorker(queueNames.notification, async (_jobId, data) => {
-    await prisma.workerJobLog.create({
-      data: {
-        queue: `${queueNames.notification}:result`,
-        jobId: `result:${Date.now()}`,
-        name: "notification-placeholder",
-        status: WorkerJobStatus.COMPLETED,
-        metadata: toJsonValue({ data }),
-      },
-    });
+  createWorker(queueNames.notification, async (jobId, data) => {
+    await logJobResult(
+      queueNames.notification,
+      jobId,
+      "notification-placeholder",
+      toJsonValue({ data }),
+    );
   }),
 ];
 

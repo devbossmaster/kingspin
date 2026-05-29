@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { CircleDollarSign, Sparkles } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -20,30 +21,47 @@ export function AuthShell({
   footer,
 }: AuthShellProps) {
   return (
-    <main className="min-h-screen px-4 py-8 text-text-primary">
+    <main className="min-h-screen bg-[linear-gradient(135deg,#080C14_0%,#111827_48%,#241337_100%)] px-4 py-8 text-text-primary">
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-5xl items-center justify-center">
         <motion.section
           initial={{ opacity: 0, y: 18 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.35, ease: "easeOut" }}
-          className="arcadia-surface grid w-full overflow-hidden rounded-lg md:grid-cols-[0.85fr_1fr]"
+          className="grid w-full overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-card)] shadow-[0_28px_80px_rgba(0,0,0,0.42)] md:grid-cols-[0.9fr_1fr]"
         >
-          <div className="border-b border-[var(--border)] bg-[var(--bg-raised)]/70 p-6 md:border-b-0 md:border-r md:p-8">
-            <Link
-              href="/spinpro"
-              className="inline-flex items-center rounded-md border border-[var(--border-glow)] px-3 py-2 text-sm font-bold text-gold transition hover:border-[var(--gold)]"
-            >
-              SpinPro
-            </Link>
-            <p className="mt-8 text-xs font-black uppercase tracking-[0.18em] text-teal">
-              {eyebrow}
-            </p>
-            <h1 className="mt-3 font-display text-3xl font-black tracking-normal text-text-primary md:text-4xl">
-              {title}
-            </h1>
-            <p className="mt-4 max-w-sm text-sm leading-6 text-text-secondary">
-              {subtitle}
-            </p>
+          <div className="relative overflow-hidden border-b border-[var(--border)] bg-[var(--bg-raised)]/80 p-6 md:border-b-0 md:border-r md:p-8">
+            <div className="pointer-events-none absolute inset-0 opacity-35 [background-image:linear-gradient(rgba(255,255,255,0.06)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.045)_1px,transparent_1px)] [background-size:36px_36px]" />
+            <div className="relative">
+              <Link
+                href="/"
+                className="inline-flex items-center gap-2 rounded-md border border-[var(--border-glow)] px-3 py-2 text-sm font-bold text-gold transition hover:border-[var(--gold)]"
+              >
+                <Sparkles className="h-4 w-4" aria-hidden="true" />
+                KingSpin
+              </Link>
+              <p className="mt-8 text-xs font-black uppercase tracking-[0.18em] text-teal">
+                {eyebrow}
+              </p>
+              <h1 className="mt-3 font-display text-3xl font-black tracking-normal text-text-primary md:text-4xl">
+                {title}
+              </h1>
+              <p className="mt-4 max-w-sm text-sm leading-6 text-text-secondary">
+                {subtitle}
+              </p>
+
+              <div className="mt-8 flex justify-center">
+                <div className="relative h-44 w-44">
+                  <div className="absolute inset-0 rounded-full border-[8px] border-[#21162d] bg-[conic-gradient(from_15deg,#a3e635_0_16%,#f6c547_16%_32%,#7c3aed_32%_48%,#2dd4bf_48%_64%,#f6c547_64%_82%,#e879f9_82%_100%)] shadow-[0_0_36px_rgba(246,197,71,0.25)]" />
+                  <div className="absolute left-1/2 top-1/2 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-[rgba(246,197,71,0.55)] bg-[var(--bg-void)]">
+                    <CircleDollarSign
+                      className="h-8 w-8 text-gold"
+                      aria-hidden="true"
+                    />
+                  </div>
+                  <div className="absolute left-1/2 top-0 h-0 w-0 -translate-x-1/2 border-x-[12px] border-t-[26px] border-x-transparent border-t-gold" />
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="p-6 md:p-8">

@@ -2,7 +2,10 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import type { EntryWithPlayerSnapshot, WalletSnapshot } from "@kingspin/contracts";
+import type {
+  EntryWithPlayerSnapshot,
+  WalletSnapshot,
+} from "@kingspin/contracts";
 import { formatCoins } from "../../lib/format";
 import { Button, buttonClassName } from "../ui/button";
 import { Chip } from "../ui/chip";
@@ -82,7 +85,8 @@ export function EntryPanel({
     if (isFixedMode && !fixedModeAmount) {
       return "Fixed entry amount is not configured.";
     }
-    if (fixedModeAlreadyEntered) return "Fixed mode allows one entry per round.";
+    if (fixedModeAlreadyEntered)
+      return "Fixed mode allows one entry per round.";
     if (customAmountInvalid) {
       return `Enter a whole amount between ${formatCoins(min)} and ${formatCoins(max)}.`;
     }
@@ -110,6 +114,7 @@ export function EntryPanel({
     entriesOpen &&
     hasWallet &&
     !needsVerification &&
+    (!isFixedMode || Boolean(fixedModeAmount)) &&
     !fixedModeAlreadyEntered &&
     !customAmountInvalid &&
     !insufficientBalance &&
@@ -127,7 +132,7 @@ export function EntryPanel({
             ? "Insufficient balance"
             : myEntry
               ? isFixedMode
-                ? "Entry placed"
+                ? "You are in"
                 : `Add ${formatCoins(entryAmount)} more`
               : `Enter ${formatCoins(entryAmount)}`;
 
@@ -147,11 +152,9 @@ export function EntryPanel({
           </p>
           <h2 className="mt-1 font-display text-xl font-black">Place Entry</h2>
           <p className="mt-1 text-sm text-text-secondary">
-            Balance{" "}
-            <span className="font-mono font-black text-text-primary">
-              {formatCoins(wallet?.balanceSnapshot)}
-            </span>{" "}
-            coins
+            {isFixedMode
+              ? "One fixed entry gives every accepted player the same chance."
+              : "Choose an amount while open. Bigger amount, bigger ticket range."}
           </p>
         </div>
 
@@ -181,7 +184,7 @@ export function EntryPanel({
       <div className="mt-4 rounded-md border border-[var(--border)] bg-[rgba(255,255,255,0.03)] p-3">
         <div className="flex items-center justify-between gap-3">
           <span className="text-xs font-bold uppercase tracking-[0.18em] text-text-dim">
-            Selected
+            {isFixedMode ? "Fixed entry" : "Selected"}
           </span>
           <span className="font-mono text-lg font-black text-[var(--gold)]">
             {formatCoins(entryAmount)}
@@ -203,35 +206,33 @@ export function EntryPanel({
         ))}
       </div>
 
-      <label className="mt-4 block text-sm font-semibold text-text-secondary">
-        Custom amount
-        <input
-          disabled={isFixedMode}
-          type="number"
-          inputMode="numeric"
-          min={min}
-          max={max}
-          step={1}
-          value={customAmount}
-          onChange={(event) => setCustomAmount(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              submitEntry();
-            }
-          }}
-          placeholder={
-            isFixedMode
-              ? "Fixed amount"
-              : `${formatCoins(min)}-${formatCoins(max)}`
-          }
-          className="mt-2 w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-3 font-mono text-sm text-text-primary outline-none transition placeholder:text-text-dim focus:border-[var(--gold)] focus:ring-2 focus:ring-[rgba(250,204,21,0.15)]"
-        />
-      </label>
+      {!isFixedMode ? (
+        <label className="mt-4 block text-sm font-semibold text-text-secondary">
+          Custom amount
+          <input
+            type="number"
+            inputMode="numeric"
+            min={min}
+            max={max}
+            step={1}
+            value={customAmount}
+            onChange={(event) => setCustomAmount(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                submitEntry();
+              }
+            }}
+            placeholder={`${formatCoins(min)}-${formatCoins(max)}`}
+            className="mt-2 w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-3 font-mono text-sm text-text-primary outline-none transition placeholder:text-text-dim focus:border-[var(--gold)] focus:ring-2 focus:ring-[rgba(250,204,21,0.15)]"
+          />
+        </label>
+      ) : null}
 
       {customAmountInvalid ? (
         <p className="mt-2 text-sm font-semibold text-red-hot">
-          Enter a whole amount between {formatCoins(min)} and {formatCoins(max)}.
+          Enter a whole amount between {formatCoins(min)} and {formatCoins(max)}
+          .
         </p>
       ) : null}
 

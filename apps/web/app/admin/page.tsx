@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { NavBar } from "../../components/layout/nav-bar";
+import { GameShell } from "../../components/player/game-shell";
 import { Button } from "../../components/ui/button";
 import { apiClient } from "../../lib/api-client";
 import { formatCoins } from "../../lib/format";
@@ -157,14 +157,14 @@ export default function AdminPage() {
           : current,
       );
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Admin action failed.");
+      setError(
+        caught instanceof Error ? caught.message : "Admin action failed.",
+      );
     }
   }
 
   return (
-    <main className="min-h-screen text-text-primary">
-      <NavBar backHref="/spinpro" />
-
+    <GameShell backHref="/spinpro">
       <div className="mx-auto max-w-7xl px-4 py-8 md:px-8">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -181,7 +181,9 @@ export default function AdminPage() {
         </div>
 
         {loading ? (
-          <p className="mt-6 text-sm text-text-secondary">Loading admin data...</p>
+          <p className="mt-6 text-sm text-text-secondary">
+            Loading admin data...
+          </p>
         ) : null}
 
         {error ? (
@@ -233,7 +235,9 @@ export default function AdminPage() {
             </Section>
 
             <Section title="Wallet / Ledger">
-              <JsonTable rows={state.dashboard ? dashboard.recentEntries : []} />
+              <JsonTable
+                rows={state.dashboard ? dashboard.recentEntries : []}
+              />
             </Section>
 
             <Section title="Fraud / Risk">
@@ -272,6 +276,6 @@ export default function AdminPage() {
           </div>
         ) : null}
       </div>
-    </main>
+    </GameShell>
   );
 }

@@ -1,176 +1,211 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
-import { NavBar } from "../../components/layout/nav-bar";
-import { Badge } from "../../components/ui/badge";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { CategoryCard } from "../../components/player/category-card";
+import { GameShell } from "../../components/player/game-shell";
+import { ModeCard } from "../../components/player/mode-card";
+import { SectionHeader } from "../../components/player/section-header";
+import { StatusPill } from "../../components/player/status-pill";
 import { apiClient, type RoomListItem } from "../../lib/api-client";
-import { formatCoins } from "../../lib/format";
+import { useSession } from "../../lib/auth-client";
+import {
+  type PlayerMode,
+  getCategoryMode,
+  isBaselinePlayerCategory,
+  sortPlayerCategories,
+} from "../../lib/game-modes";
 import { useCategories } from "../../hooks/use-categories";
 
-export default function SpinProLobbyPage() {
-  const { categories, loading: categoriesLoading, error: categoriesError } =
-    useCategories();
-  const [rooms, setRooms] = useState<RoomListItem[]>([]);
-  const [selectedSlug, setSelectedSlug] = useState<string | null>(null);
-  const [isLoadingRooms, setIsLoadingRooms] = useState(false);
+function SpinProLobbyContent() {
+  const searchParams = useSearchParams();
+  const initialMode = searchParams.get("mode") === "fixed" ? "fixed" : "pro";
+  const [selectedMode, setSelectedMode] = useState<PlayerMode>(initialMode);
+  const { data: session } = useSession();
+  const {
+    categories,
+    loading: categoriesLoading,
+    error: categoriesError,
+  } = useCategories();
+  const [roomsBySlug, setRoomsBySlug] = useState<
+    Record<string, RoomListItem[]>
+  >({});
+  const [roomsLoading, setRoomsLoading] = useState(false);
   const [roomsError, setRoomsError] = useState<string | null>(null);
 
   useEffect(() => {
-    setSelectedSlug((current) => current ?? categories[0]?.slug ?? null);
+    setSelectedMode(initialMode);
+  }, [initialMode]);
+
+  const playerCategories = useMemo(() => {
+    const baseline = sortPlayerCategories(
+      categories.filter(isBaselinePlayerCategory),
+    );
+
+    return baseline.length > 0 ? baseline : sortPlayerCategories(categories);
   }, [categories]);
 
-  useEffect(() => {
-    if (!selectedSlug) return;
+  const visibleCategories = useMemo(
+    () =>
+      playerCategories.filter(
+        (category) => getCategoryMode(category) === selectedMode,
+      ),
+    [playerCategories, selectedMode],
+  );
 
+  useEffect(() => {
     let cancelled = false;
-    const categorySlug = selectedSlug;
 
     async function loadRooms() {
-      setIsLoadingRooms(true);
+      setRoomsLoading(true);
       setRoomsError(null);
 
-      try {
-        const nextRooms = await apiClient.getRoomsByCategory(categorySlug);
+      const entries = await Promise.all(
+        visibleCategories.map(async (category) => {
+          try {
+            return [
+              category.slug,
+              await apiClient.getRoomsByCategory(category.slug),
+            ] as const;
+          } catch (caught) {
+            if (!cancelled) {
+              setRoomsError(
+                caught instanceof Error
+                  ? caught.message
+                  : "Could not load rooms.",
+              );
+            }
+            return [category.slug, []] as const;
+          }
+        }),
+      );
 
-        if (!cancelled) {
-          setRooms(nextRooms);
-        }
-      } catch (loadError) {
-        if (!cancelled) {
-          setRooms([]);
-          setRoomsError(
-            loadError instanceof Error ? loadError.message : "Could not load rooms.",
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setIsLoadingRooms(false);
-        }
+      if (!cancelled) {
+        setRoomsBySlug((current) => ({
+          ...current,
+          ...Object.fromEntries(entries),
+        }));
+        setRoomsLoading(false);
       }
     }
 
-    void loadRooms();
+    if (visibleCategories.length > 0) {
+      void loadRooms();
+    } else {
+      setRoomsLoading(false);
+    }
 
     return () => {
       cancelled = true;
     };
-  }, [selectedSlug]);
+  }, [visibleCategories]);
 
-  const selectedCategory = useMemo(
-    () => categories.find((category) => category.slug === selectedSlug) ?? null,
-    [categories, selectedSlug],
-  );
+  const error = categoriesError ?? roomsError;
+  const isSignedIn = Boolean(session?.user);
 
   return (
-    <main className="min-h-screen text-text-primary">
-      <NavBar />
-
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 py-6 md:px-8">
+    <GameShell backHref="/">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-7 px-4 py-6 md:px-8 md:py-8">
         <section className="border-b border-[var(--border)] pb-6">
-          <p className="text-xs font-black uppercase tracking-[0.2em] text-gold">
-            Live wheel rooms
-          </p>
-          <h1 className="mt-2 font-display text-4xl font-black tracking-normal md:text-6xl">
-            Pick a room. Beat the clock.
+          <StatusPill tone="gold">Live wheel rooms</StatusPill>
+          <h1 className="mt-4 font-display text-4xl font-black tracking-normal md:text-6xl">
+            Choose Pro or Fixed
           </h1>
           <p className="mt-3 max-w-2xl text-sm leading-6 text-text-secondary">
-            Server-timed rounds, wallet-backed entries, and fairness proofs after every settled spin.
+            Guests can browse every room. Sign in when you choose a category to
+            enter the active permanent room.
           </p>
         </section>
 
-        {categoriesError || roomsError ? (
-          <div className="rounded-md border border-[rgba(248,113,113,0.42)] bg-[rgba(248,113,113,0.12)] px-4 py-3 text-sm text-red-hot">
-            {categoriesError ?? roomsError}
-          </div>
-        ) : null}
+        <section className="grid gap-4 md:grid-cols-2">
+          <ModeCard mode="pro" href="/spinpro?mode=pro" />
+          <ModeCard mode="fixed" href="/spinpro?mode=fixed" />
+        </section>
 
-        <section className="grid gap-6 lg:grid-cols-[260px_1fr]">
-          <aside className="space-y-3">
-            {categoriesLoading ? (
-              <div className="rounded-md border border-[var(--border)] bg-white/[0.04] px-4 py-3 text-sm text-text-secondary">
-                Loading categories
-              </div>
-            ) : null}
+        <section
+          id={`${selectedMode}-categories`}
+          className="rounded-lg border border-[var(--border)] bg-black/10 p-4 md:p-5"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <SectionHeader
+              eyebrow="Categories"
+              title="Active permanent rooms"
+            />
 
-            {categories.map((category) => (
-              <button
-                key={category.id}
-                onClick={() => setSelectedSlug(category.slug)}
-                className={`w-full rounded-md border px-4 py-3 text-left transition ${
-                  category.slug === selectedSlug
-                    ? "border-[var(--gold)] bg-[var(--gold)] text-[var(--bg-void)] shadow-[var(--glow-gold)]"
-                    : "border-[var(--border)] bg-white/[0.04] text-text-primary hover:border-[var(--border-glow)]"
-                }`}
-              >
-                <span className="block font-display text-sm font-black">
-                  {category.name}
-                </span>
-                <span className="mt-1 block font-mono text-xs opacity-75">
-                  {formatCoins(category.minEntryAmount)}-
-                  {formatCoins(category.maxEntryAmount)} coins
-                </span>
-              </button>
-            ))}
-          </aside>
-
-          <div className="arcadia-surface min-h-[420px] rounded-lg p-4 md:p-5">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <p className="text-xs font-black uppercase tracking-[0.2em] text-teal">
-                  {selectedCategory?.name ?? "Rooms"}
-                </p>
-                <h2 className="mt-1 font-display text-2xl font-black">
-                  Permanent active rooms
-                </h2>
-              </div>
-              <p className="font-mono text-sm text-text-secondary">
-                {isLoadingRooms ? "Loading" : `${rooms.length} available`}
-              </p>
-            </div>
-
-            <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {rooms.map((room) => (
-                <Link
-                  key={room.id}
-                  href={`/spinpro/${selectedSlug}/${room.id}`}
-                  className="group rounded-md border border-[var(--border)] bg-white/[0.04] p-4 transition hover:border-[var(--border-glow)] hover:bg-white/[0.07]"
+            <div
+              className="grid rounded-md border border-[var(--border)] bg-[var(--bg-surface)] p-1"
+              style={{ gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}
+            >
+              {(["pro", "fixed"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setSelectedMode(mode)}
+                  className={`min-h-10 rounded-sm px-4 text-sm font-black transition ${
+                    selectedMode === mode
+                      ? "bg-[var(--gold)] text-[var(--bg-void)]"
+                      : "text-text-secondary hover:text-text-primary"
+                  }`}
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-mono text-xs text-teal">{room.code}</p>
-                      <h3 className="mt-1 font-display text-lg font-black">
-                        {room.name ?? "SpinPro Room"}
-                      </h3>
-                    </div>
-                    <Badge variant="success">{room.status}</Badge>
-                  </div>
-                  <div className="mt-5 grid grid-cols-2 gap-2 text-sm text-text-secondary">
-                    <div>
-                      <p className="text-xs text-text-dim">Max players</p>
-                      <p className="font-mono font-bold text-text-primary">
-                        {room.maxPlayers}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-text-dim">Round</p>
-                      <p className="font-mono font-bold text-text-primary">
-                        {Math.round(room.roundDurationMs / 1000)}s
-                      </p>
-                    </div>
-                  </div>
-                </Link>
+                  {mode === "pro" ? "Pro" : "Fixed"}
+                </button>
               ))}
             </div>
-
-            {!isLoadingRooms && rooms.length === 0 ? (
-              <div className="mt-8 rounded-md border border-[var(--border)] bg-white/[0.04] px-4 py-8 text-center text-sm text-text-secondary">
-                No active rooms in this category.
-              </div>
-            ) : null}
           </div>
+
+          {error ? (
+            <div className="mt-5 rounded-md border border-[rgba(248,113,113,0.42)] bg-[rgba(248,113,113,0.12)] px-4 py-3 text-sm font-semibold text-red-hot">
+              {error}
+            </div>
+          ) : null}
+
+          {categoriesLoading || roomsLoading ? (
+            <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {[0, 1, 2].map((item) => (
+                <div
+                  key={item}
+                  className="h-[220px] animate-pulse rounded-lg border border-[var(--border)] bg-white/[0.04]"
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {visibleCategories.map((category) => (
+                <CategoryCard
+                  key={category.slug}
+                  category={category}
+                  room={roomsBySlug[category.slug]?.[0] ?? null}
+                  isSignedIn={isSignedIn}
+                />
+              ))}
+            </div>
+          )}
+
+          {!categoriesLoading &&
+          !roomsLoading &&
+          visibleCategories.length === 0 ? (
+            <div className="mt-6 rounded-md border border-dashed border-[var(--border)] bg-white/[0.03] px-4 py-8 text-center text-sm text-text-secondary">
+              No active categories are configured for this mode.
+            </div>
+          ) : null}
         </section>
       </div>
-    </main>
+    </GameShell>
+  );
+}
+
+export default function SpinProLobbyPage() {
+  return (
+    <Suspense
+      fallback={
+        <GameShell backHref="/">
+          <div className="mx-auto max-w-7xl px-4 py-8 md:px-8">
+            <div className="h-[420px] animate-pulse rounded-lg border border-[var(--border)] bg-white/[0.04]" />
+          </div>
+        </GameShell>
+      }
+    >
+      <SpinProLobbyContent />
+    </Suspense>
   );
 }

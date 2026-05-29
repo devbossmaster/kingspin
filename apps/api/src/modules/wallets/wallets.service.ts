@@ -3,7 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
-} from "@nestjs/common";
+} from '@nestjs/common';
 import {
   LedgerEntryDirection,
   LedgerTransactionType,
@@ -13,9 +13,9 @@ import {
   type LedgerTransaction,
   type User,
   type WalletAccount,
-} from "@kingspin/db";
-import { randomUUID } from "node:crypto";
-import { PrismaService } from "../../prisma/prisma.service";
+} from '@kingspin/db';
+import { randomUUID } from 'node:crypto';
+import { PrismaService } from '../../prisma/prisma.service';
 
 export type DevWalletBody = {
   userId?: unknown;
@@ -62,14 +62,14 @@ export type EntryRefundResult = {
   entryId: string;
   refunded: boolean;
   amount: bigint;
-  reason: "REFUNDED" | "NO_HOLD_FOUND" | "ALREADY_REFUNDED";
+  reason: 'REFUNDED' | 'NO_HOLD_FOUND' | 'ALREADY_REFUNDED';
 };
 
 export type EntryHoldCompensationResult = {
   holdIdempotencyKey: string;
   refunded: boolean;
   amount: bigint;
-  reason: "REFUNDED" | "NO_HOLD_FOUND" | "ALREADY_REFUNDED";
+  reason: 'REFUNDED' | 'NO_HOLD_FOUND' | 'ALREADY_REFUNDED';
   wallet: WalletSnapshot | null;
   transaction: LedgerTransactionSnapshot | null;
 };
@@ -118,7 +118,7 @@ export class WalletsService {
     const wallet = await this.ensureMainWalletForUserId(user.id);
 
     const customIdempotencyKey =
-      typeof body?.idempotencyKey === "string" &&
+      typeof body?.idempotencyKey === 'string' &&
       body.idempotencyKey.trim().length > 0
         ? body.idempotencyKey.trim()
         : null;
@@ -138,14 +138,14 @@ export class WalletsService {
         });
 
         const reason =
-          typeof body?.reason === "string" && body.reason.trim().length > 0
+          typeof body?.reason === 'string' && body.reason.trim().length > 0
             ? body.reason.trim()
-            : "Dev admin credit";
+            : 'Dev admin credit';
 
         const transaction = await tx.ledgerTransaction.create({
           data: {
             type: LedgerTransactionType.ADMIN_CREDIT,
-            referenceType: "ADMIN_DEV_CREDIT",
+            referenceType: 'ADMIN_DEV_CREDIT',
             referenceId: user.id,
             idempotencyKey,
             metadata: {
@@ -211,7 +211,7 @@ export class WalletsService {
 
   async getMainWalletByUserId(userId: string) {
     if (!userId) {
-      throw new BadRequestException("userId is required.");
+      throw new BadRequestException('userId is required.');
     }
 
     const user = await this.prisma.user.findUnique({
@@ -219,7 +219,7 @@ export class WalletsService {
     });
 
     if (!user) {
-      throw new NotFoundException("User not found.");
+      throw new NotFoundException('User not found.');
     }
 
     const wallet = await this.ensureMainWalletForUserId(user.id);
@@ -308,9 +308,11 @@ export class WalletsService {
 
       timingFlushed = true;
 
-      for (const event of timingEvents) {
-        this.logger.warn(`[wallet-hold-timing:${traceId}] ${event}`);
-      }
+      this.logger.warn(
+        `[wallet-hold-timing:${traceId}] slow wallet hold total=${totalMs}ms events=${timingEvents.join(
+          '; ',
+        )}`,
+      );
     };
 
     const mark = (label: string) => {
@@ -327,7 +329,7 @@ export class WalletsService {
       include: { entries: true },
     });
 
-    mark("existing ledger lookup");
+    mark('existing ledger lookup');
 
     if (existingTransaction) {
       this.assertEntryHoldTransactionMatches(existingTransaction, args);
@@ -336,7 +338,7 @@ export class WalletsService {
         where: { id: args.walletAccountId },
       });
 
-      mark("reused wallet read");
+      mark('reused wallet read');
       flushTimingIfSlow();
 
       return {
@@ -363,16 +365,16 @@ export class WalletsService {
     });
     const updatedWallet = updatedWallets[0];
 
-    mark("wallet debit updateManyAndReturn");
+    mark('wallet debit updateManyAndReturn');
 
     if (!updatedWallet) {
       const wallet = await tx.walletAccount.findUnique({
         where: { id: args.walletAccountId },
       });
 
-      mark("wallet read after failed debit");
+      mark('wallet read after failed debit');
 
-      const balance = wallet?.balanceSnapshot.toString() ?? "0";
+      const balance = wallet?.balanceSnapshot.toString() ?? '0';
       flushTimingIfSlow();
 
       throw new BadRequestException(
@@ -383,7 +385,7 @@ export class WalletsService {
     const transaction = await tx.ledgerTransaction.create({
       data: {
         type: LedgerTransactionType.ENTRY_HOLD,
-        referenceType: "ENTRY",
+        referenceType: 'ENTRY',
         referenceId: args.entryId,
         idempotencyKey: args.idempotencyKey,
         metadata: {
@@ -392,7 +394,7 @@ export class WalletsService {
           entryId: args.entryId,
           amount: args.amount.toString(),
           walletAccountId: updatedWallet.id,
-          holdState: "HELD",
+          holdState: 'HELD',
         },
         entries: {
           create: {
@@ -406,7 +408,7 @@ export class WalletsService {
       include: { entries: true },
     });
 
-    mark("ledger transaction create");
+    mark('ledger transaction create');
     flushTimingIfSlow();
 
     return {
@@ -430,7 +432,7 @@ export class WalletsService {
         holdIdempotencyKey: args.holdIdempotencyKey,
         refunded: false,
         amount: 0n,
-        reason: "NO_HOLD_FOUND",
+        reason: 'NO_HOLD_FOUND',
         wallet: null,
         transaction: null,
       };
@@ -468,7 +470,7 @@ export class WalletsService {
             holdIdempotencyKey: args.holdIdempotencyKey,
             refunded: false,
             amount: this.sumEntries(existingRefund.entries),
-            reason: "ALREADY_REFUNDED" as const,
+            reason: 'ALREADY_REFUNDED' as const,
             wallet: wallet ? this.toWalletSnapshot(wallet) : null,
             transaction: this.toLedgerTransactionSnapshot(existingRefund),
           };
@@ -503,20 +505,20 @@ export class WalletsService {
         const refundTransaction = await tx.ledgerTransaction.create({
           data: {
             type: LedgerTransactionType.ENTRY_REFUND,
-            referenceType: "ENTRY",
+            referenceType: 'ENTRY',
             referenceId: freshHoldTransaction.referenceId,
             idempotencyKey: refundIdempotencyKey,
             metadata: {
-              source: "ENTRY_HOLD_COMPENSATION",
+              source: 'ENTRY_HOLD_COMPENSATION',
               holdTransactionId: freshHoldTransaction.id,
               holdIdempotencyKey: args.holdIdempotencyKey,
               roundId: this.getMetadataString(
                 freshHoldTransaction.metadata,
-                "roundId",
+                'roundId',
               ),
               entryId: this.getMetadataString(
                 freshHoldTransaction.metadata,
-                "entryId",
+                'entryId',
               ),
               amount: refundAmount.toString(),
               walletAccountId: updatedWallet.id,
@@ -538,7 +540,7 @@ export class WalletsService {
           holdIdempotencyKey: args.holdIdempotencyKey,
           refunded: true,
           amount: refundAmount,
-          reason: "REFUNDED" as const,
+          reason: 'REFUNDED' as const,
           wallet: this.toWalletSnapshot(updatedWallet),
           transaction: this.toLedgerTransactionSnapshot(refundTransaction),
         };
@@ -569,7 +571,7 @@ export class WalletsService {
           holdIdempotencyKey: args.holdIdempotencyKey,
           refunded: false,
           amount: this.sumEntries(existingRefund.entries),
-          reason: "ALREADY_REFUNDED",
+          reason: 'ALREADY_REFUNDED',
           wallet: wallet ? this.toWalletSnapshot(wallet) : null,
           transaction: this.toLedgerTransactionSnapshot(existingRefund),
         };
@@ -603,20 +605,20 @@ export class WalletsService {
         entryId: args.entryId,
         refunded: false,
         amount: refundedAmount,
-        reason: "ALREADY_REFUNDED",
+        reason: 'ALREADY_REFUNDED',
       };
     }
 
     const holdTransactions = await tx.ledgerTransaction.findMany({
       where: {
         type: LedgerTransactionType.ENTRY_HOLD,
-        referenceType: "ENTRY",
+        referenceType: 'ENTRY',
         referenceId: args.entryId,
       },
       include: {
         entries: true,
       },
-      orderBy: { createdAt: "asc" },
+      orderBy: { createdAt: 'asc' },
     });
 
     const compensationKeys = holdTransactions.map((transaction) =>
@@ -634,9 +636,9 @@ export class WalletsService {
     const compensatedHoldIds = new Set(
       compensationTransactions
         .map((transaction) =>
-          this.getMetadataString(transaction.metadata, "holdTransactionId"),
+          this.getMetadataString(transaction.metadata, 'holdTransactionId'),
         )
-        .filter((value): value is string => typeof value === "string"),
+        .filter((value): value is string => typeof value === 'string'),
     );
 
     const refundableHoldTransactions = holdTransactions.filter(
@@ -654,7 +656,7 @@ export class WalletsService {
         entryId: args.entryId,
         refunded: false,
         amount: 0n,
-        reason: "NO_HOLD_FOUND",
+        reason: 'NO_HOLD_FOUND',
       };
     }
 
@@ -686,7 +688,7 @@ export class WalletsService {
     await tx.ledgerTransaction.create({
       data: {
         type: LedgerTransactionType.ENTRY_REFUND,
-        referenceType: "ENTRY",
+        referenceType: 'ENTRY',
         referenceId: args.entryId,
         idempotencyKey: refundIdempotencyKey,
         metadata: {
@@ -694,7 +696,7 @@ export class WalletsService {
           entryId: args.entryId,
           amount: refundAmount.toString(),
           walletAccountId: updatedWallet.id,
-          source: "ENTRY_HOLD_LEDGER_REVERSAL",
+          source: 'ENTRY_HOLD_LEDGER_REVERSAL',
         },
         entries: {
           create: {
@@ -711,7 +713,7 @@ export class WalletsService {
       entryId: args.entryId,
       refunded: true,
       amount: refundAmount,
-      reason: "REFUNDED",
+      reason: 'REFUNDED',
     };
   }
 
@@ -732,7 +734,9 @@ export class WalletsService {
     amount: bigint;
   }) {
     if (args.amount <= 0n) {
-      throw new BadRequestException("Round win amount must be greater than zero.");
+      throw new BadRequestException(
+        'Round win amount must be greater than zero.',
+      );
     }
 
     const wallet = await this.ensureMainWalletForUserId(args.userId);
@@ -771,7 +775,7 @@ export class WalletsService {
         const transaction = await tx.ledgerTransaction.create({
           data: {
             type: LedgerTransactionType.ROUND_PAYOUT,
-            referenceType: "ROUND",
+            referenceType: 'ROUND',
             referenceId: args.roundId,
             idempotencyKey,
             metadata: {
@@ -880,7 +884,7 @@ export class WalletsService {
     const transaction = await tx.ledgerTransaction.create({
       data: {
         type: LedgerTransactionType.DEPOSIT,
-        referenceType: "DEPOSIT",
+        referenceType: 'DEPOSIT',
         referenceId: args.depositId,
         idempotencyKey,
         metadata: {
@@ -965,7 +969,7 @@ export class WalletsService {
       const wallet = await tx.walletAccount.findUnique({
         where: { id: args.walletAccountId },
       });
-      const balance = wallet?.balanceSnapshot.toString() ?? "0";
+      const balance = wallet?.balanceSnapshot.toString() ?? '0';
 
       throw new BadRequestException(
         `Insufficient MAIN wallet balance. Balance is ${balance}, required is ${args.amount.toString()}.`,
@@ -975,7 +979,7 @@ export class WalletsService {
     const transaction = await tx.ledgerTransaction.create({
       data: {
         type: LedgerTransactionType.WITHDRAWAL_REQUEST,
-        referenceType: "WITHDRAWAL",
+        referenceType: 'WITHDRAWAL',
         referenceId: args.withdrawalId,
         idempotencyKey,
         metadata: {
@@ -985,7 +989,7 @@ export class WalletsService {
           currency: args.currency,
           provider: args.provider,
           walletAccountId: updatedWallet.id,
-          reserveState: "RESERVED",
+          reserveState: 'RESERVED',
         },
         entries: {
           create: {
@@ -1053,7 +1057,7 @@ export class WalletsService {
     const transaction = await tx.ledgerTransaction.create({
       data: {
         type: LedgerTransactionType.WITHDRAWAL_REFUND,
-        referenceType: "WITHDRAWAL",
+        referenceType: 'WITHDRAWAL',
         referenceId: args.withdrawalId,
         idempotencyKey,
         metadata: {
@@ -1086,7 +1090,7 @@ export class WalletsService {
 
   async ensureMainWalletForUserId(userId: string): Promise<WalletAccount> {
     if (!userId) {
-      throw new BadRequestException("userId is required.");
+      throw new BadRequestException('userId is required.');
     }
 
     const existingWallet = await this.prisma.walletAccount.findUnique({
@@ -1147,26 +1151,26 @@ export class WalletsService {
   private async resolveDevUserOutsideTransaction(
     body: DevWalletBody,
   ): Promise<User> {
-    if (typeof body?.userId === "string" && body.userId.trim().length > 0) {
+    if (typeof body?.userId === 'string' && body.userId.trim().length > 0) {
       const user = await this.prisma.user.findUnique({
         where: { id: body.userId.trim() },
       });
 
       if (!user) {
-        throw new NotFoundException("User not found.");
+        throw new NotFoundException('User not found.');
       }
 
       return user;
     }
 
     const playerKey =
-      typeof body?.playerKey === "string" && body.playerKey.trim().length > 0
+      typeof body?.playerKey === 'string' && body.playerKey.trim().length > 0
         ? body.playerKey.trim()
-        : "player-1";
+        : 'player-1';
 
     const safePlayerKey = playerKey
       .toLowerCase()
-      .replace(/[^a-z0-9_-]/g, "-")
+      .replace(/[^a-z0-9_-]/g, '-')
       .slice(0, 32);
 
     const email = `dev+${safePlayerKey}@kingspin.local`;
@@ -1189,16 +1193,16 @@ export class WalletsService {
   }
 
   private parsePositiveAmount(rawAmount: unknown): bigint {
-    if (typeof rawAmount !== "number") {
-      throw new BadRequestException("amount must be a number.");
+    if (typeof rawAmount !== 'number') {
+      throw new BadRequestException('amount must be a number.');
     }
 
     if (!Number.isSafeInteger(rawAmount)) {
-      throw new BadRequestException("amount must be a safe integer.");
+      throw new BadRequestException('amount must be a safe integer.');
     }
 
     if (rawAmount <= 0) {
-      throw new BadRequestException("amount must be greater than zero.");
+      throw new BadRequestException('amount must be greater than zero.');
     }
 
     return BigInt(rawAmount);
@@ -1207,7 +1211,7 @@ export class WalletsService {
   private isUniqueConstraintError(error: unknown) {
     return (
       error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002"
+      error.code === 'P2002'
     );
   }
 
@@ -1241,17 +1245,17 @@ export class WalletsService {
   ) {
     const matches =
       transaction.type === LedgerTransactionType.ADMIN_CREDIT &&
-      transaction.referenceType === "ADMIN_DEV_CREDIT" &&
+      transaction.referenceType === 'ADMIN_DEV_CREDIT' &&
       transaction.referenceId === args.userId &&
-      this.getMetadataString(transaction.metadata, "userId") === args.userId &&
-      this.getMetadataString(transaction.metadata, "walletAccountId") ===
+      this.getMetadataString(transaction.metadata, 'userId') === args.userId &&
+      this.getMetadataString(transaction.metadata, 'walletAccountId') ===
         args.walletAccountId &&
-      this.getMetadataString(transaction.metadata, "amount") ===
+      this.getMetadataString(transaction.metadata, 'amount') ===
         args.amount.toString();
 
     if (!matches) {
       throw new BadRequestException(
-        "Idempotency key was already used for a different admin credit.",
+        'Idempotency key was already used for a different admin credit.',
       );
     }
   }
@@ -1266,41 +1270,44 @@ export class WalletsService {
     },
   ) {
     const transactionEntryId =
-      this.getMetadataString(transaction.metadata, "entryId") ??
+      this.getMetadataString(transaction.metadata, 'entryId') ??
       transaction.referenceId;
 
     const matches =
       transaction.type === LedgerTransactionType.ENTRY_HOLD &&
-      transaction.referenceType === "ENTRY" &&
-      typeof transactionEntryId === "string" &&
-      this.getMetadataString(transaction.metadata, "roundId") === args.roundId &&
-      this.getMetadataString(transaction.metadata, "userId") === args.userId &&
-      this.getMetadataString(transaction.metadata, "walletAccountId") ===
+      transaction.referenceType === 'ENTRY' &&
+      typeof transactionEntryId === 'string' &&
+      this.getMetadataString(transaction.metadata, 'roundId') ===
+        args.roundId &&
+      this.getMetadataString(transaction.metadata, 'userId') === args.userId &&
+      this.getMetadataString(transaction.metadata, 'walletAccountId') ===
         args.walletAccountId &&
-      this.getMetadataString(transaction.metadata, "amount") ===
+      this.getMetadataString(transaction.metadata, 'amount') ===
         args.amount.toString();
 
     if (!matches) {
       throw new BadRequestException(
-        "Idempotency key was already used for a different entry hold.",
+        'Idempotency key was already used for a different entry hold.',
       );
     }
 
     this.assertEntryHoldLedgerShape(transaction);
   }
 
-  private assertEntryHoldLedgerShape(transaction: LedgerTransactionWithEntries) {
+  private assertEntryHoldLedgerShape(
+    transaction: LedgerTransactionWithEntries,
+  ) {
     const debitEntries = transaction.entries.filter(
       (entry) => entry.direction === LedgerEntryDirection.DEBIT,
     );
 
     if (
       transaction.type !== LedgerTransactionType.ENTRY_HOLD ||
-      transaction.referenceType !== "ENTRY" ||
+      transaction.referenceType !== 'ENTRY' ||
       debitEntries.length === 0
     ) {
       throw new BadRequestException(
-        "Entry hold ledger transaction is invalid and requires review.",
+        'Entry hold ledger transaction is invalid and requires review.',
       );
     }
 
@@ -1311,7 +1318,7 @@ export class WalletsService {
 
     if (mixedWallet) {
       throw new BadRequestException(
-        "Entry hold has ledger entries from multiple wallets. Manual review required.",
+        'Entry hold has ledger entries from multiple wallets. Manual review required.',
       );
     }
   }
@@ -1325,17 +1332,17 @@ export class WalletsService {
   ) {
     const matches =
       transaction.type === LedgerTransactionType.ENTRY_REFUND &&
-      transaction.referenceType === "ENTRY" &&
-      this.getMetadataString(transaction.metadata, "source") ===
-        "ENTRY_HOLD_COMPENSATION" &&
-      this.getMetadataString(transaction.metadata, "holdTransactionId") ===
+      transaction.referenceType === 'ENTRY' &&
+      this.getMetadataString(transaction.metadata, 'source') ===
+        'ENTRY_HOLD_COMPENSATION' &&
+      this.getMetadataString(transaction.metadata, 'holdTransactionId') ===
         args.holdTransactionId &&
-      this.getMetadataString(transaction.metadata, "holdIdempotencyKey") ===
+      this.getMetadataString(transaction.metadata, 'holdIdempotencyKey') ===
         args.holdIdempotencyKey;
 
     if (!matches) {
       throw new BadRequestException(
-        "Idempotency key was already used for a different entry compensation.",
+        'Idempotency key was already used for a different entry compensation.',
       );
     }
   }
@@ -1351,18 +1358,19 @@ export class WalletsService {
   ) {
     const matches =
       transaction.type === LedgerTransactionType.ROUND_PAYOUT &&
-      transaction.referenceType === "ROUND" &&
+      transaction.referenceType === 'ROUND' &&
       transaction.referenceId === args.roundId &&
-      this.getMetadataString(transaction.metadata, "userId") === args.userId &&
-      this.getMetadataString(transaction.metadata, "roundId") === args.roundId &&
-      this.getMetadataString(transaction.metadata, "winnerEntryId") ===
+      this.getMetadataString(transaction.metadata, 'userId') === args.userId &&
+      this.getMetadataString(transaction.metadata, 'roundId') ===
+        args.roundId &&
+      this.getMetadataString(transaction.metadata, 'winnerEntryId') ===
         args.winnerEntryId &&
-      this.getMetadataString(transaction.metadata, "amount") ===
+      this.getMetadataString(transaction.metadata, 'amount') ===
         args.amount.toString();
 
     if (!matches) {
       throw new BadRequestException(
-        "Idempotency key was already used for a different round payout.",
+        'Idempotency key was already used for a different round payout.',
       );
     }
   }
@@ -1379,21 +1387,21 @@ export class WalletsService {
   ) {
     const matches =
       transaction.type === LedgerTransactionType.DEPOSIT &&
-      transaction.referenceType === "DEPOSIT" &&
+      transaction.referenceType === 'DEPOSIT' &&
       transaction.referenceId === args.depositId &&
-      this.getMetadataString(transaction.metadata, "userId") === args.userId &&
-      this.getMetadataString(transaction.metadata, "depositId") ===
+      this.getMetadataString(transaction.metadata, 'userId') === args.userId &&
+      this.getMetadataString(transaction.metadata, 'depositId') ===
         args.depositId &&
-      this.getMetadataString(transaction.metadata, "amount") ===
+      this.getMetadataString(transaction.metadata, 'amount') ===
         args.amount.toString() &&
-      this.getMetadataString(transaction.metadata, "currency") ===
+      this.getMetadataString(transaction.metadata, 'currency') ===
         args.currency &&
-      this.getMetadataString(transaction.metadata, "provider") ===
+      this.getMetadataString(transaction.metadata, 'provider') ===
         args.provider;
 
     if (!matches) {
       throw new BadRequestException(
-        "Idempotency key was already used for a different deposit credit.",
+        'Idempotency key was already used for a different deposit credit.',
       );
     }
   }
@@ -1411,23 +1419,23 @@ export class WalletsService {
   ) {
     const matches =
       transaction.type === LedgerTransactionType.WITHDRAWAL_REQUEST &&
-      transaction.referenceType === "WITHDRAWAL" &&
+      transaction.referenceType === 'WITHDRAWAL' &&
       transaction.referenceId === args.withdrawalId &&
-      this.getMetadataString(transaction.metadata, "userId") === args.userId &&
-      this.getMetadataString(transaction.metadata, "withdrawalId") ===
+      this.getMetadataString(transaction.metadata, 'userId') === args.userId &&
+      this.getMetadataString(transaction.metadata, 'withdrawalId') ===
         args.withdrawalId &&
-      this.getMetadataString(transaction.metadata, "walletAccountId") ===
+      this.getMetadataString(transaction.metadata, 'walletAccountId') ===
         args.walletAccountId &&
-      this.getMetadataString(transaction.metadata, "amount") ===
+      this.getMetadataString(transaction.metadata, 'amount') ===
         args.amount.toString() &&
-      this.getMetadataString(transaction.metadata, "currency") ===
+      this.getMetadataString(transaction.metadata, 'currency') ===
         args.currency &&
-      this.getMetadataString(transaction.metadata, "provider") ===
+      this.getMetadataString(transaction.metadata, 'provider') ===
         args.provider;
 
     if (!matches) {
       throw new BadRequestException(
-        "Idempotency key was already used for a different withdrawal reserve.",
+        'Idempotency key was already used for a different withdrawal reserve.',
       );
     }
   }
@@ -1445,23 +1453,23 @@ export class WalletsService {
   ) {
     const matches =
       transaction.type === LedgerTransactionType.WITHDRAWAL_REFUND &&
-      transaction.referenceType === "WITHDRAWAL" &&
+      transaction.referenceType === 'WITHDRAWAL' &&
       transaction.referenceId === args.withdrawalId &&
-      this.getMetadataString(transaction.metadata, "userId") === args.userId &&
-      this.getMetadataString(transaction.metadata, "withdrawalId") ===
+      this.getMetadataString(transaction.metadata, 'userId') === args.userId &&
+      this.getMetadataString(transaction.metadata, 'withdrawalId') ===
         args.withdrawalId &&
-      this.getMetadataString(transaction.metadata, "walletAccountId") ===
+      this.getMetadataString(transaction.metadata, 'walletAccountId') ===
         args.walletAccountId &&
-      this.getMetadataString(transaction.metadata, "amount") ===
+      this.getMetadataString(transaction.metadata, 'amount') ===
         args.amount.toString() &&
-      this.getMetadataString(transaction.metadata, "currency") ===
+      this.getMetadataString(transaction.metadata, 'currency') ===
         args.currency &&
-      this.getMetadataString(transaction.metadata, "provider") ===
+      this.getMetadataString(transaction.metadata, 'provider') ===
         args.provider;
 
     if (!matches) {
       throw new BadRequestException(
-        "Idempotency key was already used for a different withdrawal refund.",
+        'Idempotency key was already used for a different withdrawal refund.',
       );
     }
   }
@@ -1471,13 +1479,13 @@ export class WalletsService {
   }
 
   private getMetadataString(metadata: Prisma.JsonValue | null, key: string) {
-    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
       return null;
     }
 
     const value = (metadata as Record<string, unknown>)[key];
 
-    return typeof value === "string" ? value : null;
+    return typeof value === 'string' ? value : null;
   }
 
   private toLedgerTransactionSnapshot(
@@ -1496,14 +1504,9 @@ export class WalletsService {
         walletAccountId: entry.walletAccountId,
         direction: entry.direction,
         amount: entry.amount.toString(),
-        balanceAfterSnapshot:
-          entry.balanceAfterSnapshot?.toString() ?? null,
+        balanceAfterSnapshot: entry.balanceAfterSnapshot?.toString() ?? null,
         createdAt: entry.createdAt.toISOString(),
       })),
     };
   }
 }
-
-
-
-

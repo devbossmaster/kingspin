@@ -107,6 +107,8 @@ pnpm smoke:staging
 
 Manual smoke checks:
 
+- Run the final production-foundation checklist in
+  `docs/deployment/final-production-foundation-smoke-test.md`.
 - Sign in as a normal user.
 - Enter an OPEN round and confirm wallet, entry, live-state, and ledger agree.
 - Confirm locked/completed rounds reject entry without wallet debit.

@@ -2,9 +2,18 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
-} from "@nestjs/common";
-import { PrismaService } from "../../prisma/prisma.service";
-import { RoundsService } from "../rounds/rounds.service";
+} from '@nestjs/common';
+import { RoundStatus } from '@kingspin/db';
+import { PrismaService } from '../../prisma/prisma.service';
+import { RoundsService } from '../rounds/rounds.service';
+
+const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
+  RoundStatus.OPEN,
+  RoundStatus.LOCKED,
+  RoundStatus.DRAWING,
+  RoundStatus.SPINNING,
+  RoundStatus.SETTLING,
+];
 
 @Injectable()
 export class RoomsService {
@@ -15,7 +24,7 @@ export class RoomsService {
 
   async findActiveByCategorySlug(categorySlug: string) {
     if (!categorySlug) {
-      throw new BadRequestException("categorySlug is required.");
+      throw new BadRequestException('categorySlug is required.');
     }
 
     const rooms = await this.prisma.room.findMany({
@@ -24,9 +33,9 @@ export class RoomsService {
           slug: categorySlug,
           isActive: true,
         },
-        status: "ACTIVE",
+        status: 'ACTIVE',
       },
-      orderBy: [{ isPermanent: "desc" }, { code: "asc" }],
+      orderBy: [{ isPermanent: 'desc' }, { code: 'asc' }],
       select: {
         id: true,
         categoryId: true,
@@ -39,19 +48,69 @@ export class RoomsService {
         maxPlayers: true,
         roundDurationMs: true,
         activatedAt: true,
+        rounds: {
+          where: { status: { in: ACTIVE_ROUND_STATUSES } },
+          orderBy: { roundNumber: 'desc' },
+          take: 1,
+          select: {
+            id: true,
+            status: true,
+            totalEntryAmount: true,
+            payoutAmount: true,
+            _count: { select: { entries: true } },
+          },
+        },
       },
     });
 
-    return rooms.map((room) => ({
-      ...room,
-      fixedEntryAmount: room.fixedEntryAmount?.toString() ?? null,
-      activatedAt: room.activatedAt?.toISOString() ?? null,
-    }));
+    const roomSnapshots = await Promise.all(
+      rooms.map(async (room) => {
+        const activeRound = room.rounds[0] ?? null;
+        const liveEntryAggregate = activeRound
+          ? await this.prisma.entry.aggregate({
+              where: { roundId: activeRound.id },
+              _sum: { amount: true },
+            })
+          : null;
+        const liveEntryAmount = liveEntryAggregate?._sum.amount ?? 0n;
+
+        return {
+          id: room.id,
+          categoryId: room.categoryId,
+          code: room.code,
+          name: room.name,
+          status: room.status,
+          gameMode: room.gameMode,
+          fixedEntryAmount: room.fixedEntryAmount?.toString() ?? null,
+          isPermanent: room.isPermanent,
+          maxPlayers: room.maxPlayers,
+          roundDurationMs: room.roundDurationMs,
+          activatedAt: room.activatedAt?.toISOString() ?? null,
+          currentRound: activeRound
+            ? {
+                id: activeRound.id,
+                status: activeRound.status,
+                playerCount: activeRound._count.entries,
+                totalEntryAmount:
+                  activeRound.status === RoundStatus.OPEN
+                    ? liveEntryAmount.toString()
+                    : activeRound.totalEntryAmount.toString(),
+                payoutAmount:
+                  activeRound.status === RoundStatus.OPEN
+                    ? liveEntryAmount.toString()
+                    : activeRound.payoutAmount.toString(),
+              }
+            : null,
+        };
+      }),
+    );
+
+    return roomSnapshots;
   }
 
   async getRoomState(roomId: string) {
     if (!roomId) {
-      throw new BadRequestException("roomId is required.");
+      throw new BadRequestException('roomId is required.');
     }
 
     const room = await this.prisma.room.findUnique({
@@ -60,7 +119,7 @@ export class RoomsService {
     });
 
     if (!room) {
-      throw new NotFoundException("Room not found.");
+      throw new NotFoundException('Room not found.');
     }
 
     const currentRound = await this.roundsService.findCurrentRoundForRoom(

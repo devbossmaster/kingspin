@@ -3,7 +3,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
-} from "@nestjs/common";
+} from '@nestjs/common';
 import {
   GameMode,
   LedgerTransactionType,
@@ -15,11 +15,11 @@ import {
   type Entry,
   type Round,
   type User,
-} from "@kingspin/db";
-import { randomUUID } from "node:crypto";
-import { PrismaService } from "../../prisma/prisma.service";
-import { RoundsService } from "../rounds/rounds.service";
-import { WalletsService } from "../wallets/wallets.service";
+} from '@kingspin/db';
+import { randomUUID } from 'node:crypto';
+import { PrismaService } from '../../prisma/prisma.service';
+import { RoundsService } from '../rounds/rounds.service';
+import { WalletsService } from '../wallets/wallets.service';
 
 export type PlaceEntryBody = {
   amount?: unknown;
@@ -47,7 +47,7 @@ type EntrySnapshot = {
 
 type PlayerSnapshotSource = Pick<
   User,
-  "id" | "username" | "email" | "fullName"
+  'id' | 'username' | 'email' | 'fullName'
 >;
 
 type EntryPreflightRow = {
@@ -73,22 +73,22 @@ type EntryPreflightRow = {
 };
 
 type EntryPlacementStatus =
-  | "SUCCESS"
-  | "REPLAY"
-  | "IDEMPOTENCY_MISMATCH"
-  | "IDEMPOTENCY_REPLAY_MISSING"
-  | "ENTRY_HELD_MISMATCH"
-  | "ENTRY_BELOW_MIN"
-  | "ENTRY_ABOVE_MAX"
-  | "ENTRY_EXCEEDS_MAX"
-  | "FIXED_ENTRY_AMOUNT_REQUIRED"
-  | "FIXED_ENTRY_AMOUNT_MISMATCH"
-  | "FIXED_TOP_UP_NOT_ALLOWED"
-  | "INSUFFICIENT_BALANCE"
-  | "ROUND_NOT_OPEN"
-  | "IDEMPOTENCY_RACE"
-  | "LEDGER_WRITE_FAILED"
-  | "UNKNOWN";
+  | 'SUCCESS'
+  | 'REPLAY'
+  | 'IDEMPOTENCY_MISMATCH'
+  | 'IDEMPOTENCY_REPLAY_MISSING'
+  | 'ENTRY_HELD_MISMATCH'
+  | 'ENTRY_BELOW_MIN'
+  | 'ENTRY_ABOVE_MAX'
+  | 'ENTRY_EXCEEDS_MAX'
+  | 'FIXED_ENTRY_AMOUNT_REQUIRED'
+  | 'FIXED_ENTRY_AMOUNT_MISMATCH'
+  | 'FIXED_TOP_UP_NOT_ALLOWED'
+  | 'INSUFFICIENT_BALANCE'
+  | 'ROUND_NOT_OPEN'
+  | 'IDEMPOTENCY_RACE'
+  | 'LEDGER_WRITE_FAILED'
+  | 'UNKNOWN';
 
 type EntryPlacementRow = {
   status: EntryPlacementStatus;
@@ -139,8 +139,8 @@ const ENTRY_TIMING_WARN_THRESHOLD_MS = 1_500;
 
 class EntryIdempotencyRaceError extends Error {
   constructor() {
-    super("Entry idempotency key raced with another request.");
-    this.name = "EntryIdempotencyRaceError";
+    super('Entry idempotency key raced with another request.');
+    this.name = 'EntryIdempotencyRaceError';
   }
 }
 
@@ -160,11 +160,11 @@ export class EntriesService {
 
   async placeEntryForUser(args: PlaceEntryForUserArgs) {
     if (!args.roomId) {
-      throw new BadRequestException("roomId is required.");
+      throw new BadRequestException('roomId is required.');
     }
 
     if (!args.userId) {
-      throw new BadRequestException("Authenticated user id is required.");
+      throw new BadRequestException('Authenticated user id is required.');
     }
 
     return this.placeEntryForResolvedUserId(
@@ -174,7 +174,7 @@ export class EntriesService {
         idempotencyKey: args.idempotencyKey,
       },
       args.userId,
-      "entry",
+      'entry',
     );
   }
 
@@ -182,10 +182,10 @@ export class EntriesService {
     roomId: string,
     body: PlaceEntryBody,
     userId: string,
-    idempotencyScope: "entry",
+    idempotencyScope: 'entry',
   ) {
     if (!roomId) {
-      throw new BadRequestException("roomId is required.");
+      throw new BadRequestException('roomId is required.');
     }
 
     const addAmount = this.parseAmount(body?.amount);
@@ -195,12 +195,12 @@ export class EntriesService {
     let previousAt = startedAt;
     let timingFlushed = false;
     const timingEvents: {
-      prefix: "entry-timing" | "wallet-hold-timing";
+      prefix: 'entry-timing' | 'wallet-hold-timing';
       message: string;
     }[] = [];
 
     const recordTiming = (
-      prefix: "entry-timing" | "wallet-hold-timing",
+      prefix: 'entry-timing' | 'wallet-hold-timing',
       message: string,
     ) => {
       timingEvents.push({ prefix, message });
@@ -215,9 +215,13 @@ export class EntriesService {
 
       timingFlushed = true;
 
-      for (const event of timingEvents) {
-        this.logger.warn(`[${event.prefix}:${traceId}] ${event.message}`);
-      }
+      const events = timingEvents
+        .map((event) => `${event.prefix} ${event.message}`)
+        .join('; ');
+
+      this.logger.warn(
+        `[entry-timing:${traceId}] slow entry placement total=${totalMs}ms events=${events}`,
+      );
     };
 
     const mark = (label: string) => {
@@ -227,7 +231,7 @@ export class EntriesService {
       previousAt = now;
 
       recordTiming(
-        "entry-timing",
+        'entry-timing',
         `${label} step=${stepMs}ms total=${totalMs}ms`,
       );
     };
@@ -241,46 +245,46 @@ export class EntriesService {
         const now = Date.now();
 
         recordTiming(
-          "entry-timing",
+          'entry-timing',
           `${label} duration=${now - operationStartedAt}ms total=${now - startedAt}ms`,
         );
       }
     };
 
-    mark("parsed amount");
+    mark('parsed amount');
 
-    const preflight = await measure("prevalidation query", () =>
+    const preflight = await measure('prevalidation query', () =>
       this.getEntryPreflight({
         roomId,
         userId,
       }),
     );
 
-    mark("prevalidation reads complete");
+    mark('prevalidation reads complete');
 
     if (!preflight.userId) {
-      throw new NotFoundException("User not found.");
+      throw new NotFoundException('User not found.');
     }
 
     if (!preflight.roomId) {
-      throw new NotFoundException("Room not found.");
+      throw new NotFoundException('Room not found.');
     }
 
     if (preflight.roomStatus !== RoomStatus.ACTIVE) {
       throw new BadRequestException(
-        "Entries are only allowed in ACTIVE rooms.",
+        'Entries are only allowed in ACTIVE rooms.',
       );
     }
 
     if (!preflight.categoryIsActive) {
       throw new BadRequestException(
-        "Entries are only allowed in active categories.",
+        'Entries are only allowed in active categories.',
       );
     }
 
     if (!preflight.roundId || preflight.roundStatus !== RoundStatus.OPEN) {
       throw new BadRequestException(
-        "Room does not have an OPEN round. Start a round first.",
+        'Room does not have an OPEN round. Start a round first.',
       );
     }
 
@@ -289,7 +293,7 @@ export class EntriesService {
       preflight.categoryMaxEntryAmount === null
     ) {
       throw new BadRequestException(
-        "Room category is not configured for entries.",
+        'Room category is not configured for entries.',
       );
     }
 
@@ -299,7 +303,7 @@ export class EntriesService {
     const user = this.toPlayerFromPreflight(preflight);
 
     const requestIdempotencyKey =
-      typeof body?.idempotencyKey === "string" &&
+      typeof body?.idempotencyKey === 'string' &&
       body.idempotencyKey.trim().length > 0
         ? body.idempotencyKey.trim()
         : `${idempotencyScope}:${roundId}:${user.id}:${randomUUID()}`;
@@ -307,7 +311,7 @@ export class EntriesService {
     const entryId = randomUUID();
 
     try {
-      mark("before transaction");
+      mark('before transaction');
 
       const result = await this.prisma.$transaction(async (tx) => {
         /**
@@ -336,15 +340,15 @@ export class EntriesService {
 
         const durationMs = Date.now() - operationStartedAt;
         recordTiming(
-          "wallet-hold-timing",
+          'wallet-hold-timing',
           `compact wallet-ledger-entry write duration=${durationMs}ms`,
         );
-        mark("tx compact placement write");
+        mark('tx compact placement write');
 
         return placement;
       }, this.transactionOptions);
 
-      mark("transaction complete");
+      mark('transaction complete');
       flushTimingIfSlow();
 
       return {
@@ -355,7 +359,7 @@ export class EntriesService {
         reused: result.reused,
       };
     } catch (error) {
-      mark("failed before throw");
+      mark('failed before throw');
       flushTimingIfSlow();
       /**
        * If a duplicate idempotency key wins a race, try to replay the completed
@@ -366,7 +370,7 @@ export class EntriesService {
           idempotencyKey: requestIdempotencyKey,
           roundId,
           userId: user.id,
-          walletAccountId: preflight.walletId ?? "",
+          walletAccountId: preflight.walletId ?? '',
           amount: addAmount,
           player: user,
         });
@@ -376,7 +380,7 @@ export class EntriesService {
         }
 
         throw new BadRequestException(
-          "Duplicate entry request detected. Use a new idempotency key and retry safely.",
+          'Duplicate entry request detected. Use a new idempotency key and retry safely.',
         );
       }
 
@@ -385,7 +389,7 @@ export class EntriesService {
           idempotencyKey: requestIdempotencyKey,
           roundId,
           userId: user.id,
-          walletAccountId: preflight.walletId ?? "",
+          walletAccountId: preflight.walletId ?? '',
           amount: addAmount,
           player: user,
         });
@@ -395,7 +399,7 @@ export class EntriesService {
         }
 
         throw new BadRequestException(
-          "Duplicate entry request detected. Use a new idempotency key and retry safely.",
+          'Duplicate entry request detected. Use a new idempotency key and retry safely.',
         );
       }
 
@@ -1008,7 +1012,7 @@ export class EntriesService {
     const row = rows[0];
 
     if (!row) {
-      throw new BadRequestException("Entry write failed. Please retry.");
+      throw new BadRequestException('Entry write failed. Please retry.');
     }
 
     return this.toPlacementResultFromRow(row, args);
@@ -1022,84 +1026,84 @@ export class EntriesService {
       maxEntryAmount: bigint;
     },
   ) {
-    if (row.status === "IDEMPOTENCY_RACE") {
+    if (row.status === 'IDEMPOTENCY_RACE') {
       throw new EntryIdempotencyRaceError();
     }
 
     if (
-      row.status === "IDEMPOTENCY_MISMATCH" ||
-      row.status === "ENTRY_HELD_MISMATCH"
+      row.status === 'IDEMPOTENCY_MISMATCH' ||
+      row.status === 'ENTRY_HELD_MISMATCH'
     ) {
       throw new BadRequestException(
-        "Idempotency key was already used for a different entry request.",
+        'Idempotency key was already used for a different entry request.',
       );
     }
 
-    if (row.status === "IDEMPOTENCY_REPLAY_MISSING") {
+    if (row.status === 'IDEMPOTENCY_REPLAY_MISSING') {
       throw new BadRequestException(
-        "Previous entry request is missing its committed entry. Manual review required.",
+        'Previous entry request is missing its committed entry. Manual review required.',
       );
     }
 
-    if (row.status === "ENTRY_BELOW_MIN") {
+    if (row.status === 'ENTRY_BELOW_MIN') {
       throw new BadRequestException(
         `Entry amount is below category minimum. Minimum is ${args.minEntryAmount.toString()}.`,
       );
     }
 
-    if (row.status === "ENTRY_ABOVE_MAX") {
+    if (row.status === 'ENTRY_ABOVE_MAX') {
       throw new BadRequestException(
         `Entry amount is above category maximum. Maximum is ${args.maxEntryAmount.toString()}.`,
       );
     }
 
-    if (row.status === "ENTRY_EXCEEDS_MAX") {
-      const currentAmount = row.existingEntryAmount?.toString() ?? "unknown";
+    if (row.status === 'ENTRY_EXCEEDS_MAX') {
+      const currentAmount = row.existingEntryAmount?.toString() ?? 'unknown';
 
       throw new BadRequestException(
         `Entry increase would exceed category maximum. Maximum is ${args.maxEntryAmount.toString()}, current is ${currentAmount}, attempted add is ${args.amount.toString()}.`,
       );
     }
 
-    if (row.status === "FIXED_ENTRY_AMOUNT_REQUIRED") {
+    if (row.status === 'FIXED_ENTRY_AMOUNT_REQUIRED') {
       throw new BadRequestException(
-        "Fixed equal-chance room is missing fixedEntryAmount. Manual admin review required.",
+        'Fixed equal-chance room is missing fixedEntryAmount. Manual admin review required.',
       );
     }
 
-    if (row.status === "FIXED_ENTRY_AMOUNT_MISMATCH") {
+    if (row.status === 'FIXED_ENTRY_AMOUNT_MISMATCH') {
       throw new BadRequestException(
-        "Fixed equal-chance room requires the exact configured entry amount.",
+        'Fixed equal-chance room requires the exact configured entry amount.',
       );
     }
 
-    if (row.status === "FIXED_TOP_UP_NOT_ALLOWED") {
+    if (row.status === 'FIXED_TOP_UP_NOT_ALLOWED') {
       throw new BadRequestException(
-        "Fixed equal-chance room allows one entry per user and does not allow top-ups.",
+        'Fixed equal-chance room allows one entry per user and does not allow top-ups.',
       );
     }
 
-    if (row.status === "INSUFFICIENT_BALANCE") {
-      const balance = row.walletBalanceSnapshot?.toString() ?? "0";
+    if (row.status === 'INSUFFICIENT_BALANCE') {
+      const balance = row.walletBalanceSnapshot?.toString() ?? '0';
 
       throw new BadRequestException(
         `Insufficient MAIN wallet balance. Balance is ${balance}, required is ${args.amount.toString()}.`,
       );
     }
 
-    if (row.status === "ROUND_NOT_OPEN") {
+    if (row.status === 'ROUND_NOT_OPEN') {
       throw new BadRequestException(
-        "Round is no longer OPEN. Entry was not accepted.",
+        'Round is no longer OPEN. Entry was not accepted.',
       );
     }
 
-    if (row.status === "LEDGER_WRITE_FAILED" || row.status === "UNKNOWN") {
-      throw new BadRequestException("Entry write failed. Please retry.");
+    if (row.status === 'LEDGER_WRITE_FAILED' || row.status === 'UNKNOWN') {
+      throw new BadRequestException('Entry write failed. Please retry.');
     }
 
     if (!row.entryId || !row.walletId || !row.roundId) {
       throw new BadRequestException(
-        "Entry write returned an incomplete result.",
+        'Entry write returned an incomplete result.',
       );
     }
 
@@ -1107,7 +1111,7 @@ export class EntriesService {
       entry: this.entryFromPlacementRow(row),
       wallet: this.walletFromPlacementRow(row),
       round: this.roundFromPlacementRow(row),
-      reused: row.status === "REPLAY" || row.reused,
+      reused: row.status === 'REPLAY' || row.reused,
     };
   }
 
@@ -1118,7 +1122,7 @@ export class EntriesService {
       !row.userUsername ||
       !row.userFullName
     ) {
-      throw new NotFoundException("User not found.");
+      throw new NotFoundException('User not found.');
     }
 
     return {
@@ -1140,7 +1144,7 @@ export class EntriesService {
       !row.entryUpdatedAt
     ) {
       throw new BadRequestException(
-        "Entry write returned an incomplete entry.",
+        'Entry write returned an incomplete entry.',
       );
     }
 
@@ -1166,7 +1170,7 @@ export class EntriesService {
       !row.walletUpdatedAt
     ) {
       throw new BadRequestException(
-        "Entry write returned an incomplete wallet.",
+        'Entry write returned an incomplete wallet.',
       );
     }
 
@@ -1194,7 +1198,7 @@ export class EntriesService {
       !row.roundUpdatedAt
     ) {
       throw new BadRequestException(
-        "Entry write returned an incomplete round.",
+        'Entry write returned an incomplete round.',
       );
     }
 
@@ -1257,21 +1261,21 @@ export class EntriesService {
 
     if (compensation) {
       throw new BadRequestException(
-        "Previous entry request was refunded after a failed write. Retry with a new idempotency key.",
+        'Previous entry request was refunded after a failed write. Retry with a new idempotency key.',
       );
     }
 
-    const holdState = this.getMetadataString(transaction.metadata, "holdState");
+    const holdState = this.getMetadataString(transaction.metadata, 'holdState');
 
-    if (holdState === "HELD") {
+    if (holdState === 'HELD') {
       return {
         placement: null,
-        pendingEntryId: this.getMetadataString(transaction.metadata, "entryId"),
+        pendingEntryId: this.getMetadataString(transaction.metadata, 'entryId'),
       };
     }
 
     const entryId =
-      this.getMetadataString(transaction.metadata, "entryId") ?? undefined;
+      this.getMetadataString(transaction.metadata, 'entryId') ?? undefined;
 
     const entry = entryId
       ? await this.prisma.entry.findUniqueOrThrow({
@@ -1322,43 +1326,43 @@ export class EntriesService {
   ) {
     const matches =
       transaction.type === LedgerTransactionType.ENTRY_HOLD &&
-      transaction.referenceType === "ENTRY" &&
-      this.getMetadataString(transaction.metadata, "roundId") ===
+      transaction.referenceType === 'ENTRY' &&
+      this.getMetadataString(transaction.metadata, 'roundId') ===
         args.roundId &&
-      this.getMetadataString(transaction.metadata, "userId") === args.userId &&
-      this.getMetadataString(transaction.metadata, "walletAccountId") ===
+      this.getMetadataString(transaction.metadata, 'userId') === args.userId &&
+      this.getMetadataString(transaction.metadata, 'walletAccountId') ===
         args.walletAccountId &&
-      this.getMetadataString(transaction.metadata, "amount") ===
+      this.getMetadataString(transaction.metadata, 'amount') ===
         args.amount.toString();
 
     if (!matches) {
       throw new BadRequestException(
-        "Idempotency key was already used for a different entry request.",
+        'Idempotency key was already used for a different entry request.',
       );
     }
   }
 
   private getMetadataString(metadata: Prisma.JsonValue | null, key: string) {
-    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
       return null;
     }
 
     const value = (metadata as Record<string, unknown>)[key];
 
-    return typeof value === "string" ? value : null;
+    return typeof value === 'string' ? value : null;
   }
 
   private parseAmount(rawAmount: unknown): bigint {
-    if (typeof rawAmount !== "number") {
-      throw new BadRequestException("amount must be a number.");
+    if (typeof rawAmount !== 'number') {
+      throw new BadRequestException('amount must be a number.');
     }
 
     if (!Number.isSafeInteger(rawAmount)) {
-      throw new BadRequestException("amount must be a safe integer.");
+      throw new BadRequestException('amount must be a safe integer.');
     }
 
     if (rawAmount <= 0) {
-      throw new BadRequestException("amount must be greater than zero.");
+      throw new BadRequestException('amount must be greater than zero.');
     }
 
     return BigInt(rawAmount);
@@ -1367,7 +1371,7 @@ export class EntriesService {
   private isUniqueConstraintError(error: unknown) {
     return (
       error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002"
+      error.code === 'P2002'
     );
   }
 

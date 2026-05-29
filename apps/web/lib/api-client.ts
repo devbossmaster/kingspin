@@ -19,13 +19,16 @@ export type CategoryListItem = CategorySnapshot & {
 
 export type RoomListItem = Omit<RoomSnapshot, "name"> & {
   name: string | null;
+  currentRound?: {
+    id: string;
+    status: string;
+    playerCount: number;
+    totalEntryAmount: string;
+    payoutAmount: string;
+  } | null;
 };
 
-export type AdminRoomCommand =
-  | "activate"
-  | "pause"
-  | "close"
-  | "archive";
+export type AdminRoomCommand = "activate" | "pause" | "close" | "archive";
 
 export type PlaceEntryResponse = {
   entry: Omit<EntryWithPlayerSnapshot, "player">;

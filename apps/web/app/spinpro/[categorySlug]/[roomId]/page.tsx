@@ -3,6 +3,7 @@
 import { useParams } from "next/navigation";
 import { ConnectionPill } from "../../../../components/layout/connection-pill";
 import { NavBar } from "../../../../components/layout/nav-bar";
+import { BottomNav } from "../../../../components/player/bottom-nav";
 import { EntryPanel } from "../../../../components/spinpro/entry-panel";
 import { FairnessStrip } from "../../../../components/spinpro/fairness-strip";
 import { PlayersList } from "../../../../components/spinpro/players-list";
@@ -17,6 +18,7 @@ import { Button } from "../../../../components/ui/button";
 import { useRoom } from "../../../../hooks/use-room";
 import { formatCoins, truncateId } from "../../../../lib/format";
 import { useSession } from "../../../../lib/auth-client";
+import { useAuthStore } from "../../../../stores/auth-store";
 import { useRoomStore } from "../../../../stores/room-store";
 
 export default function LiveRoomPage() {
@@ -24,6 +26,7 @@ export default function LiveRoomPage() {
   const roomId = params.roomId;
   const roomHref = `/spinpro/${params.categorySlug}/${roomId}`;
   const { data: session, isPending } = useSession();
+  const authUser = useAuthStore((store) => store.user);
 
   const {
     state,
@@ -50,7 +53,7 @@ export default function LiveRoomPage() {
 
   if (!state) {
     return (
-      <main className="min-h-screen text-text-primary">
+      <main className="min-h-screen pb-24 text-text-primary md:pb-0">
         <NavBar backHref={`/spinpro/${params.categorySlug}`} />
         <ConnectionPill />
 
@@ -75,6 +78,7 @@ export default function LiveRoomPage() {
             ) : null}
           </section>
         </div>
+        <BottomNav role={authUser?.role} />
       </main>
     );
   }
@@ -82,9 +86,13 @@ export default function LiveRoomPage() {
   const currentRound = state.currentRound;
   const roundStatus = currentRound?.status;
   const totalEntryAmount = currentRound?.totalEntryAmount ?? "0";
+  const isFixedMode = state.room.gameMode === "FIXED_EQUAL_CHANCE";
+  const modeLabel = isFixedMode
+    ? "Fixed Bet · Equal Chance"
+    : "Pro Mode · Flexible Proportional";
 
   return (
-    <main className="min-h-screen text-text-primary">
+    <main className="min-h-screen pb-24 text-text-primary md:pb-0">
       <NavBar backHref={`/spinpro/${params.categorySlug}`} />
       <ConnectionPill />
 
@@ -115,6 +123,10 @@ export default function LiveRoomPage() {
                   <Badge variant={phaseBadgeVariant(roundStatus)}>
                     {roundStatus ?? "NO ROUND"}
                   </Badge>
+
+                  <span className="rounded-full border border-[var(--border)] bg-white/[0.04] px-3 py-1 font-mono">
+                    {modeLabel}
+                  </span>
                 </div>
               </div>
 
@@ -146,7 +158,11 @@ export default function LiveRoomPage() {
                   {formatCoins(myEntry?.amount)}
                 </p>
                 <p className="mt-2 text-xs text-text-dim">
-                  {myEntry ? "Confirmed in this round" : "Not entered yet"}
+                  {myEntry
+                    ? isFixedMode
+                      ? "You are in this equal-chance round"
+                      : "Confirmed proportional ticket range"
+                    : "Not entered yet"}
                 </p>
               </div>
             </div>
@@ -292,6 +308,7 @@ export default function LiveRoomPage() {
         result={latestResult}
         onClose={dismissWinner}
       />
+      <BottomNav role={user?.role ?? authUser?.role} />
     </main>
   );
 }

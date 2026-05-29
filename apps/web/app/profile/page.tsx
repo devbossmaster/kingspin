@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { NavBar } from "../../components/layout/nav-bar";
+import { GameShell } from "../../components/player/game-shell";
 import { Button } from "../../components/ui/button";
 import { useSession } from "../../lib/auth-client";
 import { useAuthStore } from "../../stores/auth-store";
@@ -31,7 +31,9 @@ export default function ProfilePage() {
       const result = await fetchMe();
 
       if (!result) {
-        setError("Profile unavailable until the API auth bridge validates this session.");
+        setError(
+          "Profile unavailable until the API auth bridge validates this session.",
+        );
       } else {
         setError(null);
       }
@@ -39,9 +41,7 @@ export default function ProfilePage() {
   }, [fetchMe, session?.user]);
 
   return (
-    <main className="min-h-screen text-text-primary">
-      <NavBar backHref="/spinpro" />
-
+    <GameShell backHref="/spinpro">
       <div className="mx-auto max-w-4xl px-4 py-8 md:px-8">
         <p className="text-xs font-black uppercase tracking-[0.2em] text-gold">
           Profile
@@ -68,11 +68,19 @@ export default function ProfilePage() {
 
             <div className="grid gap-3 md:grid-cols-2">
               <ProfileRow label="Username" value={user?.username ?? "-"} />
-              <ProfileRow label="Email" value={user?.email ?? session?.user.email ?? "-"} />
-              <ProfileRow label="Full name" value={user?.fullName ?? session?.user.name ?? "-"} />
+              <ProfileRow
+                label="Email"
+                value={user?.email ?? session?.user.email ?? "-"}
+              />
+              <ProfileRow
+                label="Full name"
+                value={user?.fullName ?? session?.user.name ?? "-"}
+              />
               <ProfileRow
                 label="Email verified"
-                value={String(user?.emailVerified ?? session?.user.emailVerified ?? false)}
+                value={String(
+                  user?.emailVerified ?? session?.user.emailVerified ?? false,
+                )}
               />
               <ProfileRow label="Role" value={user?.role ?? "-"} />
             </div>
@@ -83,6 +91,6 @@ export default function ProfilePage() {
           </section>
         )}
       </div>
-    </main>
+    </GameShell>
   );
 }

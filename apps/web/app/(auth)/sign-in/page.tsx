@@ -26,6 +26,8 @@ export default function SignInPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const callbackURL =
+    typeof window === "undefined" ? "/spinpro" : getSafeCallbackUrl();
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -59,11 +61,14 @@ export default function SignInPage() {
     <AuthShell
       eyebrow="Player session"
       title="Sign in"
-      subtitle="Use your verified SpinPro account to enter rooms and view your wallet."
+      subtitle="Enter rooms, sync your wallet, and return to the spin you selected."
       footer={
         <>
           New here?{" "}
-          <Link className="font-bold text-yellow-200 hover:text-yellow-100" href="/sign-up">
+          <Link
+            className="font-bold text-yellow-200 hover:text-yellow-100"
+            href={`/sign-up?callbackURL=${encodeURIComponent(callbackURL)}`}
+          >
             Create an account
           </Link>
           <span className="mx-2 text-slate-600">|</span>
@@ -101,7 +106,11 @@ export default function SignInPage() {
           />
         </label>
 
-        <button className={authButtonClass} type="submit" disabled={isSubmitting}>
+        <button
+          className={authButtonClass}
+          type="submit"
+          disabled={isSubmitting}
+        >
           {isSubmitting ? "Signing in..." : "Sign in"}
         </button>
       </form>

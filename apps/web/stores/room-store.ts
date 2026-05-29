@@ -19,12 +19,12 @@ type RoomStore = {
 };
 
 export const useRoomStore = create<RoomStore>((set) => ({
-  selectedChip: 1000,
+  selectedChip: 10,
   connectionStatus: "disconnected",
   isWinnerRevealOpen: false,
   lastWinner: null,
   roundLog: [],
-  chipOptions: [1000],
+  chipOptions: [10],
 
   setSelectedChip: (amount) => set({ selectedChip: amount }),
   setChipOptions: (chipOptions) =>

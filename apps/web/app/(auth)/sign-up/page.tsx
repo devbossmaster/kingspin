@@ -15,6 +15,17 @@ import {
 } from "../../../components/auth/password-strength";
 import { signUp } from "../../../lib/auth-client";
 
+function getSafeCallbackUrl() {
+  if (typeof window === "undefined") {
+    return "/spinpro";
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const callbackUrl = params.get("callbackURL") ?? params.get("redirect");
+
+  return callbackUrl?.startsWith("/") ? callbackUrl : "/spinpro";
+}
+
 export default function SignUpPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +44,7 @@ export default function SignUpPage() {
     const email = String(formData.get("email") ?? "").trim();
     const passwordValue = String(formData.get("password") ?? "");
     const confirmPassword = String(formData.get("confirmPassword") ?? "");
+    const callbackURL = getSafeCallbackUrl();
 
     if (username.length < 3) {
       setError("Username must be at least 3 characters.");
@@ -40,7 +52,9 @@ export default function SignUpPage() {
     }
 
     if (!getPasswordStrength(passwordValue).isValid) {
-      setError("Password must include uppercase, number, and special character.");
+      setError(
+        "Password must include uppercase, number, and special character.",
+      );
       return;
     }
 
@@ -56,7 +70,7 @@ export default function SignUpPage() {
       password: passwordValue,
       name: fullName,
       username,
-      callbackURL: "/spinpro",
+      callbackURL,
     });
 
     setIsSubmitting(false);
@@ -73,12 +87,15 @@ export default function SignUpPage() {
   return (
     <AuthShell
       eyebrow="Create player"
-      title="Sign up"
-      subtitle="Create the account used for sessions, wallet access, and protected entry actions."
+      title="Register"
+      subtitle="Create your player profile with email and password. Wallet and entry actions stay protected by your session."
       footer={
         <>
           Already have an account?{" "}
-          <Link className="font-bold text-yellow-200 hover:text-yellow-100" href="/sign-in">
+          <Link
+            className="font-bold text-yellow-200 hover:text-yellow-100"
+            href={`/sign-in?callbackURL=${encodeURIComponent(getSafeCallbackUrl())}`}
+          >
             Sign in
           </Link>
         </>
@@ -147,7 +164,11 @@ export default function SignUpPage() {
           />
         </label>
 
-        <button className={authButtonClass} type="submit" disabled={isSubmitting}>
+        <button
+          className={authButtonClass}
+          type="submit"
+          disabled={isSubmitting}
+        >
           {isSubmitting ? "Creating account..." : "Create account"}
         </button>
       </form>

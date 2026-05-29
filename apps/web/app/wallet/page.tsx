@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { NavBar } from "../../components/layout/nav-bar";
+import { GameShell } from "../../components/player/game-shell";
 import { Button } from "../../components/ui/button";
 import { useSession } from "../../lib/auth-client";
 import { formatCoins } from "../../lib/format";
@@ -22,7 +22,9 @@ export default function WalletPage() {
       const result = await fetchWallet();
 
       if (!result) {
-        setError("Wallet unavailable until the API auth bridge validates this session.");
+        setError(
+          "Wallet unavailable until the API auth bridge validates this session.",
+        );
       } else {
         setError(null);
       }
@@ -30,9 +32,7 @@ export default function WalletPage() {
   }, [fetchWallet, session?.user]);
 
   return (
-    <main className="min-h-screen text-text-primary">
-      <NavBar backHref="/spinpro" />
-
+    <GameShell backHref="/spinpro">
       <div className="mx-auto max-w-4xl px-4 py-8 md:px-8">
         <p className="text-xs font-black uppercase tracking-[0.2em] text-gold">
           Wallet
@@ -75,6 +75,6 @@ export default function WalletPage() {
           </section>
         )}
       </div>
-    </main>
+    </GameShell>
   );
 }

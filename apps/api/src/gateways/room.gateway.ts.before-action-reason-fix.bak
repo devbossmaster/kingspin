@@ -249,12 +249,7 @@ export class RoomGateway
      * The caller already runs this in the background, but this keeps the gateway
      * itself responsive and avoids serial socket work.
      */
-    const action =
-      payload && typeof payload === 'object' && 'action' in payload
-        ? String((payload as { action?: unknown }).action)
-        : 'UNKNOWN';
-
-    void this.broadcastRoundState(roomId, action).catch(
+    void this.broadcastRoundState(roomId, 'MACHINE_ADVANCED').catch(
       (error: unknown) => {
         const message =
           error instanceof Error ? error.message : 'Unknown round state error';
@@ -283,8 +278,6 @@ export class RoomGateway
     if (
       action === 'CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT' ||
       action === 'CANCELLED_SINGLE_PLAYER_ROUND_AND_STARTED_NEXT' ||
-      action === 'CANCELLED_EMPTY_LOCKED_ROUND_AND_STARTED_NEXT' ||
-      action === 'CANCELLED_SINGLE_PLAYER_LOCKED_ROUND_AND_STARTED_NEXT' ||
       action === 'STARTED_NEXT_ROUND_AFTER_COMPLETION'
     ) {
       this.emitMachineEvent(
@@ -640,5 +633,3 @@ export class RoomGateway
     this.logger.log(message);
   }
 }
-
-

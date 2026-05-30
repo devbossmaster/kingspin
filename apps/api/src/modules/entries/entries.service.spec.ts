@@ -536,4 +536,23 @@ describe('EntriesService hot path', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
+
+  it('rejects entries after a round is no longer OPEN before money writes', async () => {
+    const { service, prisma } = buildService({
+      preflight: {
+        roundId: 'round-1',
+        roundStatus: RoundStatus.LOCKED,
+      },
+    });
+
+    await expect(
+      service.placeEntryForUser({
+        roomId: 'room-1',
+        userId: 'user-1',
+        amount: 1_000,
+        idempotencyKey: 'locked-entry-key',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
 });

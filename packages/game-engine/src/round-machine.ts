@@ -14,9 +14,7 @@ const allowedTransitions: Record<RoundStatus, RoundStatus[]> = {
   OPEN: ["LOCKED", "CANCELLED"],
   LOCKED: ["DRAWING", "CANCELLED"],
 
-  // Current backend can settle directly from DRAWING.
-  // Later Socket.IO flow can use DRAWING -> SPINNING -> SETTLING.
-  DRAWING: ["SPINNING", "SETTLING", "CANCELLED"],
+  DRAWING: ["SPINNING", "CANCELLED"],
 
   SPINNING: ["SETTLING", "CANCELLED"],
   SETTLING: ["COMPLETED"],

@@ -18,7 +18,18 @@ import {
   getModeTitle,
 } from "../../../lib/game-modes";
 import { formatCoins } from "../../../lib/format";
+import {
+  formatLockCountdown,
+  getAdjustedMsUntilLock,
+  getRoomPlayerCount,
+  getRoomPool,
+  getRoundPhaseLabel,
+  getRoundStatusTone,
+} from "../../../lib/room-summary";
 import { useCategories } from "../../../hooks/use-categories";
+
+const VISIBLE_POLL_MS = 2_000;
+const HIDDEN_POLL_MS = 10_000;
 
 export default function CategoryLobbyPage() {
   const params = useParams<{ categorySlug: string }>();
@@ -28,6 +39,7 @@ export default function CategoryLobbyPage() {
   const [rooms, setRooms] = useState<RoomListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [clientNowMs, setClientNowMs] = useState(() => Date.now());
 
   const category = useMemo(
     () => categories.find((item) => item.slug === categorySlug) ?? null,
@@ -38,37 +50,103 @@ export default function CategoryLobbyPage() {
 
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let hasLoaded = false;
 
-    async function loadRooms() {
-      setLoading(true);
-      setError(null);
+    async function loadRooms(showLoading: boolean) {
+      if (inFlight) {
+        return;
+      }
+
+      inFlight = true;
+
+      if (showLoading) {
+        setLoading(true);
+      }
 
       try {
         const nextRooms = await apiClient.getRoomsByCategory(categorySlug);
 
         if (!cancelled) {
           setRooms(nextRooms);
+          setError(null);
+          hasLoaded = true;
         }
       } catch (caught) {
         if (!cancelled) {
-          setRooms([]);
+          if (!hasLoaded) {
+            setRooms([]);
+          }
           setError(
             caught instanceof Error ? caught.message : "Could not load rooms.",
           );
         }
       } finally {
+        inFlight = false;
+
         if (!cancelled) {
           setLoading(false);
         }
       }
     }
 
-    void loadRooms();
+    function scheduleNextPoll() {
+      if (cancelled) {
+        return;
+      }
+
+      const delay =
+        typeof document !== "undefined" && document.hidden
+          ? HIDDEN_POLL_MS
+          : VISIBLE_POLL_MS;
+
+      timeoutId = setTimeout(() => {
+        timeoutId = null;
+        void loadRooms(false).finally(scheduleNextPoll);
+      }, delay);
+    }
+
+    function refreshNow() {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+
+      if (!inFlight) {
+        void loadRooms(false).finally(scheduleNextPoll);
+      }
+    }
+
+    void loadRooms(true).finally(scheduleNextPoll);
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        refreshNow();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     };
   }, [categorySlug]);
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setClientNowMs(Date.now());
+    }, 1_000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, []);
 
   return (
     <GameShell backHref="/spinpro">
@@ -103,6 +181,9 @@ export default function CategoryLobbyPage() {
               {rooms.map((room) => {
                 const roomHref = `/spinpro/${categorySlug}/${room.id}`;
                 const currentRound = room.currentRound;
+                const status = currentRound?.status ?? room.status;
+                const phaseLabel = getRoundPhaseLabel(status);
+                const msUntilLock = getAdjustedMsUntilLock(room, clientNowMs);
 
                 return (
                   <Link
@@ -120,12 +201,23 @@ export default function CategoryLobbyPage() {
                         </h2>
                       </div>
                       <StatusPill
-                        tone={
-                          currentRound?.status === "OPEN" ? "lime" : "muted"
-                        }
+                        tone={getRoundStatusTone(status)}
                       >
-                        {currentRound?.status ?? room.status}
+                        {phaseLabel}
                       </StatusPill>
+                    </div>
+
+                    <div className="mt-4 flex min-h-11 items-center justify-between gap-3 rounded-md border border-[var(--border)] bg-white/[0.035] px-3 py-2 text-sm">
+                      <span className="font-semibold text-text-secondary">
+                        {currentRound?.roundNumber
+                          ? `Round #${currentRound.roundNumber}`
+                          : "Waiting"}
+                      </span>
+                      <span className="font-mono font-black text-text-primary">
+                        {status === "OPEN" && msUntilLock > 0
+                          ? formatLockCountdown(msUntilLock)
+                          : phaseLabel}
+                      </span>
                     </div>
 
                     <div className="mt-5 grid grid-cols-2 gap-2 text-sm">
@@ -134,7 +226,7 @@ export default function CategoryLobbyPage() {
                           Players
                         </p>
                         <p className="mt-1 font-mono font-black">
-                          {currentRound?.playerCount ?? 0}/{room.maxPlayers}
+                          {getRoomPlayerCount(room)}/{room.maxPlayers}
                         </p>
                       </div>
                       <div className="rounded-md border border-[var(--border)] bg-white/[0.035] px-3 py-2">
@@ -142,7 +234,7 @@ export default function CategoryLobbyPage() {
                           Pool
                         </p>
                         <p className="mt-1 font-mono font-black text-gold">
-                          {formatCoins(currentRound?.payoutAmount ?? "0")}
+                          {formatCoins(getRoomPool(room))}
                         </p>
                       </div>
                     </div>

@@ -17,6 +17,9 @@ import {
 } from "../../lib/game-modes";
 import { useCategories } from "../../hooks/use-categories";
 
+const VISIBLE_POLL_MS = 2_000;
+const HIDDEN_POLL_MS = 10_000;
+
 function SpinProLobbyContent() {
   const searchParams = useSearchParams();
   const initialMode = searchParams.get("mode") === "fixed" ? "fixed" : "pro";
@@ -32,6 +35,7 @@ function SpinProLobbyContent() {
   >({});
   const [roomsLoading, setRoomsLoading] = useState(false);
   const [roomsError, setRoomsError] = useState<string | null>(null);
+  const [clientNowMs, setClientNowMs] = useState(() => Date.now());
 
   useEffect(() => {
     setSelectedMode(initialMode);
@@ -55,50 +59,126 @@ function SpinProLobbyContent() {
 
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let hasLoaded = false;
 
-    async function loadRooms() {
-      setRoomsLoading(true);
-      setRoomsError(null);
+    async function loadRooms(showLoading: boolean) {
+      if (inFlight) {
+        return;
+      }
 
-      const entries = await Promise.all(
-        visibleCategories.map(async (category) => {
-          try {
-            return [
-              category.slug,
-              await apiClient.getRoomsByCategory(category.slug),
-            ] as const;
-          } catch (caught) {
-            if (!cancelled) {
-              setRoomsError(
+      inFlight = true;
+
+      if (showLoading) {
+        setRoomsLoading(true);
+      }
+
+      try {
+        let nextError: string | null = null;
+        const entries = await Promise.all(
+          visibleCategories.map(async (category) => {
+            try {
+              return [
+                category.slug,
+                await apiClient.getRoomsByCategory(category.slug),
+              ] as const;
+            } catch (caught) {
+              nextError =
                 caught instanceof Error
                   ? caught.message
-                  : "Could not load rooms.",
-              );
+                  : "Could not load rooms.";
+              return [category.slug, []] as const;
             }
-            return [category.slug, []] as const;
-          }
-        }),
-      );
+          }),
+        );
 
-      if (!cancelled) {
-        setRoomsBySlug((current) => ({
-          ...current,
-          ...Object.fromEntries(entries),
-        }));
-        setRoomsLoading(false);
+        if (!cancelled) {
+          setRoomsBySlug((current) => ({
+            ...current,
+            ...Object.fromEntries(entries),
+          }));
+          setRoomsError(nextError);
+          setRoomsLoading(false);
+          hasLoaded = true;
+        }
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    function scheduleNextPoll() {
+      if (cancelled || visibleCategories.length === 0) {
+        return;
+      }
+
+      const delay =
+        typeof document !== "undefined" && document.hidden
+          ? HIDDEN_POLL_MS
+          : VISIBLE_POLL_MS;
+
+      timeoutId = setTimeout(() => {
+        timeoutId = null;
+        void loadRooms(false).finally(scheduleNextPoll);
+      }, delay);
+    }
+
+    function refreshNow() {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+
+      if (!inFlight) {
+        void loadRooms(false).finally(scheduleNextPoll);
       }
     }
 
     if (visibleCategories.length > 0) {
-      void loadRooms();
+      void loadRooms(true)
+        .catch((caught) => {
+          if (!cancelled) {
+            if (!hasLoaded) {
+              setRoomsBySlug({});
+            }
+            setRoomsError(
+              caught instanceof Error ? caught.message : "Could not load rooms.",
+            );
+            setRoomsLoading(false);
+          }
+        })
+        .finally(scheduleNextPoll);
     } else {
       setRoomsLoading(false);
     }
 
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        refreshNow();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     };
   }, [visibleCategories]);
+
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      setClientNowMs(Date.now());
+    }, 1_000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, []);
 
   const error = categoriesError ?? roomsError;
   const isSignedIn = Boolean(session?.user);
@@ -176,6 +256,7 @@ function SpinProLobbyContent() {
                   category={category}
                   room={roomsBySlug[category.slug]?.[0] ?? null}
                   isSignedIn={isSignedIn}
+                  clientNowMs={clientNowMs}
                 />
               ))}
             </div>

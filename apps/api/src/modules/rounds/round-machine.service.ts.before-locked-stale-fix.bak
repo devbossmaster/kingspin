@@ -372,52 +372,6 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
         };
       }
 
-      const entryCount = await this.prisma.entry.count({
-        where: { roundId: currentRound.id },
-      });
-
-      if (entryCount === 0) {
-        const cancelled =
-          await this.roundsService.cancelCurrentRoundForRoom(roomId);
-        const startedRound =
-          await this.roundsService.startOpenRoundForRoom(roomId);
-
-        return {
-          action: "CANCELLED_EMPTY_LOCKED_ROUND_AND_STARTED_NEXT",
-          roomId,
-          cancelledRound: cancelled.currentRound,
-          currentRound: startedRound,
-          refundSummary: {
-            refundedCount: cancelled.refundedCount,
-            skippedCount: cancelled.skippedCount,
-            alreadyRefundedCount: cancelled.alreadyRefundedCount,
-            refundedAmount: cancelled.refundedAmount,
-          },
-          force,
-        };
-      }
-
-      if (entryCount === 1) {
-        const cancelled =
-          await this.roundsService.cancelCurrentRoundForRoom(roomId);
-        const startedRound =
-          await this.roundsService.startOpenRoundForRoom(roomId);
-
-        return {
-          action: "CANCELLED_SINGLE_PLAYER_LOCKED_ROUND_AND_STARTED_NEXT",
-          roomId,
-          cancelledRound: cancelled.currentRound,
-          currentRound: startedRound,
-          refundSummary: {
-            refundedCount: cancelled.refundedCount,
-            skippedCount: cancelled.skippedCount,
-            alreadyRefundedCount: cancelled.alreadyRefundedCount,
-            refundedAmount: cancelled.refundedAmount,
-          },
-          force,
-        };
-      }
-
       const drawn = await this.roundsService.drawCurrentRoundForRoom(roomId);
 
       return {
@@ -677,27 +631,19 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
   private shouldBroadcastMachineResult(result: any) {
     const action = result?.action;
 
-    if (!action || typeof action !== "string") {
-      return false;
-    }
-
-    // Waiting actions are internal scheduler states and should not spam clients.
-    const silentActions = new Set([
-      "WAITING_FOR_OPEN_TO_EXPIRE",
-      "WAITING_FOR_LOCKED_PHASE",
-      "WAITING_FOR_DRAWING_PHASE",
-      "WAITING_FOR_SPINNING_PHASE",
-      "WAITING_FOR_COMPLETION_COOLDOWN",
-      "SKIPPED_NOT_LEADER",
+    const broadcastActions = new Set([
+      "STARTED_OPEN_ROUND",
+      "CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT",
+      "CANCELLED_SINGLE_PLAYER_ROUND_AND_STARTED_NEXT",
+      "LOCKED_ROUND",
+      "DREW_ROUND",
+      "STARTED_SPINNING_ROUND",
+      "SETTLED_ROUND",
+      "RESUMED_SETTLEMENT",
+      "STARTED_NEXT_ROUND_AFTER_COMPLETION",
     ]);
 
-    if (silentActions.has(action)) {
-      return false;
-    }
-
-    // Everything else is a visible state change or an error/convergence state.
-    // Emitting canonical round:state keeps the browser synchronized without polling.
-    return true;
+    return broadcastActions.has(action);
   }
 
   private scheduleNextTick(roomId: string, delayMs: number) {
@@ -750,14 +696,6 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (result?.action === "CANCELLED_SINGLE_PLAYER_ROUND_AND_STARTED_NEXT") {
-      return this.delayUntilRoundLocksAt(result.currentRound);
-    }
-
-    if (result?.action === "CANCELLED_EMPTY_LOCKED_ROUND_AND_STARTED_NEXT") {
-      return this.delayUntilRoundLocksAt(result.currentRound);
-    }
-
-    if (result?.action === "CANCELLED_SINGLE_PLAYER_LOCKED_ROUND_AND_STARTED_NEXT") {
       return this.delayUntilRoundLocksAt(result.currentRound);
     }
 
@@ -871,6 +809,4 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     }
   }
 }
-
-
 

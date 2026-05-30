@@ -1,5 +1,6 @@
-import { Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
+import { Controller, Get, Logger, Param, Post, UseGuards } from "@nestjs/common";
 import { AdminAuditAction, Role } from "@kingspin/db";
+import { RoomGateway } from "../../../gateways/room.gateway";
 import { AdminRbacGuard, AdminRoles } from "../../auth-bridge/admin-rbac.guard";
 import { AuthGuard } from "../../auth-bridge/auth.guard";
 import { CurrentAdmin } from "../../auth-bridge/current-admin.decorator";
@@ -10,9 +11,12 @@ import { RoundsService } from "../../rounds/rounds.service";
 @Controller("admin/rooms/:roomId/rounds")
 @UseGuards(AuthGuard, AdminRbacGuard)
 export class AdminRoundsController {
+  private readonly logger = new Logger(AdminRoundsController.name);
+
   constructor(
     private readonly roundsService: RoundsService,
     private readonly auditService: AuditService,
+    private readonly roomGateway: RoomGateway,
   ) {}
 
   @Post("start")
@@ -27,6 +31,8 @@ export class AdminRoundsController {
       targetId: roomId,
       after: result,
     });
+
+    this.broadcastRoundStateInBackground(roomId, "ADMIN_ROUND_STARTED");
 
     return result;
   }
@@ -44,6 +50,8 @@ export class AdminRoundsController {
       after: result,
     });
 
+    this.broadcastRoundStateInBackground(roomId, "ADMIN_ROUND_LOCKED");
+
     return result;
   }
 
@@ -59,6 +67,8 @@ export class AdminRoundsController {
       targetId: roomId,
       after: result,
     });
+
+    this.broadcastRoundStateInBackground(roomId, "ADMIN_ROUND_DRAWN");
 
     return result;
   }
@@ -76,6 +86,8 @@ export class AdminRoundsController {
       after: result,
     });
 
+    this.broadcastRoundStateInBackground(roomId, "ADMIN_ROUND_SETTLED");
+
     return result;
   }
 
@@ -92,6 +104,8 @@ export class AdminRoundsController {
       after: result,
     });
 
+    this.broadcastRoundStateInBackground(roomId, "ADMIN_ROUND_CANCELLED");
+
     return result;
   }
 
@@ -99,5 +113,20 @@ export class AdminRoundsController {
   @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.RISK, Role.VIEWER)
   latestResult(@Param("roomId") roomId: string) {
     return this.roundsService.getLatestRoundResultForRoom(roomId);
+  }
+
+  private broadcastRoundStateInBackground(roomId: string, reason: string) {
+    this.roomGateway.invalidateRoomState(roomId);
+
+    setImmediate(() => {
+      void this.roomGateway.broadcastRoundState(roomId, reason).catch(
+        (error: unknown) => {
+          this.logger.error(
+            `Failed to broadcast round state after ${reason} for room ${roomId}`,
+            error instanceof Error ? error.stack : String(error),
+          );
+        },
+      );
+    });
   }
 }

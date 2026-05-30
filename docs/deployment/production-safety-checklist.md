@@ -22,7 +22,9 @@ money-ready architecture. It is not a real-money production certification.
 - `BETTER_AUTH_URL` and `WEB_URL` set to public HTTPS URLs.
 - `API_CORS_ORIGIN` or `CORS_ORIGIN` limited to trusted origins.
 - `ENABLE_DEV_AUTH=false`
-- `ROUND_MACHINE_AUTO_START=true` only on the intended machine process.
+- `ROUND_MACHINE_AUTO_START=true` only on the intended machine process. On API
+  boot this starts every `ACTIVE` permanent room machine; empty and single-player
+  rounds are cancelled/refunded by the server lifecycle instead of drawing.
 - `ENABLE_REDIS=true` before horizontal API scaling.
 - `REDIS_URL` set when Redis, Socket.IO adapter, BullMQ, or multi-instance
   round-machine locking is enabled.

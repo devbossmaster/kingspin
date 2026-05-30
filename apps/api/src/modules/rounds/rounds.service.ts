@@ -30,9 +30,6 @@ const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
 const CANCELLABLE_ROUND_STATUSES: RoundStatus[] = [
   RoundStatus.OPEN,
   RoundStatus.LOCKED,
-  RoundStatus.DRAWING,
-  RoundStatus.SPINNING,
-  RoundStatus.SETTLING,
 ];
 
 const LATEST_RESULT_TIMING_WARN_THRESHOLD_MS = 1_000;
@@ -323,8 +320,10 @@ export class RoundsService {
         FROM ordered
       `;
 
-      if (!assignment || assignment.entryCount === 0n) {
-        throw new BadRequestException('Cannot lock a round with no entries.');
+      if (!assignment || assignment.entryCount < 2n) {
+        throw new BadRequestException(
+          'Cannot lock a round with fewer than two entries.',
+        );
       }
 
       const finalTotal = assignment.totalAmount;
@@ -383,8 +382,10 @@ export class RoundsService {
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
 
-    if (entries.length === 0) {
-      throw new BadRequestException('Cannot draw a round with no entries.');
+    if (entries.length < 2) {
+      throw new BadRequestException(
+        'Cannot draw a round with fewer than two entries.',
+      );
     }
 
     if (currentRound.totalEntryAmount <= 0n) {
@@ -532,6 +533,93 @@ export class RoundsService {
     };
   }
 
+  async startSpinningCurrentRoundForRoom(roomId: string) {
+    if (!roomId) {
+      throw new BadRequestException('roomId is required.');
+    }
+
+    const currentRound = await this.prisma.round.findFirst({
+      where: {
+        roomId,
+        status: { in: [RoundStatus.DRAWING, RoundStatus.SPINNING] },
+        winningTicket: { not: null },
+        winnerEntryId: { not: null },
+        winnerUserId: { not: null },
+        spinAngle: { not: null },
+      },
+      orderBy: { roundNumber: 'desc' },
+    });
+
+    if (!currentRound) {
+      throw new BadRequestException(
+        'Room does not have a DRAWING round ready to spin.',
+      );
+    }
+
+    if (currentRound.status === RoundStatus.SPINNING) {
+      const winnerEntry = currentRound.winnerEntryId
+        ? await this.prisma.entry.findUnique({
+            where: { id: currentRound.winnerEntryId },
+          })
+        : null;
+
+      return {
+        currentRound: this.toRoundSnapshot(currentRound),
+        winnerEntry: winnerEntry ? this.toEntrySnapshot(winnerEntry) : null,
+        reused: true,
+      };
+    }
+
+    const updateResult = await this.prisma.round.updateMany({
+      where: {
+        id: currentRound.id,
+        status: RoundStatus.DRAWING,
+        winningTicket: { not: null },
+        winnerEntryId: { not: null },
+        winnerUserId: { not: null },
+        spinAngle: { not: null },
+      },
+      data: {
+        status: RoundStatus.SPINNING,
+        spinningAt: new Date(),
+      },
+    });
+
+    if (updateResult.count !== 1) {
+      const racedRound = await this.prisma.round.findUniqueOrThrow({
+        where: { id: currentRound.id },
+      });
+
+      if (
+        racedRound.status !== RoundStatus.SPINNING ||
+        racedRound.winningTicket === null ||
+        !racedRound.winnerEntryId ||
+        !racedRound.winnerUserId ||
+        racedRound.spinAngle === null
+      ) {
+        throw new BadRequestException(
+          'Round changed while starting SPINNING phase. Retry or review manually.',
+        );
+      }
+    }
+
+    const spinningRound = await this.prisma.round.findUniqueOrThrow({
+      where: { id: currentRound.id },
+    });
+
+    const winnerEntry = spinningRound.winnerEntryId
+      ? await this.prisma.entry.findUnique({
+          where: { id: spinningRound.winnerEntryId },
+        })
+      : null;
+
+    return {
+      currentRound: this.toRoundSnapshot(spinningRound),
+      winnerEntry: winnerEntry ? this.toEntrySnapshot(winnerEntry) : null,
+      reused: false,
+    };
+  }
+
   async settleCurrentRoundForRoom(roomId: string) {
     if (!roomId) {
       throw new BadRequestException('roomId is required.');
@@ -540,23 +628,25 @@ export class RoundsService {
     let currentRound = await this.prisma.round.findFirst({
       where: {
         roomId,
-        status: { in: [RoundStatus.DRAWING, RoundStatus.SETTLING] },
+        status: { in: [RoundStatus.SPINNING, RoundStatus.SETTLING] },
       },
       orderBy: { roundNumber: 'desc' },
     });
 
     if (!currentRound) {
-      const completedRound = await this.prisma.round.findFirst({
+      const latestRound = await this.prisma.round.findFirst({
         where: {
           roomId,
-          status: RoundStatus.COMPLETED,
-          winnerEntryId: { not: null },
-          winnerUserId: { not: null },
         },
         orderBy: { roundNumber: 'desc' },
       });
 
-      if (completedRound) {
+      if (
+        latestRound?.status === RoundStatus.COMPLETED &&
+        latestRound.winnerEntryId &&
+        latestRound.winnerUserId
+      ) {
+        const completedRound = latestRound;
         const completedWinnerEntryId = completedRound.winnerEntryId;
 
         const winnerEntry = completedWinnerEntryId
@@ -577,7 +667,7 @@ export class RoundsService {
       }
 
       throw new BadRequestException(
-        'Room does not have a DRAWING round ready to settle.',
+        'Room does not have a SPINNING round ready to settle.',
       );
     }
 
@@ -610,11 +700,11 @@ export class RoundsService {
       );
     }
 
-    if (currentRound.status === RoundStatus.DRAWING) {
+    if (currentRound.status === RoundStatus.SPINNING) {
       const settleStart = await this.prisma.round.updateMany({
         where: {
           id: currentRound.id,
-          status: RoundStatus.DRAWING,
+          status: RoundStatus.SPINNING,
         },
         data: {
           status: RoundStatus.SETTLING,
@@ -699,8 +789,30 @@ export class RoundsService {
     });
 
     if (!currentRound) {
+      const cancelledRound = await this.prisma.round.findFirst({
+        where: {
+          roomId,
+          status: RoundStatus.CANCELLED,
+        },
+        orderBy: { roundNumber: 'desc' },
+      });
+
+      if (cancelledRound) {
+        return {
+          currentRound: this.toRoundSnapshot(cancelledRound),
+          refundedCount: 0,
+          skippedCount: 0,
+          alreadyRefundedCount: 0,
+          refundedAmount: '0',
+          refundResults: [],
+          reused: true,
+        };
+      }
+
       throw new BadRequestException('Room does not have a cancellable round.');
     }
+
+    let roundForCancellation = currentRound;
 
     if (currentRound.status === RoundStatus.OPEN) {
       const stopEntryResult = await this.prisma.$transaction(async (tx) => {
@@ -721,14 +833,38 @@ export class RoundsService {
       });
 
       if (stopEntryResult.count !== 1) {
-        throw new BadRequestException(
-          'Round changed while cancellation was starting. Retry cancel.',
-        );
+        const racedRound = await this.prisma.round.findUniqueOrThrow({
+          where: { id: currentRound.id },
+        });
+
+        if (racedRound.status === RoundStatus.CANCELLED) {
+          return {
+            currentRound: this.toRoundSnapshot(racedRound),
+            refundedCount: 0,
+            skippedCount: 0,
+            alreadyRefundedCount: 0,
+            refundedAmount: '0',
+            refundResults: [],
+            reused: true,
+          };
+        }
+
+        if (!CANCELLABLE_ROUND_STATUSES.includes(racedRound.status)) {
+          throw new BadRequestException(
+            'Round changed while cancellation was starting. Retry cancel.',
+          );
+        }
+
+        roundForCancellation = racedRound;
+      } else {
+        roundForCancellation = await this.prisma.round.findUniqueOrThrow({
+          where: { id: currentRound.id },
+        });
       }
     }
 
     const entries = await this.prisma.entry.findMany({
-      where: { roundId: currentRound.id },
+      where: { roundId: roundForCancellation.id },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
 
@@ -736,7 +872,7 @@ export class RoundsService {
 
     for (const entry of entries) {
       const refundResult = await this.walletsService.refundEntryHoldsByEntryId({
-        roundId: currentRound.id,
+        roundId: roundForCancellation.id,
         entryId: entry.id,
       });
 
@@ -745,7 +881,7 @@ export class RoundsService {
 
     const cancelResult = await this.prisma.round.updateMany({
       where: {
-        id: currentRound.id,
+        id: roundForCancellation.id,
         status: { in: CANCELLABLE_ROUND_STATUSES },
       },
       data: {
@@ -756,7 +892,7 @@ export class RoundsService {
 
     if (cancelResult.count !== 1) {
       const round = await this.prisma.round.findUniqueOrThrow({
-        where: { id: currentRound.id },
+        where: { id: roundForCancellation.id },
       });
 
       if (round.status !== RoundStatus.CANCELLED) {
@@ -767,7 +903,7 @@ export class RoundsService {
     }
 
     const cancelledRound = await this.prisma.round.findUniqueOrThrow({
-      where: { id: currentRound.id },
+      where: { id: roundForCancellation.id },
     });
 
     const refundedCount = refundResults.filter(

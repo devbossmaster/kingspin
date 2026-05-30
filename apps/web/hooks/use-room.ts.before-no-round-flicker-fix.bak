@@ -77,8 +77,6 @@ export function useRoom(roomId: string) {
 
   const placingEntryRef = useRef(false);
   const lastRoundRef = useRef<RoundLiveStateRound | null>(null);
-  const lastNonNullStateRef = useRef<RoomLiveState | null>(null);
-  const transientNoRoundSinceRef = useRef<number | null>(null);
   const resultFetchTimerRef = useRef<number | null>(null);
   const walletRefreshTimerRef = useRef<number | null>(null);
 
@@ -110,50 +108,6 @@ export function useRoom(roomId: string) {
     }
   }, []);
 
-  const normalizeIncomingState = useCallback((nextState: RoomLiveState) => {
-    const previousState = lastNonNullStateRef.current;
-    const previousRound = previousState?.currentRound ?? null;
-    const nextRound = nextState.currentRound ?? null;
-
-    if (nextRound) {
-      transientNoRoundSinceRef.current = null;
-      lastNonNullStateRef.current = nextState;
-      return nextState;
-    }
-
-    if (!previousState || !previousRound) {
-      transientNoRoundSinceRef.current = Date.now();
-      return nextState;
-    }
-
-    const elapsedMs =
-      transientNoRoundSinceRef.current === null
-        ? 0
-        : Date.now() - transientNoRoundSinceRef.current;
-
-    if (transientNoRoundSinceRef.current === null) {
-      transientNoRoundSinceRef.current = Date.now();
-    }
-
-    // Permanent rooms can briefly have no active round while the backend
-    // transitions CANCELLED/COMPLETED -> next OPEN. Do not let that tiny
-    // socket snapshot flicker the whole game UI to "NO ROUND".
-    if (elapsedMs < 5_000) {
-      devLog("ignored transient no-round snapshot", {
-        previousRoundId: previousRound.id,
-        previousRoundNumber: previousRound.roundNumber,
-        previousStatus: previousRound.status,
-        incomingServerNow: nextState.serverNow,
-      });
-
-      return {
-        ...previousState,
-        serverNow: nextState.serverNow,
-      };
-    }
-
-    return nextState;
-  }, []);
   const applyState = useCallback(
     (nextState: RoomLiveState) => {
       const previousRound = lastRoundRef.current;
@@ -186,13 +140,7 @@ export function useRoom(roomId: string) {
         ),
       );
     },
-    [
-      clearResultTimer,
-      clearWalletTimer,
-      dismissWinner,
-      normalizeIncomingState,
-      setChipOptions,
-    ],
+    [clearResultTimer, clearWalletTimer, dismissWinner, setChipOptions],
   );
 
   const fetchLatestResult = useCallback(async () => {
@@ -482,68 +430,6 @@ export function useRoom(roomId: string) {
     void fetchLatestResult();
   }, [fetchLatestResult]);
 
-  useEffect(() => {
-    const round = state?.currentRound;
-
-    if (!roomId || !round || round.status !== "OPEN" || !round.locksAt) {
-      return;
-    }
-
-    const locksAtMs = new Date(round.locksAt).getTime();
-
-    if (!Number.isFinite(locksAtMs)) {
-      return;
-    }
-
-    let cancelled = false;
-    let retryTimer: number | null = null;
-    let attempts = 0;
-
-    const requestAuthoritativeSync = () => {
-      if (cancelled) return;
-
-      attempts += 1;
-
-      const socket = getGameSocket();
-
-      devLog("deadline socket sync requested", {
-        roomId,
-        roundId: round.id,
-        roundNumber: round.roundNumber,
-        attempt: attempts,
-      });
-
-      if (socket.connected) {
-        socket.emit("room:join", { roomId });
-      } else {
-        socket.connect();
-      }
-
-      // After lock time, retry a few times by socket only. This is not polling;
-      // it is a short convergence guard when a transition broadcast is missed.
-      if (attempts < 6) {
-        retryTimer = window.setTimeout(requestAuthoritativeSync, 1000);
-      }
-    };
-
-    const delayMs = Math.max(0, locksAtMs - Date.now() + 350);
-    const timer = window.setTimeout(requestAuthoritativeSync, delayMs);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-
-      if (retryTimer !== null) {
-        window.clearTimeout(retryTimer);
-      }
-    };
-  }, [
-    roomId,
-    state?.currentRound?.id,
-    state?.currentRound?.roundNumber,
-    state?.currentRound?.status,
-    state?.currentRound?.locksAt,
-  ]);
   const placeEntry = useCallback(
     async (amount: number) => {
       if (!roomId || placingEntryRef.current) return;
@@ -620,6 +506,4 @@ export function useRoom(roomId: string) {
     placeEntry,
   };
 }
-
-
 

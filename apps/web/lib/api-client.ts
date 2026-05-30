@@ -19,12 +19,19 @@ export type CategoryListItem = CategorySnapshot & {
 
 export type RoomListItem = Omit<RoomSnapshot, "name"> & {
   name: string | null;
+  serverNow?: string;
+  receivedAtMs?: number;
   currentRound?: {
     id: string;
+    roundNumber?: number;
     status: string;
+    locksAt?: string | null;
+    msUntilLock?: number;
     playerCount: number;
+    entryCount?: number;
     totalEntryAmount: string;
     payoutAmount: string;
+    totalPool?: string;
   } | null;
 };
 
@@ -96,7 +103,13 @@ export const apiClient = {
   getRoomsByCategory(categorySlug: string) {
     const params = new URLSearchParams({ categorySlug });
 
-    return requestJson<RoomListItem[]>(`/rooms?${params.toString()}`);
+    return requestJson<RoomListItem[]>(`/rooms?${params.toString()}`).then(
+      (rooms) => {
+        const receivedAtMs = Date.now();
+
+        return rooms.map((room) => ({ ...room, receivedAtMs }));
+      },
+    );
   },
 
   getMe() {

@@ -482,68 +482,6 @@ export function useRoom(roomId: string) {
     void fetchLatestResult();
   }, [fetchLatestResult]);
 
-  useEffect(() => {
-    const round = state?.currentRound;
-
-    if (!roomId || !round || round.status !== "OPEN" || !round.locksAt) {
-      return;
-    }
-
-    const locksAtMs = new Date(round.locksAt).getTime();
-
-    if (!Number.isFinite(locksAtMs)) {
-      return;
-    }
-
-    let cancelled = false;
-    let retryTimer: number | null = null;
-    let attempts = 0;
-
-    const requestAuthoritativeSync = () => {
-      if (cancelled) return;
-
-      attempts += 1;
-
-      const socket = getGameSocket();
-
-      devLog("deadline socket sync requested", {
-        roomId,
-        roundId: round.id,
-        roundNumber: round.roundNumber,
-        attempt: attempts,
-      });
-
-      if (socket.connected) {
-        socket.emit("room:join", { roomId });
-      } else {
-        socket.connect();
-      }
-
-      // After lock time, retry a few times by socket only. This is not polling;
-      // it is a short convergence guard when a transition broadcast is missed.
-      if (attempts < 6) {
-        retryTimer = window.setTimeout(requestAuthoritativeSync, 1000);
-      }
-    };
-
-    const delayMs = Math.max(0, locksAtMs - Date.now() + 350);
-    const timer = window.setTimeout(requestAuthoritativeSync, delayMs);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-
-      if (retryTimer !== null) {
-        window.clearTimeout(retryTimer);
-      }
-    };
-  }, [
-    roomId,
-    state?.currentRound?.id,
-    state?.currentRound?.roundNumber,
-    state?.currentRound?.status,
-    state?.currentRound?.locksAt,
-  ]);
   const placeEntry = useCallback(
     async (amount: number) => {
       if (!roomId || placingEntryRef.current) return;
@@ -620,6 +558,5 @@ export function useRoom(roomId: string) {
     placeEntry,
   };
 }
-
 
 

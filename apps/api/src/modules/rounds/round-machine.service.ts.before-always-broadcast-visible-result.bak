@@ -49,6 +49,7 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
 
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly states = new Map<string, MachineRuntimeState>();
+  private readonly ticksInFlight = new Map<string, Promise<any>>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -87,6 +88,7 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     const existingState = this.states.get(roomId);
 
     if (existingState?.isRunning) {
+      await this.runRoomTickImmediately(roomId, { force: false });
       return this.getRoomMachineStatus(roomId);
     }
 
@@ -102,6 +104,8 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
 
     this.states.set(roomId, state);
     this.scheduleNextTick(roomId, 0);
+    this.broadcastRoomStateInBackground(roomId, "MACHINE_STARTED");
+    await this.runRoomTickImmediately(roomId, { force: false });
 
     return this.getRoomMachineStatus(roomId);
   }
@@ -123,6 +127,7 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     state.nextTickAt = null;
 
     this.states.set(roomId, state);
+    this.broadcastRoomStateInBackground(roomId, "MACHINE_STOPPED");
 
     return this.getRoomMachineStatus(roomId);
   }
@@ -193,6 +198,17 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     return lockResult.result;
   }
 
+  async advanceRoomMachineOnce(
+    roomId: string,
+    options: AdvanceRoomOptions = {},
+  ) {
+    await this.assertRoomCanRun(roomId);
+
+    return this.runRoomTickImmediately(roomId, options, {
+      skipIfStopped: false,
+    });
+  }
+
   private async advanceRoomOnceLocked(
     roomId: string,
     options: AdvanceRoomOptions = {},
@@ -221,6 +237,8 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException("Only ACTIVE rooms can be advanced.");
     }
 
+    const now = new Date();
+
     const currentRound = await this.prisma.round.findFirst({
       where: {
         roomId,
@@ -230,7 +248,45 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     });
 
     if (!currentRound) {
-      const startedRound = await this.roundsService.startOpenRoundForRoom(roomId);
+      const latestRound = await this.prisma.round.findFirst({
+        where: { roomId },
+        orderBy: { roundNumber: "desc" },
+      });
+
+      if (latestRound?.status === RoundStatus.COMPLETED) {
+        const completedAt = latestRound.completedAt;
+        const cooldownEndsAt = completedAt
+          ? completedAt.getTime() + MACHINE_TIMINGS_MS.cooldownPhase
+          : now.getTime();
+
+        if (!force && now.getTime() < cooldownEndsAt) {
+          return {
+            action: "WAITING_FOR_COMPLETION_COOLDOWN",
+            roomId,
+            currentRound: this.roundsService.toRoundSnapshot(latestRound),
+            msRemaining: cooldownEndsAt - now.getTime(),
+            force,
+          };
+        }
+
+        const startedRound =
+          await this.roundsService.startOpenRoundForRoom(roomId);
+
+        return {
+          action: "STARTED_NEXT_ROUND_AFTER_COMPLETION",
+          roomId,
+          previousRound: this.roundsService.toRoundSnapshot(latestRound),
+          currentRound: startedRound,
+          timings: {
+            openPhase: room.roundDurationMs,
+            ...MACHINE_TIMINGS_MS,
+          },
+          force,
+        };
+      }
+
+      const startedRound =
+        await this.roundsService.startOpenRoundForRoom(roomId);
 
       return {
         action: "STARTED_OPEN_ROUND",
@@ -243,8 +299,6 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
         force,
       };
     }
-
-    const now = new Date();
 
     if (currentRound.status === RoundStatus.OPEN) {
       if (!force && currentRound.locksAt && currentRound.locksAt > now) {
@@ -267,6 +321,21 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
 
         return {
           action: "CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT",
+          roomId,
+          cancelledRound: cancelled.currentRound,
+          currentRound: startedRound,
+          force,
+        };
+      }
+
+      if (entryCount === 1) {
+        const cancelled =
+          await this.roundsService.cancelCurrentRoundForRoom(roomId);
+        const startedRound =
+          await this.roundsService.startOpenRoundForRoom(roomId);
+
+        return {
+          action: "CANCELLED_SINGLE_PLAYER_ROUND_AND_STARTED_NEXT",
           roomId,
           cancelledRound: cancelled.currentRound,
           currentRound: startedRound,
@@ -303,6 +372,52 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
         };
       }
 
+      const entryCount = await this.prisma.entry.count({
+        where: { roundId: currentRound.id },
+      });
+
+      if (entryCount === 0) {
+        const cancelled =
+          await this.roundsService.cancelCurrentRoundForRoom(roomId);
+        const startedRound =
+          await this.roundsService.startOpenRoundForRoom(roomId);
+
+        return {
+          action: "CANCELLED_EMPTY_LOCKED_ROUND_AND_STARTED_NEXT",
+          roomId,
+          cancelledRound: cancelled.currentRound,
+          currentRound: startedRound,
+          refundSummary: {
+            refundedCount: cancelled.refundedCount,
+            skippedCount: cancelled.skippedCount,
+            alreadyRefundedCount: cancelled.alreadyRefundedCount,
+            refundedAmount: cancelled.refundedAmount,
+          },
+          force,
+        };
+      }
+
+      if (entryCount === 1) {
+        const cancelled =
+          await this.roundsService.cancelCurrentRoundForRoom(roomId);
+        const startedRound =
+          await this.roundsService.startOpenRoundForRoom(roomId);
+
+        return {
+          action: "CANCELLED_SINGLE_PLAYER_LOCKED_ROUND_AND_STARTED_NEXT",
+          roomId,
+          cancelledRound: cancelled.currentRound,
+          currentRound: startedRound,
+          refundSummary: {
+            refundedCount: cancelled.refundedCount,
+            skippedCount: cancelled.skippedCount,
+            alreadyRefundedCount: cancelled.alreadyRefundedCount,
+            refundedAmount: cancelled.refundedAmount,
+          },
+          force,
+        };
+      }
+
       const drawn = await this.roundsService.drawCurrentRoundForRoom(roomId);
 
       return {
@@ -332,23 +447,42 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
         };
       }
 
+      const spinning =
+        await this.roundsService.startSpinningCurrentRoundForRoom(roomId);
+
+      return {
+        action: "STARTED_SPINNING_ROUND",
+        roomId,
+        result: spinning,
+        force,
+      };
+    }
+
+    if (currentRound.status === RoundStatus.SPINNING) {
+      if (
+        !force &&
+        currentRound.spinningAt &&
+        now.getTime() <
+          currentRound.spinningAt.getTime() + MACHINE_TIMINGS_MS.spinningPhase
+      ) {
+        return {
+          action: "WAITING_FOR_SPINNING_PHASE",
+          roomId,
+          currentRound: this.roundsService.toRoundSnapshot(currentRound),
+          msRemaining:
+            currentRound.spinningAt.getTime() +
+            MACHINE_TIMINGS_MS.spinningPhase -
+            now.getTime(),
+          force,
+        };
+      }
+
       const settled = await this.roundsService.settleCurrentRoundForRoom(roomId);
 
       return {
         action: "SETTLED_ROUND",
         roomId,
         result: settled,
-        force,
-      };
-    }
-
-    if (currentRound.status === RoundStatus.SPINNING) {
-      return {
-        action: "SPINNING_PHASE_RESERVED",
-        roomId,
-        currentRound: this.roundsService.toRoundSnapshot(currentRound),
-        message:
-          "SPINNING is reserved for the Socket.IO animation phase. Current machine settles directly from DRAWING.",
         force,
       };
     }
@@ -403,24 +537,74 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async tickRoom(roomId: string) {
+    this.timers.delete(roomId);
+
+    await this.runRoomTick(roomId, { force: false }, { skipIfStopped: true });
+  }
+
+  private async runRoomTickImmediately(
+    roomId: string,
+    options: AdvanceRoomOptions = {},
+    tickOptions: { skipIfStopped?: boolean } = {},
+  ) {
+    this.clearScheduledTick(roomId);
+
+    return this.runRoomTick(roomId, options, {
+      skipIfStopped: tickOptions.skipIfStopped ?? true,
+    });
+  }
+
+  private async runRoomTick(
+    roomId: string,
+    options: AdvanceRoomOptions,
+    tickOptions: { skipIfStopped: boolean },
+  ) {
     const state = this.getOrCreateState(roomId);
 
-    if (!state.isRunning) {
-      return;
+    if (tickOptions.skipIfStopped && !state.isRunning) {
+      return null;
     }
+
+    const existingTick = this.ticksInFlight.get(roomId);
+
+    if (existingTick) {
+      return existingTick;
+    }
+
+    const tick = this.executeRoomTick(roomId, options).finally(() => {
+      if (this.ticksInFlight.get(roomId) === tick) {
+        this.ticksInFlight.delete(roomId);
+      }
+    });
+
+    this.ticksInFlight.set(roomId, tick);
+
+    return tick;
+  }
+
+  private async executeRoomTick(
+    roomId: string,
+    options: AdvanceRoomOptions,
+  ) {
+    const state = this.getOrCreateState(roomId);
 
     try {
       state.tickCount += 1;
       state.lastTickAt = new Date();
       state.lastError = null;
 
-      const result = await this.advanceRoomOnce(roomId, { force: false });
+      const result = await this.advanceRoomOnce(roomId, options);
 
       state.lastAction = result.action;
       this.states.set(roomId, state);
 
-      const nextDelayMs = this.getNextDelayMs(result);
-      this.scheduleNextTick(roomId, nextDelayMs);
+      if (state.isRunning) {
+        const nextDelayMs = this.getNextDelayMs(result);
+        this.scheduleNextTick(roomId, nextDelayMs);
+      } else {
+        state.nextTickAt = null;
+        this.states.set(roomId, state);
+      }
 
       /**
        * Important performance fix:
@@ -431,18 +615,32 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
        * committed before this point, so broadcasting can safely happen in the
        * background.
        */
-      this.emitMachineResult(roomId, result);
+      this.broadcastMachineResultInBackground(roomId, result);
+
+      return result;
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Unknown machine error";
 
       state.lastError = message;
-      state.nextTickAt = new Date(Date.now() + 5_000);
+      state.lastTickAt = state.lastTickAt ?? new Date();
       this.states.set(roomId, state);
 
       this.logger.error(`Room machine tick failed for ${roomId}: ${message}`);
 
-      this.scheduleNextTick(roomId, 5_000);
+      if (state.isRunning) {
+        this.scheduleNextTick(roomId, 5_000);
+      } else {
+        state.nextTickAt = null;
+        this.states.set(roomId, state);
+      }
+
+      return {
+        action: "TICK_FAILED",
+        roomId,
+        message,
+        force: options.force === true,
+      };
     }
   }
 
@@ -459,20 +657,7 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     );
   }
 
-  private broadcastRoomStateInBackground(roomId: string, reason: string) {
-    void this.roomGateway.broadcastRoundState(roomId, reason).catch(
-      (error: unknown) => {
-        const message =
-          error instanceof Error ? error.message : "Unknown broadcast error";
-
-        this.logger.warn(
-          `Room state broadcast failed for ${roomId} after ${reason}: ${message}`,
-        );
-      },
-    );
-  }
-
-  private emitMachineResult(roomId: string, result: any) {
+  broadcastMachineResultInBackground(roomId: string, result: any) {
     if (!this.shouldBroadcastMachineResult(result)) {
       return;
     }
@@ -492,16 +677,21 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
   private shouldBroadcastMachineResult(result: any) {
     const action = result?.action;
 
-    /**
-     * These are internal timer/leadership states. Broadcasting them can cause
-     * unnecessary live-state rebuilds without changing what the player sees.
-     */
-    return (
-      action !== "WAITING_FOR_OPEN_TO_EXPIRE" &&
-      action !== "WAITING_FOR_LOCKED_PHASE" &&
-      action !== "WAITING_FOR_DRAWING_PHASE" &&
-      action !== "SKIPPED_NOT_LEADER"
-    );
+    const broadcastActions = new Set([
+      "STARTED_OPEN_ROUND",
+      "CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT",
+      "CANCELLED_SINGLE_PLAYER_ROUND_AND_STARTED_NEXT",
+      "CANCELLED_EMPTY_LOCKED_ROUND_AND_STARTED_NEXT",
+      "CANCELLED_SINGLE_PLAYER_LOCKED_ROUND_AND_STARTED_NEXT",
+      "LOCKED_ROUND",
+      "DREW_ROUND",
+      "STARTED_SPINNING_ROUND",
+      "SETTLED_ROUND",
+      "RESUMED_SETTLEMENT",
+      "STARTED_NEXT_ROUND_AFTER_COMPLETION",
+    ]);
+
+    return broadcastActions.has(action);
   }
 
   private scheduleNextTick(roomId: string, delayMs: number) {
@@ -529,6 +719,17 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     this.timers.set(roomId, timer);
   }
 
+  private clearScheduledTick(roomId: string) {
+    const existingTimer = this.timers.get(roomId);
+
+    if (!existingTimer) {
+      return;
+    }
+
+    clearTimeout(existingTimer);
+    this.timers.delete(roomId);
+  }
+
   private getNextDelayMs(result: any): number {
     if (typeof result?.msRemaining === "number") {
       return result.msRemaining;
@@ -542,12 +743,32 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
       return this.delayUntilRoundLocksAt(result.currentRound);
     }
 
+    if (result?.action === "CANCELLED_SINGLE_PLAYER_ROUND_AND_STARTED_NEXT") {
+      return this.delayUntilRoundLocksAt(result.currentRound);
+    }
+
+    if (result?.action === "CANCELLED_EMPTY_LOCKED_ROUND_AND_STARTED_NEXT") {
+      return this.delayUntilRoundLocksAt(result.currentRound);
+    }
+
+    if (result?.action === "CANCELLED_SINGLE_PLAYER_LOCKED_ROUND_AND_STARTED_NEXT") {
+      return this.delayUntilRoundLocksAt(result.currentRound);
+    }
+
+    if (result?.action === "STARTED_NEXT_ROUND_AFTER_COMPLETION") {
+      return this.delayUntilRoundLocksAt(result.currentRound);
+    }
+
     if (result?.action === "LOCKED_ROUND") {
       return MACHINE_TIMINGS_MS.lockedPhase;
     }
 
     if (result?.action === "DREW_ROUND") {
       return MACHINE_TIMINGS_MS.drawingPhase;
+    }
+
+    if (result?.action === "STARTED_SPINNING_ROUND") {
+      return MACHINE_TIMINGS_MS.spinningPhase;
     }
 
     if (
@@ -644,6 +865,5 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     }
   }
 }
-
 
 

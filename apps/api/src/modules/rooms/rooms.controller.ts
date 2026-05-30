@@ -10,6 +10,11 @@ export class RoomsController {
     return this.roomsService.findActiveByCategorySlug(categorySlug);
   }
 
+  @Get("live")
+  findLiveByCategory(@Query("categorySlug") categorySlug: string) {
+    return this.roomsService.findActiveByCategorySlug(categorySlug);
+  }
+
   @Get(":roomId/state")
   getState(@Param("roomId") roomId: string) {
     return this.roomsService.getRoomState(roomId);

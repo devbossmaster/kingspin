@@ -142,6 +142,9 @@ describe('RoomGateway', () => {
     const ack = await gateway.handleJoin(client as any, { roomId: 'room-1' });
 
     expect(client.join).toHaveBeenCalledWith('room-1');
+    expect(client.join.mock.invocationCallOrder[0]).toBeLessThan(
+      publicGameService.getRoomLiveState.mock.invocationCallOrder[0],
+    );
     expect(client.emit).toHaveBeenCalledWith(
       SOCKET_EVENTS.ROUND_STATE,
       expect.objectContaining({
@@ -264,6 +267,9 @@ describe('RoomGateway', () => {
     await jest.advanceTimersByTimeAsync(150);
     await Promise.all([first, second]);
 
+    expect(publicGameService.invalidateRoomLiveState).toHaveBeenCalledWith(
+      'room-1',
+    );
     expect(publicGameService.getRoomLiveState).toHaveBeenCalledTimes(1);
     expect(roomEmitter.emit).toHaveBeenCalledTimes(1);
   });

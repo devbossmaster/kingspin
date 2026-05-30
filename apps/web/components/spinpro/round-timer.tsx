@@ -11,6 +11,40 @@ type RoundTimerProps = {
   durationMs: number;
 };
 
+type PhaseKey =
+  | "OPEN"
+  | "LOCKED"
+  | "DRAWING"
+  | "SPINNING"
+  | "SETTLING"
+  | "COMPLETED"
+  | "CANCELLED"
+  | "WAITING";
+
+const PHASE_FLOW: Array<Exclude<PhaseKey, "CANCELLED" | "WAITING">> = [
+  "OPEN",
+  "LOCKED",
+  "DRAWING",
+  "SPINNING",
+  "SETTLING",
+  "COMPLETED",
+];
+
+function normalizePhase(status: string | null | undefined): PhaseKey {
+  switch (status) {
+    case "OPEN":
+    case "LOCKED":
+    case "DRAWING":
+    case "SPINNING":
+    case "SETTLING":
+    case "COMPLETED":
+    case "CANCELLED":
+      return status;
+    default:
+      return "WAITING";
+  }
+}
+
 function timerTone(msLeft: number, durationMs: number) {
   const ratio = durationMs > 0 ? msLeft / durationMs : 0;
 
@@ -49,52 +83,115 @@ function timerTone(msLeft: number, durationMs: number) {
   };
 }
 
-function phaseCopy(status: string | null | undefined) {
-  if (!status) {
-    return {
-      title: "Inactive",
-      subtitle: "Waiting for the next round.",
-      badge: "Waiting",
-    };
-  }
+function phaseCopy(phase: PhaseKey) {
+  switch (phase) {
+    case "LOCKED":
+      return {
+        eyebrow: "Round Phase",
+        title: "Entries locked",
+        subtitle: "No more entries. Ticket ranges are being finalized.",
+        badge: "Locked",
+        tone: "border-[rgba(250,204,21,0.35)] bg-[rgba(250,204,21,0.08)]",
+        badgeTone:
+          "border-[rgba(250,204,21,0.32)] bg-[rgba(250,204,21,0.1)] text-[var(--gold)]",
+        bar: "bg-[var(--gold)]",
+      };
 
-  if (status === "LOCKED") {
-    return {
-      title: "Round locked",
-      subtitle: "Entries are closed. Preparing draw.",
-      badge: "Locked",
-    };
-  }
+    case "DRAWING":
+      return {
+        eyebrow: "Secure Draw",
+        title: "Selecting winner",
+        subtitle: "The server is resolving the winning ticket fairly.",
+        badge: "Drawing",
+        tone: "border-[rgba(96,165,250,0.35)] bg-[rgba(96,165,250,0.08)]",
+        badgeTone:
+          "border-[rgba(96,165,250,0.32)] bg-[rgba(96,165,250,0.1)] text-blue-300",
+        bar: "bg-blue-300",
+      };
 
-  if (status === "DRAWING") {
-    return {
-      title: "Drawing winner",
-      subtitle: "Ticket ranges are being resolved.",
-      badge: "Drawing",
-    };
-  }
+    case "SPINNING":
+      return {
+        eyebrow: "Live Reveal",
+        title: "Wheel spinning",
+        subtitle: "The server result is locked. The wheel reveal is running.",
+        badge: "Spinning",
+        tone: "border-[rgba(232,121,249,0.35)] bg-[rgba(232,121,249,0.08)]",
+        badgeTone:
+          "border-[rgba(232,121,249,0.32)] bg-[rgba(232,121,249,0.1)] text-magenta",
+        bar: "bg-[var(--magenta)]",
+      };
 
-  if (status === "SPINNING") {
-    return {
-      title: "Wheel spinning",
-      subtitle: "Animation is running live.",
-      badge: "Spinning",
-    };
-  }
+    case "SETTLING":
+      return {
+        eyebrow: "Ledger",
+        title: "Finalizing payout",
+        subtitle: "The winner payout is being settled safely.",
+        badge: "Settling",
+        tone: "border-[rgba(251,146,60,0.38)] bg-[rgba(251,146,60,0.08)]",
+        badgeTone:
+          "border-[rgba(251,146,60,0.32)] bg-[rgba(251,146,60,0.1)] text-orange-300",
+        bar: "bg-orange-300",
+      };
 
-  if (status === "SETTLING") {
-    return {
-      title: "Settling payout",
-      subtitle: "Winner and wallet updates are being finalized.",
-      badge: "Settling",
-    };
-  }
+    case "COMPLETED":
+      return {
+        eyebrow: "Completed",
+        title: "Round completed",
+        subtitle: "Winner selected and payout settled. Next round starts soon.",
+        badge: "Done",
+        tone: "border-[rgba(250,204,21,0.42)] bg-[rgba(250,204,21,0.08)]",
+        badgeTone:
+          "border-[rgba(250,204,21,0.32)] bg-[rgba(250,204,21,0.1)] text-[var(--gold)]",
+        bar: "bg-[var(--gold)]",
+      };
 
-  return {
-    title: status,
-    subtitle: "Entries are currently closed.",
-    badge: status,
-  };
+    case "CANCELLED":
+      return {
+        eyebrow: "Skipped",
+        title: "Round skipped/refunded",
+        subtitle: "No winner was drawn. The next round is preparing.",
+        badge: "Skipped",
+        tone: "border-[rgba(248,113,113,0.38)] bg-[rgba(248,113,113,0.08)]",
+        badgeTone:
+          "border-[rgba(248,113,113,0.32)] bg-[rgba(248,113,113,0.1)] text-red-hot",
+        bar: "bg-[var(--red-hot)]",
+      };
+
+    default:
+      return {
+        eyebrow: "Waiting",
+        title: "Waiting for round",
+        subtitle: "The next round is preparing.",
+        badge: "Waiting",
+        tone: "border-[var(--border)] bg-white/[0.04]",
+        badgeTone:
+          "border-[rgba(148,163,184,0.28)] bg-[rgba(148,163,184,0.1)] text-text-secondary",
+        bar: "bg-white/[0.35]",
+      };
+  }
+}
+
+function getPhaseIndex(phase: PhaseKey) {
+  return PHASE_FLOW.findIndex((item) => item === phase);
+}
+
+function phaseShortLabel(phase: string) {
+  switch (phase) {
+    case "OPEN":
+      return "Open";
+    case "LOCKED":
+      return "Lock";
+    case "DRAWING":
+      return "Draw";
+    case "SPINNING":
+      return "Spin";
+    case "SETTLING":
+      return "Settle";
+    case "COMPLETED":
+      return "Done";
+    default:
+      return phase;
+  }
 }
 
 export function RoundTimer({
@@ -103,10 +200,12 @@ export function RoundTimer({
   locksAt,
   durationMs,
 }: RoundTimerProps) {
+  const phase = normalizePhase(status);
+
   const { msLeft } = useCountdown({
     locksAt,
     serverNow,
-    enabled: status === "OPEN",
+    enabled: phase === "OPEN",
   });
 
   const progress = Math.max(
@@ -119,33 +218,84 @@ export function RoundTimer({
     [durationMs, msLeft],
   );
 
-  if (status !== "OPEN") {
-    const copy = phaseCopy(status);
+  if (phase !== "OPEN") {
+    const copy = phaseCopy(phase);
+    const phaseIndex = getPhaseIndex(phase);
+    const showFlow = phase !== "WAITING" && phase !== "CANCELLED";
+    const isActiveMotion =
+      phase === "LOCKED" ||
+      phase === "DRAWING" ||
+      phase === "SPINNING" ||
+      phase === "SETTLING";
 
     return (
       <div
-        className="arcadia-surface relative mt-2 overflow-hidden rounded-lg p-4"
+        className={`arcadia-surface relative mt-2 overflow-hidden rounded-lg border p-4 ${copy.tone}`}
         aria-live="polite"
       >
+        {isActiveMotion ? (
+          <div className="pointer-events-none absolute right-4 top-4 h-16 w-16 rounded-full bg-[rgba(250,204,21,0.08)] blur-2xl animate-pulse" />
+        ) : null}
+
         <div className="flex items-start justify-between gap-3">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.2em] text-text-dim">
-              Round Phase
+              {copy.eyebrow}
             </p>
             <p className="mt-1 font-display text-xl font-black text-text-primary">
               {copy.title}
             </p>
-            <p className="mt-1 text-sm text-text-secondary">{copy.subtitle}</p>
+            <p className="mt-1 text-sm text-text-secondary">
+              {copy.subtitle}
+            </p>
           </div>
 
-          <div className="rounded-full border border-[rgba(148,163,184,0.28)] bg-[rgba(148,163,184,0.1)] px-3 py-1 text-xs font-black uppercase tracking-[0.16em] text-text-secondary">
+          <div
+            className={`rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.16em] ${copy.badgeTone}`}
+          >
             {copy.badge}
           </div>
         </div>
 
-        <div className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--bg-raised)]">
-          <div className="h-full w-full rounded-full bg-[rgba(148,163,184,0.35)]" />
-        </div>
+        {showFlow ? (
+          <div className="mt-4 rounded-lg border border-[var(--border)] bg-black/20 p-3">
+            <div className="grid grid-cols-6 gap-1">
+              {PHASE_FLOW.map((item, index) => {
+                const isActive = item === phase;
+                const isDone = phaseIndex > index;
+
+                return (
+                  <div key={item} className="min-w-0">
+                    <div
+                      className={`h-2 rounded-full ${
+                        isActive
+                          ? copy.bar
+                          : isDone
+                            ? "bg-green-go"
+                            : "bg-white/[0.12]"
+                      } ${isActive && isActiveMotion ? "animate-pulse" : ""}`}
+                    />
+                    <p
+                      className={`mt-1 truncate text-center text-[10px] font-black uppercase tracking-[0.08em] ${
+                        isActive
+                          ? "text-text-primary"
+                          : isDone
+                            ? "text-green-go"
+                            : "text-text-dim"
+                      }`}
+                    >
+                      {phaseShortLabel(item)}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--bg-raised)]">
+            <div className={`h-full w-full rounded-full ${copy.bar}`} />
+          </div>
+        )}
       </div>
     );
   }
@@ -160,7 +310,9 @@ export function RoundTimer({
           <p className="text-xs font-black uppercase tracking-[0.2em] text-text-dim">
             Time Left
           </p>
-          <p className={`mt-1 font-mono text-4xl font-black leading-none ${tone.text}`}>
+          <p
+            className={`mt-1 font-mono text-4xl font-black leading-none ${tone.text}`}
+          >
             {formatMs(msLeft)}
           </p>
         </div>

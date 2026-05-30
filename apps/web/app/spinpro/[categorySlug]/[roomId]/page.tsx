@@ -21,6 +21,219 @@ import { useSession } from "../../../../lib/auth-client";
 import { useAuthStore } from "../../../../stores/auth-store";
 import { useRoomStore } from "../../../../stores/room-store";
 
+const PHASE_FLOW = [
+  "OPEN",
+  "LOCKED",
+  "DRAWING",
+  "SPINNING",
+  "SETTLING",
+  "COMPLETED",
+] as const;
+
+function getPhaseIndex(status: string | null | undefined) {
+  return PHASE_FLOW.findIndex((phase) => phase === status);
+}
+
+function phaseShortLabel(status: string) {
+  switch (status) {
+    case "OPEN":
+      return "Open";
+    case "LOCKED":
+      return "Lock";
+    case "DRAWING":
+      return "Draw";
+    case "SPINNING":
+      return "Spin";
+    case "SETTLING":
+      return "Settle";
+    case "COMPLETED":
+      return "Done";
+    default:
+      return status;
+  }
+}
+
+function phaseHeadline(status: string | null | undefined) {
+  switch (status) {
+    case "OPEN":
+      return "Players can enter now";
+    case "LOCKED":
+      return "Entries are locked";
+    case "DRAWING":
+      return "Server is selecting the winner";
+    case "SPINNING":
+      return "Wheel reveal is live";
+    case "SETTLING":
+      return "Payout is finalizing";
+    case "COMPLETED":
+      return "Round completed";
+    case "CANCELLED":
+      return "Round skipped or refunded";
+    default:
+      return "Waiting for round";
+  }
+}
+
+function phaseDescription(status: string | null | undefined) {
+  switch (status) {
+    case "OPEN":
+      return "Enter before the countdown ends. Pool and player list update live.";
+    case "LOCKED":
+      return "No more entries. Ticket ranges are being finalized.";
+    case "DRAWING":
+      return "The backend is resolving the winning ticket securely.";
+    case "SPINNING":
+      return "The result is locked. The wheel is animating with the server spin angle.";
+    case "SETTLING":
+      return "The backend ledger is settling the winner payout.";
+    case "COMPLETED":
+      return "Winner reveal is available. A new round will start soon.";
+    case "CANCELLED":
+      return "No winner was drawn. Empty or single-player rounds are skipped/refunded safely.";
+    default:
+      return "The room is preparing the next live round.";
+  }
+}
+
+function LivePhaseRail({ status }: { status: string | null | undefined }) {
+  const activeIndex = getPhaseIndex(status);
+  const isCancelled = status === "CANCELLED";
+
+  if (isCancelled) {
+    return (
+      <div className="rounded-lg border border-[rgba(248,113,113,0.32)] bg-[rgba(248,113,113,0.08)] p-3">
+        <p className="text-xs font-black uppercase tracking-[0.18em] text-red-hot">
+          Skipped / Refunded
+        </p>
+        <p className="mt-1 text-sm text-text-secondary">
+          This round did not draw a winner. The next OPEN round will continue
+          automatically.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-black/20 p-3">
+      <div className="grid grid-cols-6 gap-1">
+        {PHASE_FLOW.map((phase, index) => {
+          const isActive = phase === status;
+          const isDone = activeIndex > index;
+          const isFuture = activeIndex < index;
+
+          return (
+            <div key={phase} className="min-w-0">
+              <div
+                className={`h-2 rounded-full ${
+                  isActive
+                    ? "bg-[var(--gold)]"
+                    : isDone
+                      ? "bg-green-go"
+                      : "bg-white/[0.12]"
+                } ${
+                  isActive &&
+                  (status === "LOCKED" ||
+                    status === "DRAWING" ||
+                    status === "SPINNING" ||
+                    status === "SETTLING")
+                    ? "animate-pulse"
+                    : ""
+                }`}
+              />
+              <p
+                className={`mt-1 truncate text-center text-[10px] font-black uppercase tracking-[0.08em] ${
+                  isActive
+                    ? "text-[var(--gold)]"
+                    : isDone
+                      ? "text-green-go"
+                      : isFuture
+                        ? "text-text-dim"
+                        : "text-text-secondary"
+                }`}
+              >
+                {phaseShortLabel(phase)}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function LivePhaseHero({
+  status,
+  roundNumber,
+  entryCount,
+  connectionStatus,
+}: {
+  status: string | null | undefined;
+  roundNumber: number | null | undefined;
+  entryCount: number;
+  connectionStatus: string;
+}) {
+  const isActiveMotion =
+    status === "LOCKED" ||
+    status === "DRAWING" ||
+    status === "SPINNING" ||
+    status === "SETTLING";
+
+  return (
+    <section className="arcadia-surface relative overflow-hidden rounded-lg border border-[var(--border)] p-4">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(250,204,21,0.72)] to-transparent" />
+      {isActiveMotion ? (
+        <div className="pointer-events-none absolute right-4 top-4 h-20 w-20 rounded-full bg-[rgba(250,204,21,0.09)] blur-2xl animate-pulse" />
+      ) : null}
+
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.22em] text-[var(--gold)]">
+            Live Phase
+          </p>
+          <h2 className="mt-1 font-display text-2xl font-black text-text-primary">
+            {phaseHeadline(status)}
+          </h2>
+          <p className="mt-1 max-w-2xl text-sm text-text-secondary">
+            {phaseDescription(status)}
+          </p>
+        </div>
+
+        <div className="grid gap-2 text-right">
+          <Badge variant={phaseBadgeVariant(status)}>
+            {status ?? "NO ROUND"}
+          </Badge>
+
+          <span className="rounded-full border border-[var(--border)] bg-white/[0.04] px-3 py-1 font-mono text-xs text-text-secondary">
+            Socket {connectionStatus}
+          </span>
+        </div>
+      </div>
+
+      <div className="mt-4 grid gap-3 md:grid-cols-[1fr_0.35fr_0.35fr]">
+        <LivePhaseRail status={status} />
+
+        <div className="rounded-lg border border-[var(--border)] bg-white/[0.04] p-3">
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-text-dim">
+            Round
+          </p>
+          <p className="mt-1 font-mono text-xl font-black text-text-primary">
+            #{roundNumber ?? "-"}
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-[var(--border)] bg-white/[0.04] p-3">
+          <p className="text-xs font-black uppercase tracking-[0.16em] text-text-dim">
+            Entries
+          </p>
+          <p className="mt-1 font-mono text-xl font-black text-text-primary">
+            {entryCount}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function LiveRoomPage() {
   const params = useParams<{ categorySlug: string; roomId: string }>();
   const roomId = params.roomId;
@@ -91,6 +304,10 @@ export default function LiveRoomPage() {
     ? "Fixed Bet · Equal Chance"
     : "Pro Mode · Flexible Proportional";
 
+  const completedFallbackWinner = currentRound?.winnerEntryId
+    ? state.entries.find((entry) => entry.id === currentRound.winnerEntryId)
+    : null;
+
   return (
     <main className="min-h-screen pb-24 text-text-primary md:pb-0">
       <NavBar backHref={`/spinpro/${params.categorySlug}`} />
@@ -146,7 +363,7 @@ export default function LiveRoomPage() {
                   #{currentRound?.roundNumber ?? "-"}
                 </p>
                 <p className="mt-2 text-xs text-text-dim">
-                  {roundStatus ? "Current active round" : "Waiting for round"}
+                  {roundStatus ? "Current live round" : "Waiting for round"}
                 </p>
               </div>
 
@@ -167,6 +384,13 @@ export default function LiveRoomPage() {
               </div>
             </div>
           </section>
+
+          <LivePhaseHero
+            status={roundStatus}
+            roundNumber={currentRound?.roundNumber}
+            entryCount={state.entries.length}
+            connectionStatus={connectionStatus}
+          />
 
           <RoundTimer
             status={roundStatus}
@@ -189,6 +413,47 @@ export default function LiveRoomPage() {
             status={roundStatus}
             winnerEntryId={currentRound?.winnerEntryId}
           />
+
+          {roundStatus === "COMPLETED" && !latestResult ? (
+            <section className="arcadia-surface rounded-lg border border-[rgba(250,204,21,0.28)] bg-[rgba(250,204,21,0.06)] p-4">
+              <p className="text-xs font-black uppercase tracking-[0.2em] text-[var(--gold)]">
+                Completed
+              </p>
+              <h2 className="mt-1 font-display text-xl font-black">
+                Winner reveal loading
+              </h2>
+              <p className="mt-1 text-sm text-text-secondary">
+                The round is completed. Full fairness proof is loading now.
+              </p>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
+                  <p className="text-xs text-text-dim">Winner</p>
+                  <p className="mt-1 truncate font-mono font-black">
+                    {completedFallbackWinner?.player?.username ??
+                      completedFallbackWinner?.player?.fullName ??
+                      (currentRound?.winnerUserId
+                        ? truncateId(currentRound.winnerUserId, 6)
+                        : "Pending")}
+                  </p>
+                </div>
+
+                <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
+                  <p className="text-xs text-text-dim">Winning Ticket</p>
+                  <p className="mt-1 font-mono font-black">
+                    {currentRound?.winningTicket ?? "-"}
+                  </p>
+                </div>
+
+                <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
+                  <p className="text-xs text-text-dim">Payout</p>
+                  <p className="mt-1 font-mono font-black text-[var(--gold)]">
+                    {formatCoins(currentRound?.payoutAmount)}
+                  </p>
+                </div>
+              </div>
+            </section>
+          ) : null}
 
           <FairnessStrip
             currentRound={currentRound}

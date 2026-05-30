@@ -9,24 +9,35 @@ import {
   getModeTitle,
 } from "../../lib/game-modes";
 import { formatCoins } from "../../lib/format";
+import {
+  formatLockCountdown,
+  getAdjustedMsUntilLock,
+  getRoomPlayerCount,
+  getRoomPool,
+  getRoundPhaseLabel,
+  getRoundStatusTone,
+} from "../../lib/room-summary";
 import { StatusPill } from "./status-pill";
 
 export function CategoryCard({
   category,
   room,
   isSignedIn,
+  clientNowMs,
 }: {
   category: CategoryListItem;
   room?: RoomListItem | null;
   isSignedIn: boolean;
+  clientNowMs?: number;
 }) {
   const mode = getCategoryMode(category);
   const roomHref = room ? `/spinpro/${category.slug}/${room.id}` : "#";
   const href = room ? buildPlayHref(roomHref, isSignedIn) : "#";
-  const currentRound = room?.currentRound ?? null;
-  const playerCount = currentRound?.playerCount ?? 0;
-  const pool = currentRound?.payoutAmount ?? "0";
-  const status = currentRound?.status ?? room?.status ?? "WAITING";
+  const status = room?.currentRound?.status ?? room?.status ?? "WAITING";
+  const playerCount = getRoomPlayerCount(room);
+  const pool = getRoomPool(room);
+  const msUntilLock = getAdjustedMsUntilLock(room, clientNowMs);
+  const phaseLabel = getRoundPhaseLabel(status);
   const fixedMode = mode === "fixed";
 
   return (
@@ -47,9 +58,7 @@ export function CategoryCard({
             {getModeTitle(mode)}
           </p>
         </div>
-        <StatusPill tone={status === "OPEN" ? "lime" : "muted"}>
-          {status}
-        </StatusPill>
+        <StatusPill tone={getRoundStatusTone(status)}>{phaseLabel}</StatusPill>
       </div>
 
       <div className="mt-5 grid grid-cols-2 gap-2 text-sm">
@@ -77,6 +86,20 @@ export function CategoryCard({
         <div className="flex items-center justify-between gap-3">
           <span className="flex items-center gap-1 text-xs font-bold uppercase tracking-[0.12em] text-text-dim">
             <Clock3 className="h-3.5 w-3.5" aria-hidden="true" />
+            Status
+          </span>
+          <span className="text-right font-mono font-black text-text-primary">
+            {status === "OPEN" && msUntilLock > 0
+              ? formatLockCountdown(msUntilLock)
+              : phaseLabel}
+          </span>
+        </div>
+      </div>
+
+      <div className="mt-2 rounded-md border border-[var(--border)] bg-white/[0.035] px-3 py-2 text-sm">
+        <div className="flex items-center justify-between gap-3">
+          <span className="flex items-center gap-1 text-xs font-bold uppercase tracking-[0.12em] text-text-dim">
+            <Coins className="h-3.5 w-3.5" aria-hidden="true" />
             Pool
           </span>
           <span className="font-mono font-black text-gold">

@@ -1,5 +1,6 @@
 import { Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
 import { AdminAuditAction, Role } from "@kingspin/db";
+import { RoomGateway } from "../../../gateways/room.gateway";
 import { AdminRbacGuard, AdminRoles } from "../../auth-bridge/admin-rbac.guard";
 import { AuthGuard } from "../../auth-bridge/auth.guard";
 import { CurrentAdmin } from "../../auth-bridge/current-admin.decorator";
@@ -13,6 +14,7 @@ export class AdminRoundMachineController {
   constructor(
     private readonly roundMachineService: RoundMachineService,
     private readonly auditService: AuditService,
+    private readonly roomGateway: RoomGateway,
   ) {}
 
   @Post("start")
@@ -26,6 +28,7 @@ export class AdminRoundMachineController {
       targetId: roomId,
       after: result,
     });
+    this.roomGateway.invalidateRoomState(roomId);
     return result;
   }
 
@@ -40,6 +43,7 @@ export class AdminRoundMachineController {
       targetId: roomId,
       after: result,
     });
+    this.roomGateway.invalidateRoomState(roomId);
     return result;
   }
 
@@ -56,7 +60,7 @@ export class AdminRoundMachineController {
     @Param("roomId") roomId: string,
     @Query("force") force?: string,
   ) {
-    const result = await this.roundMachineService.advanceRoomOnce(roomId, {
+    const result = await this.roundMachineService.advanceRoomMachineOnce(roomId, {
       force: force === "true",
     });
     await this.auditService.recordAdminAction({

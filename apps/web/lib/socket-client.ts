@@ -11,7 +11,8 @@ let socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
 export function getGameSocket() {
   if (!socket) {
     socket = io(SOCKET_URL, {
-      transports: ["websocket"],
+      transports: ["websocket", "polling"],
+      timeout: 10000,
       reconnection: true,
       withCredentials: true,
     });
@@ -24,3 +25,4 @@ export function disconnectGameSocket() {
   socket?.disconnect();
   socket = null;
 }
+

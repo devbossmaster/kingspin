@@ -446,6 +446,19 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private broadcastRoomStateInBackground(roomId: string, reason: string) {
+    void this.roomGateway.broadcastRoundState(roomId, reason).catch(
+      (error: unknown) => {
+        const message =
+          error instanceof Error ? error.message : "Unknown broadcast error";
+
+        this.logger.warn(
+          `Room state broadcast failed for ${roomId} after ${reason}: ${message}`,
+        );
+      },
+    );
+  }
+
   private emitMachineResult(roomId: string, result: any) {
     if (!this.shouldBroadcastMachineResult(result)) {
       return;
@@ -618,3 +631,4 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     }
   }
 }
+

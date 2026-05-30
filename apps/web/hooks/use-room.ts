@@ -341,3 +341,4 @@ export function useRoom(roomId: string) {
     placeEntry,
   };
 }
+

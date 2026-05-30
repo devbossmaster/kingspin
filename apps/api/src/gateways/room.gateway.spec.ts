@@ -233,7 +233,7 @@ describe('RoomGateway', () => {
       SOCKET_EVENTS.ROUND_STATE,
       expect.objectContaining({
         roomId: 'room-1',
-        reason: 'MACHINE_ADVANCED',
+        reason: 'LOCKED_ROUND',
       }),
     );
     expect(roomEmitter.emit).toHaveBeenCalledWith(
@@ -244,6 +244,62 @@ describe('RoomGateway', () => {
         result: expect.objectContaining({
           resultId: '1',
         }),
+      }),
+    );
+  });
+
+  it('broadcasts canonical round state for settlement phase transitions', async () => {
+    jest.useFakeTimers().setSystemTime(now);
+    const gateway = new RoomGateway(buildPublicGameService() as any);
+    const roomEmitter = {
+      emit: jest.fn(),
+    };
+
+    gateway.server = {
+      to: jest.fn().mockReturnValue(roomEmitter),
+    } as any;
+
+    await gateway.broadcastMachineResult('room-1', {
+      action: 'STARTED_SETTLING_ROUND',
+    });
+    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(150);
+
+    expect(roomEmitter.emit).toHaveBeenCalledWith(
+      SOCKET_EVENTS.ROUND_STATE,
+      expect.objectContaining({
+        roomId: 'room-1',
+        reason: 'STARTED_SETTLING_ROUND',
+      }),
+    );
+    expect(roomEmitter.emit).toHaveBeenCalledWith(
+      SOCKET_EVENTS.ROUND_SETTLED,
+      expect.objectContaining({
+        roomId: 'room-1',
+        action: 'STARTED_SETTLING_ROUND',
+      }),
+    );
+
+    roomEmitter.emit.mockClear();
+
+    await gateway.broadcastMachineResult('room-1', {
+      action: 'SETTLED_ROUND',
+    });
+    await Promise.resolve();
+    await jest.advanceTimersByTimeAsync(150);
+
+    expect(roomEmitter.emit).toHaveBeenCalledWith(
+      SOCKET_EVENTS.ROUND_STATE,
+      expect.objectContaining({
+        roomId: 'room-1',
+        reason: 'SETTLED_ROUND',
+      }),
+    );
+    expect(roomEmitter.emit).toHaveBeenCalledWith(
+      SOCKET_EVENTS.ROUND_SETTLED,
+      expect.objectContaining({
+        roomId: 'room-1',
+        action: 'SETTLED_ROUND',
       }),
     );
   });

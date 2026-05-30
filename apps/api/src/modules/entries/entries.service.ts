@@ -190,6 +190,7 @@ export class EntriesService {
 
     const addAmount = this.parseAmount(body?.amount);
 
+    const requestAcceptedAt = new Date();
     const traceId = `${roomId}:${userId}:${Date.now().toString(36)}`;
     const startedAt = Date.now();
     let previousAt = startedAt;
@@ -257,6 +258,7 @@ export class EntriesService {
       this.getEntryPreflight({
         roomId,
         userId,
+        requestAcceptedAt,
       }),
     );
 
@@ -333,6 +335,7 @@ export class EntriesService {
           minEntryAmount,
           maxEntryAmount,
           idempotencyKey: requestIdempotencyKey,
+          requestAcceptedAt,
           entryId,
           ledgerTransactionId: randomUUID(),
           ledgerEntryId: randomUUID(),
@@ -410,6 +413,7 @@ export class EntriesService {
   private async getEntryPreflight(args: {
     roomId: string;
     userId: string;
+    requestAcceptedAt: Date;
   }): Promise<EntryPreflightRow> {
     const rows = await this.prisma.$queryRaw<EntryPreflightRow[]>(Prisma.sql`
       WITH selected_user AS (
@@ -468,6 +472,7 @@ export class EntriesService {
         FROM rounds ro
         WHERE ro."roomId" = r.id
           AND ro.status = CAST(${RoundStatus.OPEN} AS "RoundStatus")
+          AND (ro."locksAt" IS NULL OR ro."locksAt" > ${args.requestAcceptedAt}::timestamp)
         ORDER BY ro."roundNumber" DESC
         LIMIT 1
       ) current_round ON true
@@ -513,6 +518,7 @@ export class EntriesService {
       minEntryAmount: bigint;
       maxEntryAmount: bigint;
       idempotencyKey: string;
+      requestAcceptedAt: Date;
       entryId: string;
       ledgerTransactionId: string;
       ledgerEntryId: string;
@@ -529,6 +535,7 @@ export class EntriesService {
           ${args.minEntryAmount}::bigint AS min_entry_amount,
           ${args.maxEntryAmount}::bigint AS max_entry_amount,
           ${args.idempotencyKey}::text AS idempotency_key,
+          ${args.requestAcceptedAt}::timestamp AS request_accepted_at,
           ${args.entryId}::text AS new_entry_id,
           ${args.ledgerTransactionId}::text AS ledger_transaction_id,
           ${args.ledgerEntryId}::text AS ledger_entry_id
@@ -551,6 +558,7 @@ export class EntriesService {
         JOIN input i ON r.id = i.round_id
         CROSS JOIN round_gate
         WHERE r.status = CAST(${RoundStatus.OPEN} AS "RoundStatus")
+          AND (r."locksAt" IS NULL OR r."locksAt" > i.request_accepted_at)
         LIMIT 1
       ),
       entry_config AS (

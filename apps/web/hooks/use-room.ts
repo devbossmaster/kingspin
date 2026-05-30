@@ -156,8 +156,9 @@ export function useRoom(roomId: string) {
   }, []);
   const applyState = useCallback(
     (nextState: RoomLiveState) => {
+      const normalizedState = normalizeIncomingState(nextState);
       const previousRound = lastRoundRef.current;
-      const nextRound = nextState.currentRound;
+      const nextRound = normalizedState.currentRound;
 
       if (previousRound?.status !== nextRound?.status) {
         devLog("round status changed", {
@@ -178,13 +179,15 @@ export function useRoom(roomId: string) {
 
       lastRoundRef.current = nextRound ?? null;
 
-      setState(nextState);
+      setState(normalizedState);
       setChipOptions(
         deriveChipOptions(
-          nextState.category.minEntryAmount,
-          nextState.category.maxEntryAmount,
+          normalizedState.category.minEntryAmount,
+          normalizedState.category.maxEntryAmount,
         ),
       );
+
+      return normalizedState;
     },
     [
       clearResultTimer,
@@ -268,8 +271,8 @@ export function useRoom(roomId: string) {
     try {
       setError(null);
       const nextState = await apiClient.getRoomLiveState(roomId);
-      applyState(nextState);
-      handleRoundSnapshotSideEffects(nextState);
+      const appliedState = applyState(nextState);
+      handleRoundSnapshotSideEffects(appliedState);
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : "Failed to load room.",
@@ -401,8 +404,8 @@ export function useRoom(roomId: string) {
         roundNumber: nextState.currentRound?.roundNumber ?? null,
       });
 
-      applyState(nextState);
-      handleRoundSnapshotSideEffects(nextState);
+      const appliedState = applyState(nextState);
+      handleRoundSnapshotSideEffects(appliedState);
     };
 
     const onMachineEvent = (payload: SocketMachineEvent) => {
@@ -477,10 +480,6 @@ export function useRoom(roomId: string) {
     scheduleCompletedRoundEffects,
     setConnectionStatus,
   ]);
-
-  useEffect(() => {
-    void fetchLatestResult();
-  }, [fetchLatestResult]);
 
   useEffect(() => {
     const round = state?.currentRound;
@@ -565,20 +564,23 @@ export function useRoom(roomId: string) {
 
         applyEntryPlacementResult(result);
 
-        void refreshWallet();
-
         if (!getGameSocket().connected) {
           void refresh();
         }
       } catch (caught) {
         setFastWallet(null);
-        setError(
-          caught instanceof Error ? caught.message : "Failed to place entry.",
-        );
+        const message =
+          caught instanceof Error ? caught.message : "Failed to place entry.";
+        const lockedMessage =
+          message.includes("no longer OPEN") ||
+          message.includes("OPEN round")
+            ? "Round locked. Entry was not accepted."
+            : message;
 
-        void refreshWallet();
+        setError(lockedMessage);
 
         if (!getGameSocket().connected) {
+          void refreshWallet();
           void refresh();
         }
       } finally {

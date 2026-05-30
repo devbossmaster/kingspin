@@ -21,6 +21,10 @@ const PUBLIC_SUMMARY_ROUND_STATUSES: RoundStatus[] = [
   RoundStatus.CANCELLED,
 ];
 
+const COMPLETED_ROUND_VISIBILITY_MS = 8_000;
+const CANCELLED_ROUND_VISIBILITY_MS = 2_500;
+const LIVE_ROOM_SUMMARY_CACHE_TTL_MS = 750;
+
 type LiveRoomSummaryRow = {
   roomId: string;
   roomCategoryId: string;
@@ -37,6 +41,8 @@ type LiveRoomSummaryRow = {
   roundNumber: number | null;
   roundStatus: string | null;
   roundLocksAt: Date | null;
+  roundCompletedAt: Date | null;
+  roundCancelledAt: Date | null;
   roundTotalEntryAmount: bigint | null;
   roundPayoutAmount: bigint | null;
   entryCount: number | null;
@@ -46,6 +52,20 @@ type LiveRoomSummaryRow = {
 
 @Injectable()
 export class RoomsService {
+  private readonly liveSummaryCacheByCategory = new Map<
+    string,
+    {
+      snapshot: Awaited<
+        ReturnType<RoomsService['buildLiveRoomSummariesForCategory']>
+      >;
+      expiresAt: number;
+    }
+  >();
+  private readonly inFlightLiveSummaryByCategory = new Map<
+    string,
+    Promise<Awaited<ReturnType<RoomsService['buildLiveRoomSummariesForCategory']>>>
+  >();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly roundsService: RoundsService,
@@ -56,9 +76,46 @@ export class RoomsService {
       throw new BadRequestException('categorySlug is required.');
     }
 
-    const rows = await this.queryLiveRoomSummaryRows(categorySlug);
+    const cacheKey = categorySlug.trim();
+    const cached = this.liveSummaryCacheByCategory.get(cacheKey);
 
-    return this.serializeLiveRoomSummaryRows(rows);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.snapshot;
+    }
+
+    if (cached) {
+      this.liveSummaryCacheByCategory.delete(cacheKey);
+    }
+
+    const existing = this.inFlightLiveSummaryByCategory.get(cacheKey);
+
+    if (existing) {
+      return existing;
+    }
+
+    const request = this.buildLiveRoomSummariesForCategory(cacheKey).finally(
+      () => {
+        if (this.inFlightLiveSummaryByCategory.get(cacheKey) === request) {
+          this.inFlightLiveSummaryByCategory.delete(cacheKey);
+        }
+      },
+    );
+
+    this.inFlightLiveSummaryByCategory.set(cacheKey, request);
+
+    return request;
+  }
+
+  private async buildLiveRoomSummariesForCategory(categorySlug: string) {
+    const rows = await this.queryLiveRoomSummaryRows(categorySlug);
+    const snapshot = this.serializeLiveRoomSummaryRows(rows);
+
+    this.liveSummaryCacheByCategory.set(categorySlug, {
+      snapshot,
+      expiresAt: Date.now() + LIVE_ROOM_SUMMARY_CACHE_TTL_MS,
+    });
+
+    return snapshot;
   }
 
   private async queryLiveRoomSummaryRows(categorySlug: string) {
@@ -71,6 +128,12 @@ export class RoomsService {
       PUBLIC_SUMMARY_ROUND_STATUSES.map(
         (status) => Prisma.sql`CAST(${status} AS "RoundStatus")`,
       ),
+    );
+    const completedVisibleSince = new Date(
+      Date.now() - COMPLETED_ROUND_VISIBILITY_MS,
+    );
+    const cancelledVisibleSince = new Date(
+      Date.now() - CANCELLED_ROUND_VISIBILITY_MS,
     );
 
     return this.prisma.$queryRaw<LiveRoomSummaryRow[]>(Prisma.sql`
@@ -90,6 +153,8 @@ export class RoomsService {
         cr."roundNumber" AS "roundNumber",
         cr.status::text AS "roundStatus",
         cr."locksAt" AS "roundLocksAt",
+        cr."completedAt" AS "roundCompletedAt",
+        cr."cancelledAt" AS "roundCancelledAt",
         cr."totalEntryAmount" AS "roundTotalEntryAmount",
         cr."payoutAmount" AS "roundPayoutAmount",
         entry_stats."entryCount" AS "entryCount",
@@ -103,11 +168,26 @@ export class RoomsService {
           ro."roundNumber",
           ro.status,
           ro."locksAt",
+          ro."completedAt",
+          ro."cancelledAt",
           ro."totalEntryAmount",
           ro."payoutAmount"
         FROM rounds ro
         WHERE ro."roomId" = r.id
           AND ro.status IN (${publicSummaryStatuses})
+          AND (
+            ro.status IN (${activeStatuses})
+            OR (
+              ro.status = CAST(${RoundStatus.COMPLETED} AS "RoundStatus")
+              AND ro."completedAt" IS NOT NULL
+              AND ro."completedAt" >= ${completedVisibleSince}
+            )
+            OR (
+              ro.status = CAST(${RoundStatus.CANCELLED} AS "RoundStatus")
+              AND ro."cancelledAt" IS NOT NULL
+              AND ro."cancelledAt" >= ${cancelledVisibleSince}
+            )
+          )
         ORDER BY
           CASE WHEN ro.status IN (${activeStatuses}) THEN 0 ELSE 1 END,
           ro."roundNumber" DESC

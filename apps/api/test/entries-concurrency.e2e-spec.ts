@@ -609,6 +609,75 @@ describe('EntriesService concurrency stress', () => {
     runIds.delete(fixture.runId);
   });
 
+  it('accepts entries in the final two seconds while the round is still OPEN', async () => {
+    const fixture = await createFixture({
+      users: 1,
+      amount: 10,
+      startingBalance: 100n,
+    });
+
+    await prisma.round.update({
+      where: { id: fixture.roundId },
+      data: { locksAt: new Date(Date.now() + 1_500) },
+    });
+
+    const result = await placeEntry(
+      fixture,
+      fixture.userIds[0],
+      fixture.amount,
+      `${fixture.runId}:entry:final-two-seconds`,
+    );
+
+    summarize('final-two-seconds-open-entry', [result]);
+
+    expect(result.ok).toBe(true);
+
+    const invariants = await expectCoreInvariants(fixture, 10n);
+
+    expect(invariants.entries).toHaveLength(1);
+    expect(invariants.ledgerTransactions).toHaveLength(1);
+    expect(invariants.wallets[0].balanceSnapshot).toBe(90n);
+
+    await cleanupFixture(fixture);
+    runIds.delete(fixture.runId);
+  });
+
+  it('rejects entries after locksAt even if the stale row is still OPEN', async () => {
+    const fixture = await createFixture({
+      users: 1,
+      amount: 10,
+      startingBalance: 100n,
+    });
+
+    await prisma.round.update({
+      where: { id: fixture.roundId },
+      data: { locksAt: new Date(Date.now() - 1_000) },
+    });
+
+    const result = await placeEntry(
+      fixture,
+      fixture.userIds[0],
+      fixture.amount,
+      `${fixture.runId}:entry:expired-open`,
+    );
+
+    summarize('expired-open-entry-rejected', [result]);
+
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toBeInstanceOf(
+      BadRequestException,
+    );
+
+    const invariants = await expectCoreInvariants(fixture, 0n);
+
+    expect(invariants.entries).toHaveLength(0);
+    expect(invariants.ledgerTransactions).toHaveLength(0);
+    expect(invariants.wallets[0].balanceSnapshot).toBe(100n);
+
+    await cleanupFixture(fixture);
+    runIds.delete(fixture.runId);
+  });
+
   it('applies 10 concurrent top-ups with different idempotency keys without lost updates', async () => {
     const fixture = await createFixture({
       users: 1,

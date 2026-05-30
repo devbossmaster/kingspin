@@ -20,6 +20,9 @@ const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
   RoundStatus.SETTLING,
 ];
 
+const COMPLETED_ROUND_VISIBILITY_MS = 8_000;
+const CANCELLED_ROUND_VISIBILITY_MS = 2_500;
+
 type RoomLiveStateSnapshot = {
   serverNow: string;
   room: {
@@ -361,6 +364,12 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
         (status) => Prisma.sql`CAST(${status} AS "RoundStatus")`,
       ),
     );
+    const completedVisibleSince = new Date(
+      Date.now() - COMPLETED_ROUND_VISIBILITY_MS,
+    );
+    const cancelledVisibleSince = new Date(
+      Date.now() - CANCELLED_ROUND_VISIBILITY_MS,
+    );
 
     return this.prisma.$queryRaw<RoomLiveStateRow[]>(Prisma.sql`
       SELECT
@@ -440,8 +449,22 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
           ro."spinAngle"
         FROM rounds ro
         WHERE ro."roomId" = r.id
-          AND ro.status IN (${activeStatuses})
-        ORDER BY ro."roundNumber" DESC
+          AND (
+            ro.status IN (${activeStatuses})
+            OR (
+              ro.status = CAST(${RoundStatus.COMPLETED} AS "RoundStatus")
+              AND ro."completedAt" IS NOT NULL
+              AND ro."completedAt" >= ${completedVisibleSince}
+            )
+            OR (
+              ro.status = CAST(${RoundStatus.CANCELLED} AS "RoundStatus")
+              AND ro."cancelledAt" IS NOT NULL
+              AND ro."cancelledAt" >= ${cancelledVisibleSince}
+            )
+          )
+        ORDER BY
+          CASE WHEN ro.status IN (${activeStatuses}) THEN 0 ELSE 1 END,
+          ro."roundNumber" DESC
         LIMIT 1
       ) cr ON true
       LEFT JOIN entries e ON e."roundId" = cr.id

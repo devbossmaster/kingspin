@@ -143,11 +143,6 @@ type LatestRoundResultRound = RoundSnapshotSource & {
 @Injectable()
 export class RoundsService {
   private readonly logger = new Logger(RoundsService.name);
-  private readonly transactionOptions = {
-    maxWait: 30_000,
-    timeout: 30_000,
-  } as const;
-
   private readonly inFlightLatestResultByRoom = new Map<
     string,
     Promise<Awaited<ReturnType<RoundsService['buildLatestRoundResultForRoom']>>>
@@ -232,7 +227,7 @@ export class RoundsService {
           idempotencyKey: `round:start:${roomId}:${roundNumber}`,
         },
       });
-    }, this.transactionOptions);
+    });
 
     return this.toRoundSnapshot(round);
   }
@@ -350,7 +345,7 @@ export class RoundsService {
       }
 
       return updatedRound;
-    }, this.transactionOptions);
+    });
 
     const finalEntries = await this.prisma.entry.findMany({
       where: { roundId: currentRound.id },
@@ -527,7 +522,7 @@ export class RoundsService {
         entries: finalEntries,
         reused: false,
       };
-    }, this.transactionOptions);
+    });
 
     return {
       currentRound: this.toRoundSnapshot(result.round),
@@ -625,110 +620,15 @@ export class RoundsService {
     };
   }
 
-  async startSettlingCurrentRoundForRoom(roomId: string) {
-    if (!roomId) {
-      throw new BadRequestException('roomId is required.');
-    }
-
-    const currentRound = await this.prisma.round.findFirst({
-      where: {
-        roomId,
-        status: { in: [RoundStatus.SPINNING, RoundStatus.SETTLING] },
-        winnerEntryId: { not: null },
-        winnerUserId: { not: null },
-        winningTicket: { not: null },
-        spinAngle: { not: null },
-      },
-      orderBy: { roundNumber: 'desc' },
-    });
-
-    if (!currentRound) {
-      throw new BadRequestException(
-        'Room does not have a SPINNING round ready to start settlement.',
-      );
-    }
-
-    if (currentRound.payoutAmount <= 0n) {
-      throw new BadRequestException(
-        'Round payout amount must be greater than zero.',
-      );
-    }
-
-    const winnerEntryId = currentRound.winnerEntryId;
-
-    if (!winnerEntryId || !currentRound.winnerUserId) {
-      throw new BadRequestException(
-        'Round has no winner yet. Draw/spin the round before settlement.',
-      );
-    }
-
-    if (currentRound.status === RoundStatus.SETTLING) {
-      const winnerEntry = await this.prisma.entry.findUnique({
-        where: { id: winnerEntryId },
-      });
-
-      return {
-        currentRound: this.toRoundSnapshot(currentRound),
-        winnerEntry: winnerEntry ? this.toEntrySnapshot(winnerEntry) : null,
-        payoutAmount: currentRound.payoutAmount.toString(),
-        payout: null,
-        reused: true,
-      };
-    }
-
-    const updateResult = await this.prisma.round.updateMany({
-      where: {
-        id: currentRound.id,
-        status: RoundStatus.SPINNING,
-        winnerEntryId: { not: null },
-        winnerUserId: { not: null },
-        winningTicket: { not: null },
-        spinAngle: { not: null },
-      },
-      data: {
-        status: RoundStatus.SETTLING,
-        settlingAt: new Date(),
-      },
-    });
-
-    if (updateResult.count !== 1) {
-      const racedRound = await this.prisma.round.findUniqueOrThrow({
-        where: { id: currentRound.id },
-      });
-
-      if (racedRound.status !== RoundStatus.SETTLING) {
-        throw new BadRequestException(
-          'Round changed while starting SETTLING phase. Retry or review manually.',
-        );
-      }
-    }
-
-    const settlingRound = await this.prisma.round.findUniqueOrThrow({
-      where: { id: currentRound.id },
-    });
-
-    const winnerEntry = await this.prisma.entry.findUnique({
-      where: { id: winnerEntryId },
-    });
-
-    return {
-      currentRound: this.toRoundSnapshot(settlingRound),
-      winnerEntry: winnerEntry ? this.toEntrySnapshot(winnerEntry) : null,
-      payoutAmount: settlingRound.payoutAmount.toString(),
-      payout: null,
-      reused: false,
-    };
-  }
-
   async settleCurrentRoundForRoom(roomId: string) {
     if (!roomId) {
       throw new BadRequestException('roomId is required.');
     }
 
-    const currentRound = await this.prisma.round.findFirst({
+    let currentRound = await this.prisma.round.findFirst({
       where: {
         roomId,
-        status: RoundStatus.SETTLING,
+        status: { in: [RoundStatus.SPINNING, RoundStatus.SETTLING] },
       },
       orderBy: { roundNumber: 'desc' },
     });
@@ -767,7 +667,7 @@ export class RoundsService {
       }
 
       throw new BadRequestException(
-        'Room does not have a SETTLING round ready to complete.',
+        'Room does not have a SPINNING round ready to settle.',
       );
     }
 
@@ -798,6 +698,35 @@ export class RoundsService {
       throw new BadRequestException(
         'Winner entry user does not match round winner user. Manual review required.',
       );
+    }
+
+    if (currentRound.status === RoundStatus.SPINNING) {
+      const settleStart = await this.prisma.round.updateMany({
+        where: {
+          id: currentRound.id,
+          status: RoundStatus.SPINNING,
+        },
+        data: {
+          status: RoundStatus.SETTLING,
+          settlingAt: new Date(),
+        },
+      });
+
+      if (settleStart.count !== 1) {
+        currentRound = await this.prisma.round.findUniqueOrThrow({
+          where: { id: currentRound.id },
+        });
+
+        if (currentRound.status !== RoundStatus.SETTLING) {
+          throw new BadRequestException(
+            'Round changed while settlement was starting. Retry settlement.',
+          );
+        }
+      } else {
+        currentRound = await this.prisma.round.findUniqueOrThrow({
+          where: { id: currentRound.id },
+        });
+      }
     }
 
     const payout = await this.walletsService.creditRoundWin({
@@ -901,7 +830,7 @@ export class RoundsService {
             lockedAt: new Date(),
           },
         });
-      }, this.transactionOptions);
+      });
 
       if (stopEntryResult.count !== 1) {
         const racedRound = await this.prisma.round.findUniqueOrThrow({
@@ -1403,4 +1332,3 @@ export class RoundsService {
     };
   }
 }
-

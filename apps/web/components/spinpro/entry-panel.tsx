@@ -79,7 +79,7 @@ export function EntryPanel({
   const fixedModeAlreadyEntered = isFixedMode && Boolean(myEntry);
 
   const disabledReason = useMemo(() => {
-    if (!entriesOpen) return "Entries are currently closed.";
+    if (!entriesOpen) return "Round locked. Entries are closed.";
     if (!hasWallet) return "Wallet is unavailable.";
     if (needsVerification) return "Verify your email before entering.";
     if (isFixedMode && !fixedModeAmount) {
@@ -121,11 +121,13 @@ export function EntryPanel({
     !isPlacingEntry;
 
   const buttonLabel = isPlacingEntry
-    ? "Confirming entry..."
+    ? "Submitting..."
     : needsVerification
       ? "Verify email first"
       : !entriesOpen
-        ? "Entries closed"
+        ? status === "CANCELLED"
+          ? "Skipped"
+          : "Round locked"
         : !hasWallet
           ? "Wallet unavailable"
           : insufficientBalance
@@ -133,7 +135,7 @@ export function EntryPanel({
             : myEntry
               ? isFixedMode
                 ? "You are in"
-                : `Add ${formatCoins(entryAmount)} more`
+              : `Add ${formatCoins(entryAmount)}`
               : `Enter ${formatCoins(entryAmount)}`;
 
   const submitEntry = () => {
@@ -260,7 +262,7 @@ export function EntryPanel({
 
           {isPlacingEntry ? (
             <p className="mt-2 text-center text-xs font-semibold text-[var(--gold)]">
-              Locking your entry securely...
+              Submitting...
             </p>
           ) : null}
         </>

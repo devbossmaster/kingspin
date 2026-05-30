@@ -1,5 +1,10 @@
 "use client";
 
+import type {
+  EntryWithPlayerSnapshot,
+  LatestRoundResult,
+  LiveRoundSnapshot,
+} from "@kingspin/contracts";
 import { useParams } from "next/navigation";
 import { ConnectionPill } from "../../../../components/layout/connection-pill";
 import { NavBar } from "../../../../components/layout/nav-bar";
@@ -7,230 +12,370 @@ import { BottomNav } from "../../../../components/player/bottom-nav";
 import { EntryPanel } from "../../../../components/spinpro/entry-panel";
 import { FairnessStrip } from "../../../../components/spinpro/fairness-strip";
 import { PlayersList } from "../../../../components/spinpro/players-list";
-import { PoolStat } from "../../../../components/spinpro/pool-stat";
-import { RoundPhaseBanner } from "../../../../components/spinpro/round-phase-banner";
-import { RoundTimer } from "../../../../components/spinpro/round-timer";
 import { SpinningWheel } from "../../../../components/spinpro/spinning-wheel";
 import { WalletHUD } from "../../../../components/spinpro/wallet-hud";
 import { WinnerReveal } from "../../../../components/spinpro/winner-reveal";
 import { Badge, phaseBadgeVariant } from "../../../../components/ui/badge";
-import { Button } from "../../../../components/ui/button";
+import { useCountdown } from "../../../../hooks/use-countdown";
 import { useRoom } from "../../../../hooks/use-room";
-import { formatCoins, truncateId } from "../../../../lib/format";
 import { useSession } from "../../../../lib/auth-client";
+import { formatCoins, formatMs, truncateId } from "../../../../lib/format";
 import { useAuthStore } from "../../../../stores/auth-store";
 import { useRoomStore } from "../../../../stores/room-store";
 
-const PHASE_FLOW = [
-  "OPEN",
-  "LOCKED",
-  "DRAWING",
+const PLAYER_PHASES = [
+  "ENTRY OPEN",
+  "LOCKED / DRAW",
   "SPINNING",
-  "SETTLING",
-  "COMPLETED",
+  "RESULT",
 ] as const;
 
-function getPhaseIndex(status: string | null | undefined) {
-  return PHASE_FLOW.findIndex((phase) => phase === status);
-}
+type PlayerPhase = (typeof PLAYER_PHASES)[number] | "SKIPPED / REFUNDED" | "WAITING";
 
-function phaseShortLabel(status: string) {
+function getPlayerPhase(status: string | null | undefined): PlayerPhase {
   switch (status) {
     case "OPEN":
-      return "Open";
+      return "ENTRY OPEN";
     case "LOCKED":
-      return "Lock";
     case "DRAWING":
-      return "Draw";
+      return "LOCKED / DRAW";
     case "SPINNING":
-      return "Spin";
+      return "SPINNING";
     case "SETTLING":
-      return "Settle";
     case "COMPLETED":
-      return "Done";
-    default:
-      return status;
-  }
-}
-
-function phaseHeadline(status: string | null | undefined) {
-  switch (status) {
-    case "OPEN":
-      return "Players can enter now";
-    case "LOCKED":
-      return "Entries are locked";
-    case "DRAWING":
-      return "Server is selecting the winner";
-    case "SPINNING":
-      return "Wheel reveal is live";
-    case "SETTLING":
-      return "Payout is finalizing";
-    case "COMPLETED":
-      return "Round completed";
+      return "RESULT";
     case "CANCELLED":
-      return "Round skipped or refunded";
+      return "SKIPPED / REFUNDED";
     default:
-      return "Waiting for round";
+      return "WAITING";
   }
 }
 
-function phaseDescription(status: string | null | undefined) {
-  switch (status) {
-    case "OPEN":
-      return "Enter before the countdown ends. Pool and player list update live.";
-    case "LOCKED":
-      return "No more entries. Ticket ranges are being finalized.";
-    case "DRAWING":
-      return "The backend is resolving the winning ticket securely.";
-    case "SPINNING":
-      return "The result is locked. The wheel is animating with the server spin angle.";
-    case "SETTLING":
-      return "The backend ledger is settling the winner payout.";
-    case "COMPLETED":
-      return "Winner reveal is available. A new round will start soon.";
-    case "CANCELLED":
-      return "No winner was drawn. Empty or single-player rounds are skipped/refunded safely.";
-    default:
-      return "The room is preparing the next live round.";
+function getPhaseCopy(status: string | null | undefined, msLeft: number) {
+  if (status === "OPEN") {
+    return {
+      title: "ENTRY OPEN",
+      message:
+        msLeft > 0 && msLeft <= 2_000
+          ? "Final seconds / locking soon. Entries are still open."
+          : "Entries open. Join before the countdown ends.",
+      badge: msLeft > 0 && msLeft <= 2_000 ? "Final seconds" : "Entries open",
+      tone: "border-[rgba(74,222,128,0.34)] bg-[rgba(74,222,128,0.08)]",
+      bar: "bg-[var(--green-go)]",
+    };
   }
+
+  if (status === "LOCKED") {
+    return {
+      title: "LOCKED / DRAW",
+      message: "Entries locked. Assigning tickets.",
+      badge: "Locked",
+      tone: "border-[rgba(250,204,21,0.36)] bg-[rgba(250,204,21,0.08)]",
+      bar: "bg-[var(--gold)]",
+    };
+  }
+
+  if (status === "DRAWING") {
+    return {
+      title: "LOCKED / DRAW",
+      message: "Selecting winner securely.",
+      badge: "Drawing",
+      tone: "border-[rgba(96,165,250,0.34)] bg-[rgba(96,165,250,0.08)]",
+      bar: "bg-blue-300",
+    };
+  }
+
+  if (status === "SPINNING") {
+    return {
+      title: "SPINNING",
+      message: "Wheel spinning. Revealing result.",
+      badge: "Spinning",
+      tone: "border-[rgba(232,121,249,0.34)] bg-[rgba(232,121,249,0.08)]",
+      bar: "bg-[var(--magenta)]",
+    };
+  }
+
+  if (status === "SETTLING") {
+    return {
+      title: "RESULT",
+      message: "Finalizing payout.",
+      badge: "Settling",
+      tone: "border-[rgba(45,212,191,0.34)] bg-[rgba(45,212,191,0.08)]",
+      bar: "bg-teal",
+    };
+  }
+
+  if (status === "COMPLETED") {
+    return {
+      title: "RESULT",
+      message: "Winner revealed. Next round soon.",
+      badge: "Complete",
+      tone: "border-[rgba(250,204,21,0.38)] bg-[rgba(250,204,21,0.08)]",
+      bar: "bg-[var(--gold)]",
+    };
+  }
+
+  if (status === "CANCELLED") {
+    return {
+      title: "SKIPPED / REFUNDED",
+      message: "Round skipped/refunded. Next round soon.",
+      badge: "Skipped",
+      tone: "border-[rgba(248,113,113,0.36)] bg-[rgba(248,113,113,0.08)]",
+      bar: "bg-[var(--red-hot)]",
+    };
+  }
+
+  return {
+    title: "WAITING",
+    message: "The next round is preparing.",
+    badge: "Waiting",
+    tone: "border-[var(--border)] bg-white/[0.04]",
+    bar: "bg-white/[0.35]",
+  };
 }
 
-function LivePhaseRail({ status }: { status: string | null | undefined }) {
-  const activeIndex = getPhaseIndex(status);
-  const isCancelled = status === "CANCELLED";
+function PhaseStepper({ status }: { status: string | null | undefined }) {
+  const playerPhase = getPlayerPhase(status);
+  const activeIndex = PLAYER_PHASES.findIndex((phase) => phase === playerPhase);
 
-  if (isCancelled) {
+  if (playerPhase === "SKIPPED / REFUNDED") {
     return (
-      <div className="rounded-lg border border-[rgba(248,113,113,0.32)] bg-[rgba(248,113,113,0.08)] p-3">
-        <p className="text-xs font-black uppercase tracking-[0.18em] text-red-hot">
-          Skipped / Refunded
-        </p>
-        <p className="mt-1 text-sm text-text-secondary">
-          This round did not draw a winner. The next OPEN round will continue
-          automatically.
-        </p>
+      <div className="rounded-md border border-[rgba(248,113,113,0.26)] bg-black/20 px-3 py-2 text-xs font-semibold text-text-secondary">
+        No winner was drawn for this round.
       </div>
     );
   }
 
   return (
-    <div className="rounded-lg border border-[var(--border)] bg-black/20 p-3">
-      <div className="grid grid-cols-6 gap-1">
-        {PHASE_FLOW.map((phase, index) => {
-          const isActive = phase === status;
-          const isDone = activeIndex > index;
-          const isFuture = activeIndex < index;
+    <div className="grid grid-cols-4 gap-1">
+      {PLAYER_PHASES.map((phase, index) => {
+        const isActive = phase === playerPhase;
+        const isDone = activeIndex > index;
 
-          return (
-            <div key={phase} className="min-w-0">
-              <div
-                className={`h-2 rounded-full ${
-                  isActive
-                    ? "bg-[var(--gold)]"
-                    : isDone
-                      ? "bg-green-go"
-                      : "bg-white/[0.12]"
-                } ${
-                  isActive &&
-                  (status === "LOCKED" ||
-                    status === "DRAWING" ||
-                    status === "SPINNING" ||
-                    status === "SETTLING")
-                    ? "animate-pulse"
-                    : ""
-                }`}
-              />
-              <p
-                className={`mt-1 truncate text-center text-[10px] font-black uppercase tracking-[0.08em] ${
-                  isActive
-                    ? "text-[var(--gold)]"
-                    : isDone
-                      ? "text-green-go"
-                      : isFuture
-                        ? "text-text-dim"
-                        : "text-text-secondary"
-                }`}
-              >
-                {phaseShortLabel(phase)}
-              </p>
-            </div>
-          );
-        })}
-      </div>
+        return (
+          <div key={phase} className="min-w-0">
+            <div
+              className={`h-1.5 rounded-full ${
+                isActive
+                  ? "bg-[var(--gold)]"
+                  : isDone
+                    ? "bg-green-go"
+                    : "bg-white/[0.12]"
+              } ${
+                isActive &&
+                (status === "LOCKED" ||
+                  status === "DRAWING" ||
+                  status === "SPINNING" ||
+                  status === "SETTLING")
+                  ? "animate-pulse"
+                  : ""
+              }`}
+            />
+            <p
+              className={`mt-1 truncate text-center text-[10px] font-black uppercase ${
+                isActive
+                  ? "text-[var(--gold)]"
+                  : isDone
+                    ? "text-green-go"
+                    : "text-text-dim"
+              }`}
+            >
+              {phase}
+            </p>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-function LivePhaseHero({
+function MainPhasePanel({
   status,
   roundNumber,
+  serverNow,
+  locksAt,
+  durationMs,
   entryCount,
-  connectionStatus,
+  totalEntryAmount,
 }: {
   status: string | null | undefined;
   roundNumber: number | null | undefined;
+  serverNow: string;
+  locksAt: string | null | undefined;
+  durationMs: number;
   entryCount: number;
-  connectionStatus: string;
+  totalEntryAmount: string;
 }) {
-  const isActiveMotion =
-    status === "LOCKED" ||
-    status === "DRAWING" ||
-    status === "SPINNING" ||
-    status === "SETTLING";
+  const { msLeft } = useCountdown({
+    locksAt,
+    serverNow,
+    enabled: status === "OPEN",
+  });
+  const copy = getPhaseCopy(status, msLeft);
+  const remainingRatio =
+    status === "OPEN" && durationMs > 0
+      ? Math.max(0, Math.min(1, msLeft / durationMs))
+      : status
+        ? 1
+        : 0;
 
   return (
-    <section className="arcadia-surface relative overflow-hidden rounded-lg border border-[var(--border)] p-4">
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(250,204,21,0.72)] to-transparent" />
-      {isActiveMotion ? (
-        <div className="pointer-events-none absolute right-4 top-4 h-20 w-20 rounded-full bg-[rgba(250,204,21,0.09)] blur-2xl animate-pulse" />
-      ) : null}
+    <section
+      className={`arcadia-surface relative overflow-hidden rounded-lg border p-4 ${copy.tone}`}
+      aria-live="polite"
+    >
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(250,204,21,0.64)] to-transparent" />
 
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
+        <div className="min-w-0">
           <p className="text-xs font-black uppercase tracking-[0.22em] text-[var(--gold)]">
-            Live Phase
+            Round #{roundNumber ?? "-"}
           </p>
           <h2 className="mt-1 font-display text-2xl font-black text-text-primary">
-            {phaseHeadline(status)}
+            {copy.title}
           </h2>
-          <p className="mt-1 max-w-2xl text-sm text-text-secondary">
-            {phaseDescription(status)}
-          </p>
+          <p className="mt-1 text-sm text-text-secondary">{copy.message}</p>
         </div>
 
         <div className="grid gap-2 text-right">
-          <Badge variant={phaseBadgeVariant(status)}>
-            {status ?? "NO ROUND"}
-          </Badge>
-
-          <span className="rounded-full border border-[var(--border)] bg-white/[0.04] px-3 py-1 font-mono text-xs text-text-secondary">
-            Socket {connectionStatus}
-          </span>
+          <Badge variant={phaseBadgeVariant(status)}>{copy.badge}</Badge>
+          {status === "OPEN" ? (
+            <p className="font-mono text-2xl font-black text-text-primary">
+              {formatMs(msLeft)}
+            </p>
+          ) : null}
         </div>
       </div>
 
-      <div className="mt-4 grid gap-3 md:grid-cols-[1fr_0.35fr_0.35fr]">
-        <LivePhaseRail status={status} />
+      <div className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--bg-raised)]">
+        <div
+          className={`h-full rounded-full ${copy.bar} transition-[width] duration-300`}
+          style={{ width: `${remainingRatio * 100}%` }}
+        />
+      </div>
 
-        <div className="rounded-lg border border-[var(--border)] bg-white/[0.04] p-3">
-          <p className="text-xs font-black uppercase tracking-[0.16em] text-text-dim">
-            Round
-          </p>
-          <p className="mt-1 font-mono text-xl font-black text-text-primary">
-            #{roundNumber ?? "-"}
+      <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_0.32fr_0.32fr]">
+        <PhaseStepper status={status} />
+
+        <div className="rounded-md border border-[var(--border)] bg-black/20 px-3 py-2">
+          <p className="text-xs font-bold uppercase text-text-dim">Pool</p>
+          <p className="mt-1 font-mono text-sm font-black text-[var(--gold)]">
+            {formatCoins(totalEntryAmount)}
           </p>
         </div>
 
-        <div className="rounded-lg border border-[var(--border)] bg-white/[0.04] p-3">
-          <p className="text-xs font-black uppercase tracking-[0.16em] text-text-dim">
-            Entries
-          </p>
-          <p className="mt-1 font-mono text-xl font-black text-text-primary">
+        <div className="rounded-md border border-[var(--border)] bg-black/20 px-3 py-2">
+          <p className="text-xs font-bold uppercase text-text-dim">Entries</p>
+          <p className="mt-1 font-mono text-sm font-black text-text-primary">
             {entryCount}
           </p>
         </div>
       </div>
     </section>
+  );
+}
+
+function winnerName(entry: EntryWithPlayerSnapshot | null | undefined, userId?: string | null) {
+  return (
+    entry?.player?.username ??
+    entry?.player?.fullName ??
+    (entry?.userId ? truncateId(entry.userId, 6) : userId ? truncateId(userId, 6) : "Pending")
+  );
+}
+
+function RoundResultPanel({
+  currentRound,
+  winnerEntry,
+  latestResult,
+}: {
+  currentRound: LiveRoundSnapshot;
+  winnerEntry: EntryWithPlayerSnapshot | null;
+  latestResult: LatestRoundResult | null;
+}) {
+  if (
+    currentRound.status !== "SETTLING" &&
+    currentRound.status !== "COMPLETED"
+  ) {
+    return null;
+  }
+
+  const isCompleted = currentRound.status === "COMPLETED";
+
+  return (
+    <section className="arcadia-surface relative overflow-hidden rounded-lg border border-[rgba(45,212,191,0.28)] bg-[rgba(45,212,191,0.06)] p-4">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-teal to-transparent" />
+
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.22em] text-teal">
+            {isCompleted ? "Winner Revealed" : "Finalizing Payout"}
+          </p>
+          <h2 className="mt-1 font-display text-xl font-black text-text-primary">
+            {isCompleted ? "Result is final" : "Result locked"}
+          </h2>
+          <p className="mt-1 text-sm text-text-secondary">
+            {isCompleted
+              ? "Payout finalized. Fairness proof is available as it loads."
+              : "The backend ledger is settling the payout safely."}
+          </p>
+        </div>
+
+        <Badge variant="settled">
+          {isCompleted
+            ? latestResult
+              ? "Proof ready"
+              : "Proof loading"
+            : "Settling"}
+        </Badge>
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-4">
+        <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
+          <p className="text-xs font-bold uppercase text-text-dim">Winner</p>
+          <p className="mt-1 truncate font-mono text-sm font-black text-text-primary">
+            {winnerName(winnerEntry, currentRound.winnerUserId)}
+          </p>
+        </div>
+
+        <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
+          <p className="text-xs font-bold uppercase text-text-dim">Ticket</p>
+          <p className="mt-1 font-mono text-sm font-black text-[var(--gold)]">
+            {currentRound.winningTicket ?? "-"}
+          </p>
+        </div>
+
+        <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
+          <p className="text-xs font-bold uppercase text-text-dim">Payout</p>
+          <p className="mt-1 font-mono text-sm font-black text-[var(--gold)]">
+            {formatCoins(currentRound.payoutAmount)}
+          </p>
+        </div>
+
+        <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
+          <p className="text-xs font-bold uppercase text-text-dim">Round</p>
+          <p className="mt-1 font-mono text-sm font-black text-text-primary">
+            #{currentRound.roundNumber}
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function HeaderStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="min-w-[120px] rounded-md border border-[var(--border)] bg-white/[0.04] px-3 py-2">
+      <p className="text-xs font-bold uppercase text-text-dim">{label}</p>
+      <p className="mt-1 truncate font-mono text-sm font-black text-text-primary">
+        {value}
+      </p>
+    </div>
   );
 }
 
@@ -250,9 +395,7 @@ export default function LiveRoomPage() {
     walletError,
     isPlacingEntry,
     myEntry,
-    entriesTotal,
     placeEntry,
-    refresh,
     refreshWallet,
   } = useRoom(roomId);
 
@@ -281,7 +424,7 @@ export default function LiveRoomPage() {
               Preparing live table...
             </h1>
             <p className="mt-2 text-sm text-text-secondary">
-              Connecting to the room and loading the latest round state.
+              Connecting to the room and loading the latest backend state.
             </p>
 
             {error ? (
@@ -301,11 +444,17 @@ export default function LiveRoomPage() {
   const totalEntryAmount = currentRound?.totalEntryAmount ?? "0";
   const isFixedMode = state.room.gameMode === "FIXED_EQUAL_CHANCE";
   const modeLabel = isFixedMode
-    ? "Fixed Bet · Equal Chance"
-    : "Pro Mode · Flexible Proportional";
+    ? "Fixed Bet / Equal Chance"
+    : "Pro Mode / Flexible";
+
+  const visibleWinnerEntryId =
+    roundStatus === "SETTLING" || roundStatus === "COMPLETED"
+      ? currentRound?.winnerEntryId
+      : null;
 
   const completedFallbackWinner = currentRound?.winnerEntryId
-    ? state.entries.find((entry) => entry.id === currentRound.winnerEntryId)
+    ? (state.entries.find((entry) => entry.id === currentRound.winnerEntryId) ??
+      null)
     : null;
 
   return (
@@ -318,92 +467,53 @@ export default function LiveRoomPage() {
           <section className="arcadia-surface relative overflow-hidden rounded-lg p-5">
             <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(250,204,21,0.75)] to-transparent" />
 
-            <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[var(--border)] pb-4">
+            <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0">
                 <p className="text-xs font-black uppercase tracking-[0.22em] text-[var(--gold)]">
                   {state.category.name}
                 </p>
-
                 <h1 className="mt-1 truncate font-display text-3xl font-black md:text-4xl">
                   {state.room.name}
                 </h1>
 
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
-                  <span className="rounded-full border border-[var(--border)] bg-white/[0.04] px-3 py-1 font-mono">
+                  <span className="rounded-md border border-[var(--border)] bg-white/[0.04] px-2 py-1 font-mono">
                     {state.room.code}
                   </span>
-
-                  <span className="rounded-full border border-[var(--border)] bg-white/[0.04] px-3 py-1 font-mono">
+                  <span className="rounded-md border border-[var(--border)] bg-white/[0.04] px-2 py-1 font-mono">
                     Socket {connectionStatus}
                   </span>
-
                   <Badge variant={phaseBadgeVariant(roundStatus)}>
-                    {roundStatus ?? "NO ROUND"}
+                    {getPlayerPhase(roundStatus)}
                   </Badge>
-
-                  <span className="rounded-full border border-[var(--border)] bg-white/[0.04] px-3 py-1 font-mono">
+                  <span className="rounded-md border border-[var(--border)] bg-white/[0.04] px-2 py-1 font-mono">
                     {modeLabel}
                   </span>
                 </div>
               </div>
-
-              <Button
-                className="transition active:scale-[0.99]"
-                variant="ghost"
-                onClick={() => void refresh()}
-              >
-                Refresh Room
-              </Button>
             </div>
 
-            <div className="mt-5 grid gap-3 md:grid-cols-3">
-              <div className="rounded-md border border-[var(--border)] bg-white/[0.04] p-4">
-                <p className="text-sm text-text-secondary">Round</p>
-                <p className="mt-1 font-mono text-2xl font-black">
-                  #{currentRound?.roundNumber ?? "-"}
-                </p>
-                <p className="mt-2 text-xs text-text-dim">
-                  {roundStatus ? "Current live round" : "Waiting for round"}
-                </p>
-              </div>
-
-              <PoolStat label="Pool" value={totalEntryAmount} caption="coins" />
-
-              <div className="rounded-md border border-[var(--border)] bg-white/[0.04] p-4">
-                <p className="text-sm text-text-secondary">My Entry</p>
-                <p className="mt-1 font-mono text-2xl font-black">
-                  {formatCoins(myEntry?.amount)}
-                </p>
-                <p className="mt-2 text-xs text-text-dim">
-                  {myEntry
-                    ? isFixedMode
-                      ? "You are in this equal-chance round"
-                      : "Confirmed proportional ticket range"
-                    : "Not entered yet"}
-                </p>
-              </div>
+            <div className="mt-4 grid gap-2 sm:grid-cols-3">
+              <HeaderStat
+                label="Round"
+                value={`#${currentRound?.roundNumber ?? "-"}`}
+              />
+              <HeaderStat label="Pool" value={formatCoins(totalEntryAmount)} />
+              <HeaderStat
+                label="My Entry"
+                value={formatCoins(myEntry?.amount)}
+              />
             </div>
           </section>
 
-          <LivePhaseHero
+          <MainPhasePanel
             status={roundStatus}
             roundNumber={currentRound?.roundNumber}
-            entryCount={state.entries.length}
-            connectionStatus={connectionStatus}
-          />
-
-          <RoundTimer
-            status={roundStatus}
             serverNow={state.serverNow}
             locksAt={currentRound?.locksAt}
             durationMs={state.room.roundDurationMs}
-          />
-
-          <RoundPhaseBanner
-            status={roundStatus}
-            roundNumber={currentRound?.roundNumber}
+            entryCount={state.entries.length}
             totalEntryAmount={totalEntryAmount}
-            winningTicket={currentRound?.winningTicket}
           />
 
           <SpinningWheel
@@ -411,54 +521,23 @@ export default function LiveRoomPage() {
             totalEntryAmount={totalEntryAmount}
             spinAngle={currentRound?.spinAngle}
             status={roundStatus}
-            winnerEntryId={currentRound?.winnerEntryId}
+            winnerEntryId={visibleWinnerEntryId}
           />
 
-          {roundStatus === "COMPLETED" && !latestResult ? (
-            <section className="arcadia-surface rounded-lg border border-[rgba(250,204,21,0.28)] bg-[rgba(250,204,21,0.06)] p-4">
-              <p className="text-xs font-black uppercase tracking-[0.2em] text-[var(--gold)]">
-                Completed
-              </p>
-              <h2 className="mt-1 font-display text-xl font-black">
-                Winner reveal loading
-              </h2>
-              <p className="mt-1 text-sm text-text-secondary">
-                The round is completed. Full fairness proof is loading now.
-              </p>
-
-              <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
-                  <p className="text-xs text-text-dim">Winner</p>
-                  <p className="mt-1 truncate font-mono font-black">
-                    {completedFallbackWinner?.player?.username ??
-                      completedFallbackWinner?.player?.fullName ??
-                      (currentRound?.winnerUserId
-                        ? truncateId(currentRound.winnerUserId, 6)
-                        : "Pending")}
-                  </p>
-                </div>
-
-                <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
-                  <p className="text-xs text-text-dim">Winning Ticket</p>
-                  <p className="mt-1 font-mono font-black">
-                    {currentRound?.winningTicket ?? "-"}
-                  </p>
-                </div>
-
-                <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
-                  <p className="text-xs text-text-dim">Payout</p>
-                  <p className="mt-1 font-mono font-black text-[var(--gold)]">
-                    {formatCoins(currentRound?.payoutAmount)}
-                  </p>
-                </div>
-              </div>
-            </section>
+          {currentRound ? (
+            <RoundResultPanel
+              currentRound={currentRound}
+              winnerEntry={completedFallbackWinner}
+              latestResult={latestResult}
+            />
           ) : null}
 
-          <FairnessStrip
-            currentRound={currentRound}
-            latestResult={latestResult}
-          />
+          {roundStatus === "COMPLETED" ? (
+            <FairnessStrip
+              currentRound={currentRound}
+              latestResult={latestResult}
+            />
+          ) : null}
 
           {error ? (
             <div className="rounded-md border border-[rgba(248,113,113,0.42)] bg-[rgba(248,113,113,0.12)] p-3 text-sm font-semibold text-red-hot">
@@ -496,42 +575,24 @@ export default function LiveRoomPage() {
           <PlayersList
             entries={state.entries}
             totalEntryAmount={totalEntryAmount}
-            winnerEntryId={currentRound?.winnerEntryId}
+            winnerEntryId={visibleWinnerEntryId}
           />
 
-          <section className="arcadia-surface relative overflow-hidden rounded-lg p-5">
-            <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(250,204,21,0.55)] to-transparent" />
+          <details className="arcadia-surface relative overflow-hidden rounded-lg p-4">
+            <summary className="cursor-pointer list-none text-sm font-black uppercase tracking-[0.18em] text-text-secondary">
+              Recent rounds ({roundLog.length})
+            </summary>
 
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="text-xs font-black uppercase tracking-[0.22em] text-[var(--gold)]">
-                  History
-                </p>
-                <h2 className="mt-1 font-display text-xl font-black">
-                  Recent Rounds
-                </h2>
-              </div>
-
-              <div className="rounded-full border border-[var(--border)] bg-white/[0.04] px-3 py-1 text-xs font-black uppercase tracking-[0.16em] text-text-secondary">
-                {roundLog.length} shown
-              </div>
-            </div>
-
-            <div className="mt-4 space-y-2">
+            <div className="mt-3 space-y-2">
               {roundLog.length === 0 ? (
-                <div className="rounded-md border border-dashed border-[var(--border)] bg-white/[0.03] p-4 text-center">
-                  <p className="text-sm font-semibold text-text-primary">
-                    No settled rounds yet
-                  </p>
-                  <p className="mt-1 text-xs text-text-secondary">
-                    Completed rounds will appear here.
-                  </p>
-                </div>
+                <p className="rounded-md border border-dashed border-[var(--border)] bg-white/[0.03] p-4 text-sm text-text-secondary">
+                  Completed rounds will appear here.
+                </p>
               ) : (
                 roundLog.map((result) => (
                   <div
                     key={result.round.id}
-                    className="rounded-md border border-[var(--border)] bg-white/[0.04] px-3 py-2 text-sm transition hover:border-[rgba(250,204,21,0.28)] hover:bg-white/[0.06]"
+                    className="rounded-md border border-[var(--border)] bg-white/[0.04] px-3 py-2 text-sm"
                   >
                     <div className="flex items-center justify-between gap-3">
                       <span className="font-mono font-black">
@@ -541,7 +602,6 @@ export default function LiveRoomPage() {
                         {formatCoins(result.round.payoutAmount)}
                       </span>
                     </div>
-
                     <p className="mt-1 truncate text-text-secondary">
                       Winner{" "}
                       <span className="font-semibold text-text-primary">
@@ -553,18 +613,7 @@ export default function LiveRoomPage() {
                 ))
               )}
             </div>
-
-            <div className="mt-4 rounded-md border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2">
-              <div className="flex items-center justify-between gap-3 text-sm">
-                <span className="font-bold text-text-secondary">
-                  Visible pool
-                </span>
-                <span className="font-mono font-black text-[var(--gold)]">
-                  {formatCoins(entriesTotal)} coins
-                </span>
-              </div>
-            </div>
-          </section>
+          </details>
         </aside>
       </div>
 

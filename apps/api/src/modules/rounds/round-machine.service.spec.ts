@@ -91,6 +91,7 @@ function buildService(args?: {
     lockCurrentRoundForRoom: jest.fn(),
     drawCurrentRoundForRoom: jest.fn(),
     startSpinningCurrentRoundForRoom: jest.fn(),
+    startSettlingCurrentRoundForRoom: jest.fn(),
     settleCurrentRoundForRoom: jest.fn(),
   };
 
@@ -110,6 +111,12 @@ function buildService(args?: {
     currentRound: {
       id: "round-1",
       status: RoundStatus.SPINNING,
+    },
+  });
+  roundsService.startSettlingCurrentRoundForRoom.mockResolvedValue({
+    currentRound: {
+      id: "round-1",
+      status: RoundStatus.SETTLING,
     },
   });
   roundsService.settleCurrentRoundForRoom.mockResolvedValue({
@@ -510,6 +517,7 @@ describe("RoundMachineService", () => {
     });
     const { service, roundsService } = buildService({
       currentRound: lockedRound,
+      entryCount: 2,
     });
 
     const result = await service.advanceRoomOnce("room-1");
@@ -520,6 +528,54 @@ describe("RoundMachineService", () => {
     expect(result).toEqual(
       expect.objectContaining({
         action: "DREW_ROUND",
+        roomId: "room-1",
+      }),
+    );
+  });
+
+  it("skips a stale locked round with no entries instead of drawing", async () => {
+    const lockedRound = buildRound({
+      status: RoundStatus.LOCKED,
+      lockedAt: new Date("2026-05-26T11:59:00.000Z"),
+    });
+    const { service, roundsService } = buildService({
+      currentRound: lockedRound,
+      entryCount: 0,
+    });
+
+    const result = await service.advanceRoomOnce("room-1");
+
+    expect(roundsService.cancelCurrentRoundForRoom).toHaveBeenCalledWith(
+      "room-1",
+    );
+    expect(roundsService.drawCurrentRoundForRoom).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        action: "CANCELLED_EMPTY_LOCKED_ROUND_AND_STARTED_NEXT",
+        roomId: "room-1",
+      }),
+    );
+  });
+
+  it("refund-skips a stale locked round with one entry instead of drawing", async () => {
+    const lockedRound = buildRound({
+      status: RoundStatus.LOCKED,
+      lockedAt: new Date("2026-05-26T11:59:00.000Z"),
+    });
+    const { service, roundsService } = buildService({
+      currentRound: lockedRound,
+      entryCount: 1,
+    });
+
+    const result = await service.advanceRoomOnce("room-1");
+
+    expect(roundsService.cancelCurrentRoundForRoom).toHaveBeenCalledWith(
+      "room-1",
+    );
+    expect(roundsService.drawCurrentRoundForRoom).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        action: "CANCELLED_SINGLE_PLAYER_LOCKED_ROUND_AND_STARTED_NEXT",
         roomId: "room-1",
       }),
     );
@@ -552,7 +608,7 @@ describe("RoundMachineService", () => {
     );
   });
 
-  it("settles after the spinning phase elapses", async () => {
+  it("starts settling after the spinning phase elapses without paying yet", async () => {
     const spinningRound = buildRound({
       status: RoundStatus.SPINNING,
       spinningAt: new Date("2026-05-26T11:59:00.000Z"),
@@ -560,6 +616,7 @@ describe("RoundMachineService", () => {
       winnerEntryId: "entry-1",
       winnerUserId: "user-1",
       spinAngle: 42,
+      payoutAmount: 100n,
     });
     const { service, roundsService } = buildService({
       currentRound: spinningRound,
@@ -567,15 +624,189 @@ describe("RoundMachineService", () => {
 
     const result = await service.advanceRoomOnce("room-1");
 
+    expect(
+      roundsService.startSettlingCurrentRoundForRoom,
+    ).toHaveBeenCalledWith("room-1");
+    expect(roundsService.settleCurrentRoundForRoom).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        action: "STARTED_SETTLING_ROUND",
+        roomId: "room-1",
+      }),
+    );
+  });
+
+  it("waits during the settling phase before payout completion", async () => {
+    jest.useFakeTimers().setSystemTime(now);
+    const settlingRound = buildRound({
+      status: RoundStatus.SETTLING,
+      settlingAt: new Date("2026-05-26T11:59:59.000Z"),
+      winningTicket: 10n,
+      winnerEntryId: "entry-1",
+      winnerUserId: "user-1",
+      spinAngle: 42,
+      payoutAmount: 100n,
+    });
+    const { service, roundsService } = buildService({
+      currentRound: settlingRound,
+    });
+
+    const result = await service.advanceRoomOnce("room-1");
+
+    expect(roundsService.settleCurrentRoundForRoom).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        action: "WAITING_FOR_SETTLING_PHASE",
+        roomId: "room-1",
+        msRemaining: 1_500,
+      }),
+    );
+  });
+
+  it("settles after the settling phase elapses", async () => {
+    const settlingRound = buildRound({
+      status: RoundStatus.SETTLING,
+      settlingAt: new Date("2026-05-26T11:59:00.000Z"),
+      winningTicket: 10n,
+      winnerEntryId: "entry-1",
+      winnerUserId: "user-1",
+      spinAngle: 42,
+      payoutAmount: 100n,
+    });
+    const { service, roundsService } = buildService({
+      currentRound: settlingRound,
+    });
+
+    const result = await service.advanceRoomOnce("room-1");
+
     expect(roundsService.settleCurrentRoundForRoom).toHaveBeenCalledWith(
       "room-1",
     );
+    expect(
+      roundsService.startSettlingCurrentRoundForRoom,
+    ).not.toHaveBeenCalled();
     expect(result).toEqual(
       expect.objectContaining({
         action: "SETTLED_ROUND",
         roomId: "room-1",
       }),
     );
+  });
+
+  it("runs the full two-entry lifecycle through completed cooldown into the next OPEN round", async () => {
+    let currentRound = buildRound({
+      status: RoundStatus.OPEN,
+      locksAt: new Date("2026-05-26T11:59:00.000Z"),
+      totalEntryAmount: 20n,
+      payoutAmount: 20n,
+    });
+    const activeStatuses = new Set([
+      RoundStatus.OPEN,
+      RoundStatus.LOCKED,
+      RoundStatus.DRAWING,
+      RoundStatus.SPINNING,
+      RoundStatus.SETTLING,
+    ]);
+    const { service, prisma, roundsService } = buildService({
+      currentRound,
+      entryCount: 2,
+    });
+
+    prisma.round.findFirst.mockImplementation(
+      (query?: { where?: { status?: unknown } }) => {
+        if (query?.where?.status) {
+          return Promise.resolve(
+            activeStatuses.has(currentRound.status) ? currentRound : null,
+          );
+        }
+
+        return Promise.resolve(currentRound);
+      },
+    );
+    roundsService.lockCurrentRoundForRoom.mockImplementation(async () => {
+      currentRound = {
+        ...currentRound,
+        status: RoundStatus.LOCKED,
+        lockedAt: now,
+      };
+
+      return { currentRound: roundsService.toRoundSnapshot(currentRound) };
+    });
+    roundsService.drawCurrentRoundForRoom.mockImplementation(async () => {
+      currentRound = {
+        ...currentRound,
+        status: RoundStatus.DRAWING,
+        drawingAt: now,
+        winningTicket: 10n,
+        winnerEntryId: "entry-1",
+        winnerUserId: "user-1",
+        spinAngle: 42,
+      };
+
+      return { currentRound: roundsService.toRoundSnapshot(currentRound) };
+    });
+    roundsService.startSpinningCurrentRoundForRoom.mockImplementation(
+      async () => {
+        currentRound = {
+          ...currentRound,
+          status: RoundStatus.SPINNING,
+          spinningAt: now,
+        };
+
+        return { currentRound: roundsService.toRoundSnapshot(currentRound) };
+      },
+    );
+    roundsService.startSettlingCurrentRoundForRoom.mockImplementation(
+      async () => {
+        currentRound = {
+          ...currentRound,
+          status: RoundStatus.SETTLING,
+          settlingAt: now,
+        };
+
+        return { currentRound: roundsService.toRoundSnapshot(currentRound) };
+      },
+    );
+    roundsService.settleCurrentRoundForRoom.mockImplementation(async () => {
+      currentRound = {
+        ...currentRound,
+        status: RoundStatus.COMPLETED,
+        completedAt: now,
+      };
+
+      return { currentRound: roundsService.toRoundSnapshot(currentRound) };
+    });
+    roundsService.startOpenRoundForRoom.mockImplementation(async () => {
+      currentRound = buildRound({
+        id: "round-2",
+        roundNumber: 2,
+        status: RoundStatus.OPEN,
+        locksAt: new Date("2026-05-26T12:00:45.000Z"),
+      });
+
+      return roundsService.toRoundSnapshot(currentRound);
+    });
+
+    const actions = [
+      await service.advanceRoomOnce("room-1"),
+      await service.advanceRoomOnce("room-1", { force: true }),
+      await service.advanceRoomOnce("room-1", { force: true }),
+      await service.advanceRoomOnce("room-1", { force: true }),
+      await service.advanceRoomOnce("room-1", { force: true }),
+      await service.advanceRoomOnce("room-1", { force: true }),
+    ].map((result) => result.action);
+
+    expect(actions).toEqual([
+      "LOCKED_ROUND",
+      "DREW_ROUND",
+      "STARTED_SPINNING_ROUND",
+      "STARTED_SETTLING_ROUND",
+      "SETTLED_ROUND",
+      "STARTED_NEXT_ROUND_AFTER_COMPLETION",
+    ]);
+    expect(roundsService.settleCurrentRoundForRoom).toHaveBeenCalledTimes(1);
+    expect(currentRound.status).toBe(RoundStatus.OPEN);
+    expect(currentRound.roundNumber).toBe(2);
   });
 
   it("starts the next open round after completed-round cooldown", async () => {
@@ -626,3 +857,4 @@ describe("RoundMachineService", () => {
     service.onModuleDestroy();
   });
 });
+

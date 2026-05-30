@@ -226,8 +226,6 @@ export class RoomGateway
 
   async broadcastRoundState(roomId: string, reason: string) {
     try {
-      await this.publicGameService.invalidateRoomLiveState(roomId);
-
       return this.scheduleRoomStateBroadcast(roomId, reason);
     } catch (error) {
       this.logBroadcastFailed(roomId, reason, error);
@@ -264,11 +262,6 @@ export class RoomGateway
         );
       },
     );
-
-    const action =
-      payload && typeof payload === 'object' && 'action' in payload
-        ? String((payload as { action?: unknown }).action)
-        : 'UNKNOWN';
 
     if (action === 'STARTED_OPEN_ROUND') {
       this.emitMachineEvent(
@@ -326,7 +319,11 @@ export class RoomGateway
       return;
     }
 
-    if (action === 'SETTLED_ROUND' || action === 'RESUMED_SETTLEMENT') {
+    if (
+      action === 'STARTED_SETTLING_ROUND' ||
+      action === 'SETTLED_ROUND' ||
+      action === 'RESUMED_SETTLEMENT'
+    ) {
       this.emitMachineEvent(
         roomId,
         SOCKET_EVENTS.ROUND_SETTLED,
@@ -499,6 +496,15 @@ export class RoomGateway
 
       await this.publicGameService.invalidateRoomLiveState(roomId);
 
+      if (!this.hasRoomObservers(roomId)) {
+        this.metrics?.increment('socketCoalescedBroadcastCount', pending.count);
+        this.logRealtimeDebug(
+          `broadcast skipped roomId=${roomId} reason=${[...pending.reasons].join('+')} pending=${pending.count} observers=0`,
+        );
+        pending.resolve();
+        return;
+      }
+
       const snapshot = await this.getRoomStateSnapshot(roomId);
       const reasons = [...pending.reasons];
       const payload = SocketRoundStateEventSchema.parse({
@@ -621,6 +627,22 @@ export class RoomGateway
         return value;
       }),
     );
+  }
+
+  private hasRoomObservers(roomId: string) {
+    const localSize = this.server?.sockets?.adapter?.rooms?.get?.(roomId)?.size;
+
+    if (typeof localSize !== 'number') {
+      return true;
+    }
+
+    if (localSize > 0) {
+      return true;
+    }
+
+    // With a Redis adapter, another API instance may own the sockets for this
+    // room. Stay conservative and emit the cross-node broadcast.
+    return this.redisService?.isAvailable() === true;
   }
 
   private logBroadcastFailed(roomId: string, reason: string, error: unknown) {

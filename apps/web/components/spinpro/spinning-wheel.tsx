@@ -340,8 +340,7 @@ export function SpinningWheel({
       phase === "SPINNING" ||
       phase === "SETTLING");
 
-  const showWinnerName =
-    phase === "COMPLETED" || phase === "SETTLING" || phase === "SPINNING";
+  const showWinnerName = phase === "COMPLETED" || phase === "SETTLING";
 
   return (
     <section className="arcadia-surface relative overflow-hidden rounded-lg p-4 md:p-6">

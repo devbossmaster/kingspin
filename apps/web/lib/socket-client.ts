@@ -4,8 +4,25 @@ import type {
   ServerToClientEvents,
 } from "@kingspin/contracts";
 
-const SOCKET_URL =
-  process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:4000/game";
+function normalizeGameSocketUrl(rawUrl: string) {
+  const trimmed = rawUrl.trim().replace(/\/+$/, "");
+
+  if (trimmed.endsWith("/game")) {
+    return trimmed;
+  }
+
+  try {
+    const url = new URL(trimmed);
+    url.pathname = `${url.pathname.replace(/\/+$/, "")}/game`;
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return `${trimmed}/game`;
+  }
+}
+
+const SOCKET_URL = normalizeGameSocketUrl(
+  process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:4000/game",
+);
 
 let socket: Socket<ServerToClientEvents, ClientToServerEvents> | null = null;
 

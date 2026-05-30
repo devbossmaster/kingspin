@@ -103,8 +103,8 @@ export class WalletsService {
   constructor(private readonly prisma: PrismaService) {}
 
   private readonly transactionOptions = {
-    maxWait: 5_000,
-    timeout: 10_000,
+    maxWait: 30_000,
+    timeout: 20_000,
   } as const;
 
   static entryHoldCompensationIdempotencyKey(holdTransactionId: string) {

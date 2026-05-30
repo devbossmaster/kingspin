@@ -391,7 +391,7 @@ describe('RoundsService', () => {
     );
   });
 
-  it('settles a spinning round by crediting the winner once', async () => {
+  it('starts SETTLING from SPINNING without crediting payout yet', async () => {
     const spinningRound = buildRound({
       status: RoundStatus.SPINNING,
       drawingAt: now,
@@ -399,16 +399,12 @@ describe('RoundsService', () => {
       winningTicket: 1_968n,
       winnerEntryId: 'b',
       winnerUserId: 'user-b',
+      spinAngle: 202.4228,
     });
     const settlingRound = buildRound({
       ...spinningRound,
       status: RoundStatus.SETTLING,
       settlingAt: now,
-    });
-    const completedRound = buildRound({
-      ...settlingRound,
-      status: RoundStatus.COMPLETED,
-      completedAt: now,
     });
     const winnerEntry = buildEntry('b', 2_000n, {
       userId: 'user-b',
@@ -419,41 +415,42 @@ describe('RoundsService', () => {
     const prisma = {
       round: {
         findFirst: jest.fn().mockResolvedValue(spinningRound),
-        updateMany: jest
-          .fn()
-          .mockResolvedValueOnce({ count: 1 })
-          .mockResolvedValueOnce({ count: 1 }),
-        findUniqueOrThrow: jest
-          .fn()
-          .mockResolvedValueOnce(settlingRound)
-          .mockResolvedValueOnce(completedRound),
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }),
+        findUniqueOrThrow: jest.fn().mockResolvedValueOnce(settlingRound),
       },
       entry: {
         findUnique: jest.fn().mockResolvedValue(winnerEntry),
-        findUniqueOrThrow: jest.fn().mockResolvedValue(winnerEntry),
       },
     };
     const walletsService = {
-      creditRoundWin: jest.fn().mockResolvedValue({
-        reused: false,
-        wallet: { id: 'wallet-1', balanceSnapshot: '3500' },
-      }),
+      creditRoundWin: jest.fn(),
     };
     const service = new RoundsService(prisma as any, walletsService as any);
 
-    const result = await service.settleCurrentRoundForRoom('room-1');
+    const result = await service.startSettlingCurrentRoundForRoom('room-1');
 
-    expect(walletsService.creditRoundWin).toHaveBeenCalledTimes(1);
-    expect(walletsService.creditRoundWin).toHaveBeenCalledWith({
-      userId: 'user-b',
-      roundId: spinningRound.id,
-      winnerEntryId: 'b',
-      amount: 3_500n,
+    expect(prisma.round.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: spinningRound.id,
+        status: RoundStatus.SPINNING,
+        winnerEntryId: { not: null },
+        winnerUserId: { not: null },
+        winningTicket: { not: null },
+        spinAngle: { not: null },
+      },
+      data: {
+        status: RoundStatus.SETTLING,
+        settlingAt: expect.any(Date),
+      },
     });
+    expect(walletsService.creditRoundWin).not.toHaveBeenCalled();
     expect(result).toEqual(
       expect.objectContaining({
         payoutAmount: '3500',
-        reused: false,
+        payout: null,
+        currentRound: expect.objectContaining({
+          status: RoundStatus.SETTLING,
+        }),
       }),
     );
   });

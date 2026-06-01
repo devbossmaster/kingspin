@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  Injectable,
-  Logger,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import {
   GameMode,
   LedgerTransactionType,
@@ -16,7 +11,7 @@ import {
   type Round,
   type User,
 } from '@kingspin/db';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RoundsService } from '../rounds/rounds.service';
 import { WalletsService } from '../wallets/wallets.service';
@@ -31,6 +26,8 @@ export type PlaceEntryForUserArgs = {
   userId: string;
   amount: unknown;
   idempotencyKey?: unknown;
+  requestId?: string;
+  requestReceivedAtMs?: number;
 };
 
 type EntrySnapshot = {
@@ -50,31 +47,15 @@ type PlayerSnapshotSource = Pick<
   'id' | 'username' | 'email' | 'fullName'
 >;
 
-type EntryPreflightRow = {
-  userId: string | null;
-  userEmail: string | null;
-  userUsername: string | null;
-  userFullName: string | null;
-  userImage: string | null;
-  userBannedAt: Date | null;
-  userCreatedAt: Date | null;
-  userUpdatedAt: Date | null;
-  roomId: string | null;
-  roomStatus: string | null;
-  roomGameMode: GameMode | null;
-  roomFixedEntryAmount: bigint | null;
-  categoryIsActive: boolean | null;
-  categoryMinEntryAmount: bigint | null;
-  categoryMaxEntryAmount: bigint | null;
-  roundId: string | null;
-  roundStatus: string | null;
-  walletId: string | null;
-  walletBalanceSnapshot: bigint | null;
-};
-
 type EntryPlacementStatus =
   | 'SUCCESS'
   | 'REPLAY'
+  | 'USER_NOT_FOUND'
+  | 'ROOM_NOT_FOUND'
+  | 'ROOM_NOT_ACTIVE'
+  | 'CATEGORY_INACTIVE'
+  | 'ENTRY_CONFIG_MISSING'
+  | 'WALLET_NOT_FOUND'
   | 'IDEMPOTENCY_MISMATCH'
   | 'IDEMPOTENCY_REPLAY_MISSING'
   | 'ENTRY_HELD_MISMATCH'
@@ -95,6 +76,13 @@ type EntryPlacementRow = {
   reused: boolean;
   existingEntryAmount: bigint | null;
   walletBalanceSnapshot: bigint | null;
+  gameMode: GameMode | null;
+  categoryMinEntryAmount: bigint | null;
+  categoryMaxEntryAmount: bigint | null;
+  userId: string | null;
+  userEmail: string | null;
+  userUsername: string | null;
+  userFullName: string | null;
   entryId: string | null;
   entryRoundId: string | null;
   entryUserId: string | null;
@@ -135,7 +123,7 @@ type EntryPlacementRow = {
   roundUpdatedAt: Date | null;
 };
 
-const ENTRY_TIMING_WARN_THRESHOLD_MS = 1_500;
+const ENTRY_TIMING_WARN_THRESHOLD_MS = 300;
 
 class EntryIdempotencyRaceError extends Error {
   constructor() {
@@ -175,6 +163,10 @@ export class EntriesService {
       },
       args.userId,
       'entry',
+      {
+        requestId: args.requestId,
+        requestReceivedAtMs: args.requestReceivedAtMs,
+      },
     );
   }
 
@@ -183,18 +175,23 @@ export class EntriesService {
     body: PlaceEntryBody,
     userId: string,
     idempotencyScope: 'entry',
+    telemetry?: {
+      requestId?: string;
+      requestReceivedAtMs?: number;
+    },
   ) {
     if (!roomId) {
       throw new BadRequestException('roomId is required.');
     }
 
-    const addAmount = this.parseAmount(body?.amount);
-
     const requestAcceptedAt = new Date();
-    const traceId = `${roomId}:${userId}:${Date.now().toString(36)}`;
+    const traceId = `${roomId}:${this.hashUserId(userId)}:${Date.now().toString(36)}`;
     const startedAt = Date.now();
     let previousAt = startedAt;
     let timingFlushed = false;
+    let placementStatus: EntryPlacementStatus | 'ERROR' | null = null;
+    let placementRoundId: string | null = null;
+    let placementGameMode: GameMode | null = null;
     const timingEvents: {
       prefix: 'entry-timing' | 'wallet-hold-timing';
       message: string;
@@ -221,7 +218,7 @@ export class EntriesService {
         .join('; ');
 
       this.logger.warn(
-        `[entry-timing:${traceId}] slow entry placement total=${totalMs}ms events=${events}`,
+        `[entry-timing:${traceId}] slow entry placement requestId=${telemetry?.requestId ?? 'none'} roomId=${roomId} roundId=${placementRoundId ?? 'unknown'} user=${this.hashUserId(userId)} amount=${String(body?.amount ?? 'unknown')} gameMode=${placementGameMode ?? 'unknown'} status=${placementStatus ?? 'unknown'} total=${totalMs}ms events=${events}`,
       );
     };
 
@@ -237,131 +234,84 @@ export class EntriesService {
       );
     };
 
-    const measure = async <T>(label: string, work: () => Promise<T>) => {
-      const operationStartedAt = Date.now();
-
-      try {
-        return await work();
-      } finally {
-        const now = Date.now();
-
-        recordTiming(
-          'entry-timing',
-          `${label} duration=${now - operationStartedAt}ms total=${now - startedAt}ms`,
-        );
-      }
-    };
-
-    mark('parsed amount');
-
-    const preflight = await measure('prevalidation query', () =>
-      this.getEntryPreflight({
-        roomId,
-        userId,
-        requestAcceptedAt,
-      }),
-    );
-
-    mark('prevalidation reads complete');
-
-    if (!preflight.userId) {
-      throw new NotFoundException('User not found.');
-    }
-
-    if (!preflight.roomId) {
-      throw new NotFoundException('Room not found.');
-    }
-
-    if (preflight.roomStatus !== RoomStatus.ACTIVE) {
-      throw new BadRequestException(
-        'Entries are only allowed in ACTIVE rooms.',
+    if (telemetry?.requestReceivedAtMs) {
+      recordTiming(
+        'entry-timing',
+        `request received to service start duration=${Math.max(0, startedAt - telemetry.requestReceivedAtMs)}ms`,
       );
     }
 
-    if (!preflight.categoryIsActive) {
-      throw new BadRequestException(
-        'Entries are only allowed in active categories.',
-      );
-    }
-
-    if (!preflight.roundId || preflight.roundStatus !== RoundStatus.OPEN) {
-      throw new BadRequestException(
-        'Room does not have an OPEN round. Start a round first.',
-      );
-    }
-
-    if (
-      preflight.categoryMinEntryAmount === null ||
-      preflight.categoryMaxEntryAmount === null
-    ) {
-      throw new BadRequestException(
-        'Room category is not configured for entries.',
-      );
-    }
-
-    const roundId = preflight.roundId;
-    const minEntryAmount = preflight.categoryMinEntryAmount;
-    const maxEntryAmount = preflight.categoryMaxEntryAmount;
-    const user = this.toPlayerFromPreflight(preflight);
+    const addAmount = this.parseAmount(body?.amount);
 
     const requestIdempotencyKey =
       typeof body?.idempotencyKey === 'string' &&
       body.idempotencyKey.trim().length > 0
         ? body.idempotencyKey.trim()
-        : `${idempotencyScope}:${roundId}:${user.id}:${randomUUID()}`;
+        : `${idempotencyScope}:${roomId}:${userId}:${randomUUID()}`;
+
+    mark('input validation and idempotency normalization');
 
     const entryId = randomUUID();
 
     try {
-      mark('before transaction');
+      mark('before atomic placement transaction');
 
+      const transactionStartedAt = Date.now();
       const result = await this.prisma.$transaction(async (tx) => {
-        /**
-         * Important performance/safety fix:
-         *
-         * Keep the source-of-truth write in Postgres, but collapse the remote
-         * round trips. One SQL statement performs the guarded wallet debit,
-         * append-only ledger insert, entry upsert, and OPEN-round total update.
-         * Any rejected status throws inside this transaction callback, so
-         * every partial write rolls back together.
-         */
         const operationStartedAt = Date.now();
+        recordTiming(
+          'entry-timing',
+          `transaction wait/start duration=${operationStartedAt - transactionStartedAt}ms`,
+        );
         const placement = await this.writeEntryPlacementInTransaction(tx, {
           roomId,
-          userId: user.id,
-          roundId,
-          walletAccountId: preflight.walletId,
+          userId,
           amount: addAmount,
-          minEntryAmount,
-          maxEntryAmount,
           idempotencyKey: requestIdempotencyKey,
           requestAcceptedAt,
           entryId,
           ledgerTransactionId: randomUUID(),
           ledgerEntryId: randomUUID(),
+          observeStatus: (row) => {
+            placementStatus = row.status;
+            placementRoundId = row.roundId;
+            placementGameMode = row.gameMode;
+          },
         });
 
         const durationMs = Date.now() - operationStartedAt;
         recordTiming(
           'wallet-hold-timing',
-          `compact wallet-ledger-entry write duration=${durationMs}ms`,
+          `atomic SQL execution duration=${durationMs}ms`,
         );
         mark('tx compact placement write');
 
         return placement;
       }, this.transactionOptions);
 
+      recordTiming(
+        'entry-timing',
+        `atomic transaction duration=${Date.now() - transactionStartedAt}ms`,
+      );
       mark('transaction complete');
-      flushTimingIfSlow();
 
-      return {
+      const responseStartedAt = Date.now();
+      const response = {
         entry: this.toEntrySnapshot(result.entry),
-        player: this.toPlayerSnapshot(user),
+        player: this.toPlayerSnapshot(result.player),
         wallet: result.wallet,
-        currentRound: this.roundsService.toRoundSnapshot(result.round),
+        currentRound: this.roundsService.toLiveRoundSnapshot(result.round),
         reused: result.reused,
       };
+      recordTiming(
+        'entry-timing',
+        `post-commit response shaping duration=${Date.now() - responseStartedAt}ms`,
+      );
+      flushTimingIfSlow();
+
+      return response;
     } catch (error) {
+      placementStatus ??= 'ERROR';
       mark('failed before throw');
       flushTimingIfSlow();
       /**
@@ -369,14 +319,11 @@ export class EntriesService {
        * placement instead of failing the user's click.
        */
       if (this.isUniqueConstraintError(error)) {
-        const replayInspection = await this.inspectExistingPlacementSnapshot({
-          idempotencyKey: requestIdempotencyKey,
-          roundId,
-          userId: user.id,
-          walletAccountId: preflight.walletId ?? '',
-          amount: addAmount,
-          player: user,
-        });
+        const replayInspection =
+          await this.inspectExistingPlacementSnapshotByIdempotencyKey({
+            idempotencyKey: requestIdempotencyKey,
+            amount: addAmount,
+          });
 
         if (replayInspection.placement) {
           return replayInspection.placement;
@@ -388,14 +335,11 @@ export class EntriesService {
       }
 
       if (error instanceof EntryIdempotencyRaceError) {
-        const replayInspection = await this.inspectExistingPlacementSnapshot({
-          idempotencyKey: requestIdempotencyKey,
-          roundId,
-          userId: user.id,
-          walletAccountId: preflight.walletId ?? '',
-          amount: addAmount,
-          player: user,
-        });
+        const replayInspection =
+          await this.inspectExistingPlacementSnapshotByIdempotencyKey({
+            idempotencyKey: requestIdempotencyKey,
+            amount: addAmount,
+          });
 
         if (replayInspection.placement) {
           return replayInspection.placement;
@@ -410,118 +354,18 @@ export class EntriesService {
     }
   }
 
-  private async getEntryPreflight(args: {
-    roomId: string;
-    userId: string;
-    requestAcceptedAt: Date;
-  }): Promise<EntryPreflightRow> {
-    const rows = await this.prisma.$queryRaw<EntryPreflightRow[]>(Prisma.sql`
-      WITH selected_user AS (
-        SELECT
-          u.id,
-          u.email,
-          u.username,
-          u."fullName",
-          u.image,
-          u."bannedAt",
-          u."createdAt",
-          u."updatedAt"
-        FROM users u
-        WHERE u.id = ${args.userId}
-        LIMIT 1
-      ),
-      selected_room AS (
-        SELECT
-          r.id,
-          r.status,
-          r."categoryId",
-          r."gameMode",
-          r."fixedEntryAmount"
-        FROM rooms r
-        WHERE r.id = ${args.roomId}
-        LIMIT 1
-      )
-      SELECT
-        u.id AS "userId",
-        u.email AS "userEmail",
-        u.username AS "userUsername",
-        u."fullName" AS "userFullName",
-        u.image AS "userImage",
-        u."bannedAt" AS "userBannedAt",
-        u."createdAt" AS "userCreatedAt",
-        u."updatedAt" AS "userUpdatedAt",
-        r.id AS "roomId",
-        r.status::text AS "roomStatus",
-        r."gameMode" AS "roomGameMode",
-        r."fixedEntryAmount" AS "roomFixedEntryAmount",
-        c."isActive" AS "categoryIsActive",
-        c."minEntryAmount" AS "categoryMinEntryAmount",
-        c."maxEntryAmount" AS "categoryMaxEntryAmount",
-        current_round.id AS "roundId",
-        current_round.status::text AS "roundStatus",
-        wallet.id AS "walletId",
-        wallet."balanceSnapshot" AS "walletBalanceSnapshot"
-      FROM (SELECT 1) source
-      LEFT JOIN selected_user u ON true
-      LEFT JOIN selected_room r ON true
-      LEFT JOIN categories c ON c.id = r."categoryId"
-      LEFT JOIN LATERAL (
-        SELECT
-          ro.id,
-          ro.status
-        FROM rounds ro
-        WHERE ro."roomId" = r.id
-          AND ro.status = CAST(${RoundStatus.OPEN} AS "RoundStatus")
-          AND (ro."locksAt" IS NULL OR ro."locksAt" > ${args.requestAcceptedAt}::timestamp)
-        ORDER BY ro."roundNumber" DESC
-        LIMIT 1
-      ) current_round ON true
-      LEFT JOIN wallet_accounts wallet
-        ON wallet."userId" = u.id
-       AND wallet.type = CAST(${WalletAccountType.MAIN} AS "WalletAccountType")
-      LIMIT 1
-    `);
-
-    return (
-      rows[0] ?? {
-        userId: null,
-        userEmail: null,
-        userUsername: null,
-        userFullName: null,
-        userImage: null,
-        userBannedAt: null,
-        userCreatedAt: null,
-        userUpdatedAt: null,
-        roomId: null,
-        roomStatus: null,
-        roomGameMode: null,
-        roomFixedEntryAmount: null,
-        categoryIsActive: null,
-        categoryMinEntryAmount: null,
-        categoryMaxEntryAmount: null,
-        roundId: null,
-        roundStatus: null,
-        walletId: null,
-        walletBalanceSnapshot: null,
-      }
-    );
-  }
-
   private async writeEntryPlacementInTransaction(
     tx: Prisma.TransactionClient,
     args: {
       roomId: string;
       userId: string;
-      roundId: string;
-      walletAccountId: string | null;
       amount: bigint;
-      minEntryAmount: bigint;
-      maxEntryAmount: bigint;
       idempotencyKey: string;
       requestAcceptedAt: Date;
       entryId: string;
       ledgerTransactionId: string;
       ledgerEntryId: string;
+      observeStatus?: (row: EntryPlacementRow) => void;
     },
   ) {
     const rows = await tx.$queryRaw<EntryPlacementRow[]>(Prisma.sql`
@@ -529,47 +373,76 @@ export class EntriesService {
         SELECT
           ${args.userId}::text AS user_id,
           ${args.roomId}::text AS room_id,
-          ${args.roundId}::text AS round_id,
-          ${args.walletAccountId}::text AS wallet_account_id,
           ${args.amount}::bigint AS amount,
-          ${args.minEntryAmount}::bigint AS min_entry_amount,
-          ${args.maxEntryAmount}::bigint AS max_entry_amount,
           ${args.idempotencyKey}::text AS idempotency_key,
           ${args.requestAcceptedAt}::timestamp AS request_accepted_at,
           ${args.entryId}::text AS new_entry_id,
           ${args.ledgerTransactionId}::text AS ledger_transaction_id,
           ${args.ledgerEntryId}::text AS ledger_entry_id
       ),
-      existing_entry AS (
-        SELECT e.*
-        FROM entries e
-        JOIN input i
-          ON e."roundId" = i.round_id
-         AND e."userId" = i.user_id
+      selected_user AS (
+        SELECT
+          u.id,
+          u.email,
+          u.username,
+          u."fullName"
+        FROM users u
+        JOIN input i ON u.id = i.user_id
+        LIMIT 1
+      ),
+      selected_room AS (
+        SELECT r.*
+        FROM rooms r
+        JOIN input i ON r.id = i.room_id
+        LIMIT 1
+      ),
+      selected_category AS (
+        SELECT c.*
+        FROM categories c
+        JOIN selected_room r ON c.id = r."categoryId"
+        LIMIT 1
+      ),
+      open_round_candidate AS (
+        SELECT r.*
+        FROM rounds r
+        JOIN input i ON r."roomId" = i.room_id
+        WHERE r.status = CAST(${RoundStatus.OPEN} AS "RoundStatus")
+          AND (r."locksAt" IS NULL OR r."locksAt" > i.request_accepted_at)
+        ORDER BY r."roundNumber" DESC
         LIMIT 1
       ),
       round_gate AS (
-        SELECT pg_advisory_xact_lock_shared(hashtext(i.round_id)::bigint)
-        FROM input i
+        SELECT pg_advisory_xact_lock_shared(hashtext(candidate.id)::bigint)
+        FROM open_round_candidate candidate
       ),
       current_open_round AS (
         SELECT r.*
         FROM rounds r
-        JOIN input i ON r.id = i.round_id
+        JOIN open_round_candidate candidate ON r.id = candidate.id
         CROSS JOIN round_gate
+        CROSS JOIN input i
         WHERE r.status = CAST(${RoundStatus.OPEN} AS "RoundStatus")
           AND (r."locksAt" IS NULL OR r."locksAt" > i.request_accepted_at)
         LIMIT 1
       ),
+      current_wallet AS (
+        SELECT w.*
+        FROM wallet_accounts w
+        JOIN input i ON w."userId" = i.user_id
+        WHERE w.type = CAST(${WalletAccountType.MAIN} AS "WalletAccountType")
+        LIMIT 1
+      ),
       entry_config AS (
         SELECT
-          r."gameMode" AS game_mode,
-          r."fixedEntryAmount" AS fixed_entry_amount,
-          c."minEntryAmount" AS min_entry_amount,
-          c."maxEntryAmount" AS max_entry_amount
-        FROM rooms r
-        JOIN categories c ON c.id = r."categoryId"
-        JOIN input i ON r.id = i.room_id
+          selected_room.status AS room_status,
+          selected_room."gameMode" AS game_mode,
+          selected_room."fixedEntryAmount" AS fixed_entry_amount,
+          selected_category."isActive" AS category_is_active,
+          selected_category."minEntryAmount" AS min_entry_amount,
+          selected_category."maxEntryAmount" AS max_entry_amount
+        FROM input i
+        LEFT JOIN selected_room ON true
+        LEFT JOIN selected_category ON true
         LIMIT 1
       ),
       existing_transaction AS (
@@ -589,8 +462,53 @@ export class EntriesService {
         ) debit_entry ON true
         LIMIT 1
       ),
+      request_context AS (
+        SELECT
+          i.user_id,
+          i.room_id,
+          i.amount,
+          i.idempotency_key,
+          i.new_entry_id,
+          i.ledger_transaction_id,
+          i.ledger_entry_id,
+          selected_user.id AS selected_user_id,
+          selected_user.email AS user_email,
+          selected_user.username AS user_username,
+          selected_user."fullName" AS user_full_name,
+          selected_room.id AS selected_room_id,
+          entry_config.room_status,
+          entry_config.category_is_active,
+          entry_config.game_mode,
+          entry_config.fixed_entry_amount,
+          entry_config.min_entry_amount,
+          entry_config.max_entry_amount,
+          COALESCE(
+            existing_transaction.metadata ->> 'roundId',
+            current_open_round.id
+          ) AS round_id,
+          COALESCE(
+            existing_transaction.metadata ->> 'walletAccountId',
+            current_wallet.id
+          ) AS wallet_account_id
+        FROM input i
+        LEFT JOIN selected_user ON true
+        LEFT JOIN selected_room ON true
+        LEFT JOIN entry_config ON true
+        LEFT JOIN current_open_round ON true
+        LEFT JOIN current_wallet ON true
+        LEFT JOIN existing_transaction ON true
+      ),
+      existing_entry AS (
+        SELECT e.*
+        FROM entries e
+        JOIN request_context rc
+          ON e."roundId" = rc.round_id
+         AND e."userId" = rc.user_id
+        LIMIT 1
+      ),
       request_state AS (
         SELECT
+          rc.*,
           existing_transaction.id IS NOT NULL AS tx_exists,
           existing_transaction.id AS existing_transaction_id,
           COALESCE(
@@ -601,7 +519,7 @@ export class EntriesService {
           existing_entry.id AS existing_entry_id,
           existing_entry.amount AS existing_entry_amount,
           CASE
-            WHEN existing_transaction.id IS NULL THEN i.new_entry_id
+            WHEN existing_transaction.id IS NULL THEN rc.new_entry_id
             ELSE COALESCE(
               existing_transaction.metadata ->> 'entryId',
               existing_transaction."referenceId"
@@ -611,12 +529,12 @@ export class EntriesService {
             existing_transaction.id IS NULL OR (
               existing_transaction.type = CAST(${LedgerTransactionType.ENTRY_HOLD} AS "LedgerTransactionType")
               AND existing_transaction."referenceType" = 'ENTRY'
-              AND existing_transaction.debit_wallet_account_id = i.wallet_account_id
-              AND existing_transaction.debit_amount = i.amount
-              AND existing_transaction.metadata ->> 'roundId' = i.round_id
-              AND existing_transaction.metadata ->> 'userId' = i.user_id
-              AND existing_transaction.metadata ->> 'walletAccountId' = i.wallet_account_id
-              AND existing_transaction.metadata ->> 'amount' = i.amount::text
+              AND existing_transaction.debit_wallet_account_id = rc.wallet_account_id
+              AND existing_transaction.debit_amount = rc.amount
+              AND existing_transaction.metadata ->> 'roundId' = rc.round_id
+              AND existing_transaction.metadata ->> 'userId' = rc.user_id
+              AND existing_transaction.metadata ->> 'walletAccountId' = rc.wallet_account_id
+              AND existing_transaction.metadata ->> 'amount' = rc.amount::text
             )
           ) AS tx_matches,
           (
@@ -627,7 +545,7 @@ export class EntriesService {
             existing_transaction.id IS NOT NULL
             AND existing_transaction.metadata ->> 'holdState' = 'HELD'
           ) AS held_retry
-        FROM input i
+        FROM request_context rc
         LEFT JOIN existing_transaction ON true
         LEFT JOIN existing_entry ON true
       ),
@@ -636,10 +554,9 @@ export class EntriesService {
           CASE
             WHEN rs.tx_exists THEN rs.transaction_target_entry_id
             WHEN rs.existing_entry_id IS NOT NULL THEN rs.existing_entry_id
-            ELSE i.new_entry_id
+            ELSE rs.new_entry_id
           END AS id
-        FROM input i
-        CROSS JOIN request_state rs
+        FROM request_state rs
       ),
       validation AS (
         SELECT
@@ -651,45 +568,51 @@ export class EntriesService {
             AND rs.existing_entry_id <> te.id
           ) AS held_entry_mismatch,
           (
-            entry_config.game_mode = CAST(${GameMode.FIXED_EQUAL_CHANCE} AS "GameMode")
-            AND entry_config.fixed_entry_amount IS NULL
+            rs.game_mode = CAST(${GameMode.FIXED_EQUAL_CHANCE} AS "GameMode")
+            AND rs.fixed_entry_amount IS NULL
           ) AS fixed_amount_missing,
           (
-            entry_config.game_mode = CAST(${GameMode.FIXED_EQUAL_CHANCE} AS "GameMode")
-            AND entry_config.fixed_entry_amount IS NOT NULL
-            AND i.amount <> entry_config.fixed_entry_amount
+            rs.game_mode = CAST(${GameMode.FIXED_EQUAL_CHANCE} AS "GameMode")
+            AND rs.fixed_entry_amount IS NOT NULL
+            AND rs.amount <> rs.fixed_entry_amount
           ) AS fixed_amount_mismatch,
           (
-            entry_config.game_mode = CAST(${GameMode.FIXED_EQUAL_CHANCE} AS "GameMode")
+            rs.game_mode = CAST(${GameMode.FIXED_EQUAL_CHANCE} AS "GameMode")
             AND rs.existing_entry_id IS NOT NULL
             AND NOT rs.tx_exists
           ) AS fixed_top_up_not_allowed,
           (
-            entry_config.game_mode = CAST(${GameMode.FLEXIBLE_PROPORTIONAL} AS "GameMode")
+            rs.game_mode = CAST(${GameMode.FLEXIBLE_PROPORTIONAL} AS "GameMode")
             AND rs.existing_entry_id IS NULL
-            AND i.amount < entry_config.min_entry_amount
+            AND rs.amount < rs.min_entry_amount
           ) AS below_minimum,
           (
-            entry_config.game_mode = CAST(${GameMode.FLEXIBLE_PROPORTIONAL} AS "GameMode")
+            rs.game_mode = CAST(${GameMode.FLEXIBLE_PROPORTIONAL} AS "GameMode")
             AND rs.existing_entry_id IS NULL
-            AND i.amount > entry_config.max_entry_amount
+            AND rs.amount > rs.max_entry_amount
           ) AS above_maximum,
           (
-            entry_config.game_mode = CAST(${GameMode.FLEXIBLE_PROPORTIONAL} AS "GameMode")
+            rs.game_mode = CAST(${GameMode.FLEXIBLE_PROPORTIONAL} AS "GameMode")
             AND
             rs.existing_entry_id IS NOT NULL
-            AND rs.existing_entry_amount > (entry_config.max_entry_amount - i.amount)
+            AND rs.existing_entry_amount > (rs.max_entry_amount - rs.amount)
           ) AS exceeds_maximum
-        FROM input i
-        CROSS JOIN request_state rs
+        FROM request_state rs
         CROSS JOIN target_entry te
-        CROSS JOIN entry_config
       ),
       writable_request AS (
         SELECT *
         FROM validation
         WHERE tx_matches
           AND NOT applied_replay
+          AND selected_user_id IS NOT NULL
+          AND selected_room_id IS NOT NULL
+          AND room_status = CAST(${RoomStatus.ACTIVE} AS "RoomStatus")
+          AND category_is_active = true
+          AND min_entry_amount IS NOT NULL
+          AND max_entry_amount IS NOT NULL
+          AND round_id IS NOT NULL
+          AND wallet_account_id IS NOT NULL
           AND NOT held_entry_mismatch
           AND NOT fixed_amount_missing
           AND NOT fixed_amount_mismatch
@@ -698,23 +621,16 @@ export class EntriesService {
           AND NOT above_maximum
           AND NOT exceeds_maximum
       ),
-      current_wallet AS (
-        SELECT w.*
-        FROM wallet_accounts w
-        JOIN input i ON w.id = i.wallet_account_id
-        LIMIT 1
-      ),
       debit_wallet AS (
         UPDATE wallet_accounts w
         SET
-          "balanceSnapshot" = w."balanceSnapshot" - i.amount,
+          "balanceSnapshot" = w."balanceSnapshot" - wr.amount,
           "updatedAt" = now()
-        FROM input i
-        CROSS JOIN writable_request wr
-        WHERE w.id = i.wallet_account_id
-          AND w."userId" = i.user_id
+        FROM writable_request wr
+        WHERE w.id = wr.wallet_account_id
+          AND w."userId" = wr.user_id
           AND w.type = CAST(${WalletAccountType.MAIN} AS "WalletAccountType")
-          AND w."balanceSnapshot" >= i.amount
+          AND w."balanceSnapshot" >= wr.amount
           AND NOT wr.tx_exists
           AND EXISTS (SELECT 1 FROM current_open_round)
         RETURNING w.*
@@ -733,16 +649,15 @@ export class EntriesService {
         )
         SELECT
           wr.target_entry_id,
-          i.round_id,
-          i.user_id,
-          i.amount,
+          wr.round_id,
+          wr.user_id,
+          wr.amount,
           NULL,
           NULL,
           false,
           now(),
           now()
-        FROM input i
-        CROSS JOIN writable_request wr
+        FROM writable_request wr
         WHERE (
           wr.held_retry
           OR EXISTS (SELECT 1 FROM debit_wallet)
@@ -755,10 +670,10 @@ export class EntriesService {
           "ticketEnd" = NULL,
           "updatedAt" = now()
         WHERE entries.amount <= (
-          (SELECT max_entry_amount FROM entry_config) - (SELECT amount FROM input)
+          (SELECT max_entry_amount FROM writable_request) - (SELECT amount FROM writable_request)
         )
           AND (
-            (SELECT game_mode FROM entry_config) = CAST(${GameMode.FLEXIBLE_PROPORTIONAL} AS "GameMode")
+            (SELECT game_mode FROM writable_request) = CAST(${GameMode.FLEXIBLE_PROPORTIONAL} AS "GameMode")
             OR entries.id = EXCLUDED.id
           )
           AND (
@@ -770,7 +685,7 @@ export class EntriesService {
       entry_totals AS (
         SELECT COALESCE(SUM(e.amount), 0)::bigint AS total_entry_amount
         FROM entries e
-        JOIN input i ON e."roundId" = i.round_id
+        JOIN writable_request wr ON e."roundId" = wr.round_id
         WHERE EXISTS (SELECT 1 FROM entry_upsert)
       ),
       inserted_transaction AS (
@@ -784,16 +699,16 @@ export class EntriesService {
           "createdAt"
         )
         SELECT
-          i.ledger_transaction_id,
+          wr.ledger_transaction_id,
           CAST(${LedgerTransactionType.ENTRY_HOLD} AS "LedgerTransactionType"),
           'ENTRY',
           entry_upsert.id,
-          i.idempotency_key,
+          wr.idempotency_key,
           jsonb_build_object(
-            'userId', i.user_id,
-            'roundId', i.round_id,
+            'userId', wr.user_id,
+            'roundId', wr.round_id,
             'entryId', entry_upsert.id,
-            'amount', i.amount::text,
+            'amount', wr.amount::text,
             'walletAccountId', debit_wallet.id,
             'holdState', 'APPLIED',
             'appliedAt', to_jsonb(now()) #>> '{}',
@@ -802,8 +717,7 @@ export class EntriesService {
             'roundPayoutAmountAfter', entry_totals.total_entry_amount::text
           ),
           now()
-        FROM input i
-        CROSS JOIN entry_upsert
+        FROM entry_upsert
         CROSS JOIN entry_totals
         CROSS JOIN debit_wallet
         CROSS JOIN writable_request wr
@@ -822,16 +736,16 @@ export class EntriesService {
           "createdAt"
         )
         SELECT
-          i.ledger_entry_id,
+          wr.ledger_entry_id,
           inserted_transaction.id,
           debit_wallet.id,
           CAST(${LedgerEntryDirection.DEBIT} AS "LedgerEntryDirection"),
-          i.amount,
+          wr.amount,
           debit_wallet."balanceSnapshot",
           now()
-        FROM input i
-        CROSS JOIN inserted_transaction
+        FROM inserted_transaction
         CROSS JOIN debit_wallet
+        CROSS JOIN writable_request wr
         RETURNING *
       ),
       applied_held_transaction AS (
@@ -839,19 +753,18 @@ export class EntriesService {
         SET
           "referenceId" = entry_upsert.id,
           metadata = COALESCE(lt.metadata, '{}'::jsonb) || jsonb_build_object(
-            'userId', i.user_id,
-            'roundId', i.round_id,
+            'userId', wr.user_id,
+            'roundId', wr.round_id,
             'entryId', entry_upsert.id,
-            'amount', i.amount::text,
-            'walletAccountId', i.wallet_account_id,
+            'amount', wr.amount::text,
+            'walletAccountId', wr.wallet_account_id,
             'holdState', 'APPLIED',
             'appliedAt', to_jsonb(now()) #>> '{}',
             'entryAmountAfter', entry_upsert.amount::text,
             'roundTotalEntryAmountAfter', entry_totals.total_entry_amount::text,
             'roundPayoutAmountAfter', entry_totals.total_entry_amount::text
           )
-        FROM input i
-        CROSS JOIN entry_upsert
+        FROM entry_upsert
         CROSS JOIN entry_totals
         CROSS JOIN writable_request wr
         WHERE lt.id = wr.existing_transaction_id
@@ -861,15 +774,14 @@ export class EntriesService {
       replay_entry AS (
         SELECT e.*
         FROM entries e
-        CROSS JOIN input i
         CROSS JOIN request_state rs
         WHERE rs.applied_replay
           AND (
             e.id = rs.transaction_target_entry_id
             OR (
               rs.transaction_target_entry_id IS NULL
-              AND e."roundId" = i.round_id
-              AND e."userId" = i.user_id
+              AND e."roundId" = rs.round_id
+              AND e."userId" = rs.user_id
             )
           )
         ORDER BY e."createdAt" ASC, e.id ASC
@@ -878,9 +790,9 @@ export class EntriesService {
       replay_round AS (
         SELECT r.*
         FROM rounds r
-        JOIN input i ON r.id = i.round_id
         CROSS JOIN request_state rs
-        WHERE rs.applied_replay
+        WHERE r.id = rs.round_id
+          AND rs.applied_replay
         LIMIT 1
       ),
       final_entry AS (
@@ -901,6 +813,7 @@ export class EntriesService {
         FROM current_wallet
         CROSS JOIN request_state rs
         WHERE rs.tx_exists
+          AND current_wallet.id = rs.wallet_account_id
       ),
       final_ledger_transaction AS (
         SELECT id FROM inserted_transaction
@@ -918,6 +831,13 @@ export class EntriesService {
             WHEN rs.tx_exists AND NOT rs.tx_matches THEN 'IDEMPOTENCY_MISMATCH'
             WHEN rs.applied_replay AND NOT EXISTS (SELECT 1 FROM replay_entry) THEN 'IDEMPOTENCY_REPLAY_MISSING'
             WHEN rs.applied_replay THEN 'REPLAY'
+            WHEN rs.selected_user_id IS NULL THEN 'USER_NOT_FOUND'
+            WHEN rs.selected_room_id IS NULL THEN 'ROOM_NOT_FOUND'
+            WHEN rs.room_status IS DISTINCT FROM CAST(${RoomStatus.ACTIVE} AS "RoomStatus") THEN 'ROOM_NOT_ACTIVE'
+            WHEN rs.category_is_active IS DISTINCT FROM true THEN 'CATEGORY_INACTIVE'
+            WHEN rs.min_entry_amount IS NULL OR rs.max_entry_amount IS NULL THEN 'ENTRY_CONFIG_MISSING'
+            WHEN NOT EXISTS (SELECT 1 FROM current_open_round) THEN 'ROUND_NOT_OPEN'
+            WHEN rs.wallet_account_id IS NULL THEN 'WALLET_NOT_FOUND'
             WHEN v.held_entry_mismatch THEN 'ENTRY_HELD_MISMATCH'
             WHEN v.fixed_amount_missing THEN 'FIXED_ENTRY_AMOUNT_REQUIRED'
             WHEN v.fixed_amount_mismatch THEN 'FIXED_ENTRY_AMOUNT_MISMATCH'
@@ -925,9 +845,8 @@ export class EntriesService {
             WHEN v.below_minimum THEN 'ENTRY_BELOW_MIN'
             WHEN v.above_maximum THEN 'ENTRY_ABOVE_MAX'
             WHEN v.exceeds_maximum THEN 'ENTRY_EXCEEDS_MAX'
-            WHEN NOT rs.applied_replay AND NOT EXISTS (SELECT 1 FROM current_open_round) THEN 'ROUND_NOT_OPEN'
             WHEN NOT rs.tx_exists AND NOT EXISTS (SELECT 1 FROM debit_wallet) THEN 'INSUFFICIENT_BALANCE'
-            WHEN (SELECT game_mode FROM entry_config) = CAST(${GameMode.FIXED_EQUAL_CHANCE} AS "GameMode")
+            WHEN rs.game_mode = CAST(${GameMode.FIXED_EQUAL_CHANCE} AS "GameMode")
               AND NOT EXISTS (SELECT 1 FROM entry_upsert)
               THEN 'FIXED_TOP_UP_NOT_ALLOWED'
             WHEN NOT EXISTS (SELECT 1 FROM entry_upsert) THEN 'ENTRY_EXCEEDS_MAX'
@@ -941,7 +860,14 @@ export class EntriesService {
             ELSE 'UNKNOWN'
           END AS status,
           rs.applied_replay AS reused,
+          rs.game_mode AS game_mode,
           rs.existing_entry_amount,
+          rs.min_entry_amount,
+          rs.max_entry_amount,
+          rs.selected_user_id,
+          rs.user_email,
+          rs.user_username,
+          rs.user_full_name,
           COALESCE(
             (SELECT "balanceSnapshot" FROM final_wallet LIMIT 1),
             (SELECT "balanceSnapshot" FROM current_wallet LIMIT 1),
@@ -953,8 +879,15 @@ export class EntriesService {
       SELECT
         status.status AS "status",
         status.reused AS "reused",
+        status.game_mode AS "gameMode",
         status.existing_entry_amount AS "existingEntryAmount",
         status.wallet_balance_snapshot AS "walletBalanceSnapshot",
+        status.min_entry_amount AS "categoryMinEntryAmount",
+        status.max_entry_amount AS "categoryMaxEntryAmount",
+        status.selected_user_id AS "userId",
+        status.user_email AS "userEmail",
+        status.user_username AS "userUsername",
+        status.user_full_name AS "userFullName",
         final_entry.id AS "entryId",
         final_entry."roundId" AS "entryRoundId",
         final_entry."userId" AS "entryUserId",
@@ -1023,6 +956,8 @@ export class EntriesService {
       throw new BadRequestException('Entry write failed. Please retry.');
     }
 
+    args.observeStatus?.(row);
+
     return this.toPlacementResultFromRow(row, args);
   }
 
@@ -1030,8 +965,6 @@ export class EntriesService {
     row: EntryPlacementRow,
     args: {
       amount: bigint;
-      minEntryAmount: bigint;
-      maxEntryAmount: bigint;
     },
   ) {
     if (row.status === 'IDEMPOTENCY_RACE') {
@@ -1053,23 +986,58 @@ export class EntriesService {
       );
     }
 
-    if (row.status === 'ENTRY_BELOW_MIN') {
+    if (row.status === 'USER_NOT_FOUND') {
+      throw new BadRequestException('User not found.');
+    }
+
+    if (row.status === 'ROOM_NOT_FOUND') {
+      throw new BadRequestException('Room not found.');
+    }
+
+    if (row.status === 'ROOM_NOT_ACTIVE') {
       throw new BadRequestException(
-        `Entry amount is below category minimum. Minimum is ${args.minEntryAmount.toString()}.`,
+        'Entries are only allowed in ACTIVE rooms.',
+      );
+    }
+
+    if (row.status === 'CATEGORY_INACTIVE') {
+      throw new BadRequestException(
+        'Entries are only allowed in active categories.',
+      );
+    }
+
+    if (row.status === 'ENTRY_CONFIG_MISSING') {
+      throw new BadRequestException(
+        'Room category is not configured for entries.',
+      );
+    }
+
+    if (row.status === 'WALLET_NOT_FOUND') {
+      throw new BadRequestException('MAIN wallet account was not found.');
+    }
+
+    if (row.status === 'ENTRY_BELOW_MIN') {
+      const minimum = row.categoryMinEntryAmount?.toString() ?? 'unknown';
+
+      throw new BadRequestException(
+        `Entry amount is below category minimum. Minimum is ${minimum}.`,
       );
     }
 
     if (row.status === 'ENTRY_ABOVE_MAX') {
+      const maximum = row.categoryMaxEntryAmount?.toString() ?? 'unknown';
+
       throw new BadRequestException(
-        `Entry amount is above category maximum. Maximum is ${args.maxEntryAmount.toString()}.`,
+        `Entry amount is above category maximum. Maximum is ${maximum}.`,
       );
     }
 
     if (row.status === 'ENTRY_EXCEEDS_MAX') {
       const currentAmount = row.existingEntryAmount?.toString() ?? 'unknown';
+      const maximum = row.categoryMaxEntryAmount?.toString() ?? 'unknown';
 
       throw new BadRequestException(
-        `Entry increase would exceed category maximum. Maximum is ${args.maxEntryAmount.toString()}, current is ${currentAmount}, attempted add is ${args.amount.toString()}.`,
+        `Entry increase would exceed category maximum. Maximum is ${maximum}, current is ${currentAmount}, attempted add is ${args.amount.toString()}.`,
       );
     }
 
@@ -1117,27 +1085,10 @@ export class EntriesService {
 
     return {
       entry: this.entryFromPlacementRow(row),
+      player: this.playerFromPlacementRow(row),
       wallet: this.walletFromPlacementRow(row),
       round: this.roundFromPlacementRow(row),
       reused: row.status === 'REPLAY' || row.reused,
-    };
-  }
-
-  private toPlayerFromPreflight(row: EntryPreflightRow): PlayerSnapshotSource {
-    if (
-      !row.userId ||
-      !row.userEmail ||
-      !row.userUsername ||
-      !row.userFullName
-    ) {
-      throw new NotFoundException('User not found.');
-    }
-
-    return {
-      id: row.userId,
-      email: row.userEmail,
-      username: row.userUsername,
-      fullName: row.userFullName,
     };
   }
 
@@ -1166,6 +1117,26 @@ export class EntriesService {
       isWinner: row.entryIsWinner,
       createdAt: row.entryCreatedAt,
       updatedAt: row.entryUpdatedAt,
+    };
+  }
+
+  private playerFromPlacementRow(row: EntryPlacementRow): PlayerSnapshotSource {
+    if (
+      !row.userId ||
+      !row.userEmail ||
+      !row.userUsername ||
+      !row.userFullName
+    ) {
+      throw new BadRequestException(
+        'Entry write returned an incomplete player.',
+      );
+    }
+
+    return {
+      id: row.userId,
+      email: row.userEmail,
+      username: row.userUsername,
+      fullName: row.userFullName,
     };
   }
 
@@ -1238,13 +1209,9 @@ export class EntriesService {
     };
   }
 
-  private async inspectExistingPlacementSnapshot(args: {
+  private async inspectExistingPlacementSnapshotByIdempotencyKey(args: {
     idempotencyKey: string;
-    roundId: string;
-    userId: string;
-    walletAccountId: string;
     amount: bigint;
-    player: PlayerSnapshotSource;
   }) {
     const transaction = await this.prisma.ledgerTransaction.findUnique({
       where: { idempotencyKey: args.idempotencyKey },
@@ -1257,7 +1224,25 @@ export class EntriesService {
       };
     }
 
-    this.assertEntryHoldTransactionMatches(transaction, args);
+    const roundId = this.getMetadataString(transaction.metadata, 'roundId');
+    const userId = this.getMetadataString(transaction.metadata, 'userId');
+    const walletAccountId = this.getMetadataString(
+      transaction.metadata,
+      'walletAccountId',
+    );
+
+    if (!roundId || !userId || !walletAccountId) {
+      throw new BadRequestException(
+        'Previous entry request is missing idempotency metadata. Manual review required.',
+      );
+    }
+
+    this.assertEntryHoldTransactionMatches(transaction, {
+      roundId,
+      userId,
+      walletAccountId,
+      amount: args.amount,
+    });
 
     const compensation = await this.prisma.ledgerTransaction.findUnique({
       where: {
@@ -1292,26 +1277,36 @@ export class EntriesService {
       : await this.prisma.entry.findUniqueOrThrow({
           where: {
             roundId_userId: {
-              roundId: args.roundId,
-              userId: args.userId,
+              roundId,
+              userId,
             },
           },
         });
 
     const freshWallet = await this.prisma.walletAccount.findUniqueOrThrow({
-      where: { id: args.walletAccountId },
+      where: { id: walletAccountId },
     });
 
     const freshRound = await this.prisma.round.findUniqueOrThrow({
-      where: { id: args.roundId },
+      where: { id: roundId },
+    });
+
+    const player = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        fullName: true,
+      },
     });
 
     return {
       placement: {
         entry: this.toEntrySnapshot(entry),
-        player: this.toPlayerSnapshot(args.player),
+        player: this.toPlayerSnapshot(player),
         wallet: this.toWalletSnapshot(freshWallet),
-        currentRound: this.roundsService.toRoundSnapshot(freshRound),
+        currentRound: this.roundsService.toLiveRoundSnapshot(freshRound),
         reused: true,
       },
       pendingEntryId: entry.id,
@@ -1358,6 +1353,10 @@ export class EntriesService {
     const value = (metadata as Record<string, unknown>)[key];
 
     return typeof value === 'string' ? value : null;
+  }
+
+  private hashUserId(userId: string) {
+    return createHash('sha256').update(userId).digest('hex').slice(0, 12);
   }
 
   private parseAmount(rawAmount: unknown): bigint {

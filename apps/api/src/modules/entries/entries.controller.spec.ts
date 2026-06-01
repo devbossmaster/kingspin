@@ -60,12 +60,16 @@ describe('EntriesController', () => {
       walletId: 'wallet-1',
     } as any);
 
-    expect(entriesService.placeEntryForUser).toHaveBeenCalledWith({
-      roomId: 'room-1',
-      userId: 'user-1',
-      amount: 1_000,
-      idempotencyKey: 'entry-key-1',
-    });
+    expect(entriesService.placeEntryForUser).toHaveBeenCalledWith(
+      expect.objectContaining({
+        roomId: 'room-1',
+        userId: 'user-1',
+        amount: 1_000,
+        idempotencyKey: 'entry-key-1',
+        requestId: undefined,
+        requestReceivedAtMs: expect.any(Number),
+      }),
+    );
     expect(roomGateway.invalidateRoomState).toHaveBeenCalledWith('room-1');
     await new Promise((resolve) => setImmediate(resolve));
     expect(roomGateway.broadcastRoundState).toHaveBeenCalledWith(

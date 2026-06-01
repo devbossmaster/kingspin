@@ -12,9 +12,11 @@ import { formatCoins } from "../../lib/format";
 import {
   formatLockCountdown,
   getAdjustedMsUntilLock,
+  getDisplayRoundPhaseLabel,
+  getPublicRoundPhase,
+  getRoomActionLabel,
   getRoomPlayerCount,
   getRoomPool,
-  getRoundPhaseLabel,
   getRoundStatusTone,
 } from "../../lib/room-summary";
 import { StatusPill } from "./status-pill";
@@ -33,11 +35,14 @@ export function CategoryCard({
   const mode = getCategoryMode(category);
   const roomHref = room ? `/spinpro/${category.slug}/${room.id}` : "#";
   const href = room ? buildPlayHref(roomHref, isSignedIn) : "#";
-  const status = room?.currentRound?.status ?? room?.status ?? "WAITING";
+  const round = room?.currentRound ?? null;
+  const status = round?.status ?? room?.status ?? "WAITING";
   const playerCount = getRoomPlayerCount(room);
   const pool = getRoomPool(room);
   const msUntilLock = getAdjustedMsUntilLock(room, clientNowMs);
-  const phaseLabel = getRoundPhaseLabel(status);
+  const phase = getPublicRoundPhase(round);
+  const phaseLabel = getDisplayRoundPhaseLabel(round ?? status, msUntilLock);
+  const actionLabel = getRoomActionLabel(round);
   const fixedMode = mode === "fixed";
 
   return (
@@ -58,7 +63,9 @@ export function CategoryCard({
             {getModeTitle(mode)}
           </p>
         </div>
-        <StatusPill tone={getRoundStatusTone(status)}>{phaseLabel}</StatusPill>
+        <StatusPill tone={getRoundStatusTone(round ?? status)}>
+          {phaseLabel}
+        </StatusPill>
       </div>
 
       <div className="mt-5 grid grid-cols-2 gap-2 text-sm">
@@ -89,7 +96,7 @@ export function CategoryCard({
             Status
           </span>
           <span className="text-right font-mono font-black text-text-primary">
-            {status === "OPEN" && msUntilLock > 0
+            {phase === "ENTRY_OPEN" && msUntilLock > 0
               ? formatLockCountdown(msUntilLock)
               : phaseLabel}
           </span>
@@ -110,7 +117,7 @@ export function CategoryCard({
 
       <div className="mt-auto pt-4">
         <span className="inline-flex min-h-10 w-full items-center justify-center gap-2 rounded-md bg-[var(--gold)] px-4 py-2 text-sm font-black text-[var(--bg-void)] transition group-hover:bg-[#FFD76A]">
-          {isSignedIn ? "Join room" : "Sign in to join"}
+          {actionLabel}
           <ArrowRight
             className="h-4 w-4 transition group-hover:translate-x-0.5"
             aria-hidden="true"

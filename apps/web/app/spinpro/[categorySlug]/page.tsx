@@ -8,7 +8,6 @@ import { GameShell } from "../../../components/player/game-shell";
 import { SectionHeader } from "../../../components/player/section-header";
 import { StatusPill } from "../../../components/player/status-pill";
 import { buttonClassName } from "../../../components/ui/button";
-import { apiClient, type RoomListItem } from "../../../lib/api-client";
 import { useSession } from "../../../lib/auth-client";
 import {
   buildPlayHref,
@@ -21,25 +20,24 @@ import { formatCoins } from "../../../lib/format";
 import {
   formatLockCountdown,
   getAdjustedMsUntilLock,
+  getDisplayRoundPhaseLabel,
+  getPublicRoundPhase,
   getRoomPlayerCount,
   getRoomPool,
-  getRoundPhaseLabel,
+  getRoomActionLabel,
   getRoundStatusTone,
 } from "../../../lib/room-summary";
 import { useCategories } from "../../../hooks/use-categories";
-
-const VISIBLE_POLL_MS = 2_000;
-const HIDDEN_POLL_MS = 10_000;
+import { useRoomSummaries } from "../../../hooks/use-room-summaries";
 
 export default function CategoryLobbyPage() {
   const params = useParams<{ categorySlug: string }>();
   const categorySlug = params.categorySlug;
   const { data: session } = useSession();
   const { categories } = useCategories();
-  const [rooms, setRooms] = useState<RoomListItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [clientNowMs, setClientNowMs] = useState(() => Date.now());
+  const { roomsBySlug, loading, error } = useRoomSummaries([categorySlug]);
+  const rooms = roomsBySlug[categorySlug] ?? [];
 
   const category = useMemo(
     () => categories.find((item) => item.slug === categorySlug) ?? null,
@@ -47,96 +45,6 @@ export default function CategoryLobbyPage() {
   );
   const mode = category ? getCategoryMode(category) : "pro";
   const isSignedIn = Boolean(session?.user);
-
-  useEffect(() => {
-    let cancelled = false;
-    let inFlight = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    let hasLoaded = false;
-
-    async function loadRooms(showLoading: boolean) {
-      if (inFlight) {
-        return;
-      }
-
-      inFlight = true;
-
-      if (showLoading) {
-        setLoading(true);
-      }
-
-      try {
-        const nextRooms = await apiClient.getRoomsByCategory(categorySlug);
-
-        if (!cancelled) {
-          setRooms(nextRooms);
-          setError(null);
-          hasLoaded = true;
-        }
-      } catch (caught) {
-        if (!cancelled) {
-          if (!hasLoaded) {
-            setRooms([]);
-          }
-          setError(
-            caught instanceof Error ? caught.message : "Could not load rooms.",
-          );
-        }
-      } finally {
-        inFlight = false;
-
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    }
-
-    function scheduleNextPoll() {
-      if (cancelled) {
-        return;
-      }
-
-      const delay =
-        typeof document !== "undefined" && document.hidden
-          ? HIDDEN_POLL_MS
-          : VISIBLE_POLL_MS;
-
-      timeoutId = setTimeout(() => {
-        timeoutId = null;
-        void loadRooms(false).finally(scheduleNextPoll);
-      }, delay);
-    }
-
-    function refreshNow() {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-
-      if (!inFlight) {
-        void loadRooms(false).finally(scheduleNextPoll);
-      }
-    }
-
-    void loadRooms(true).finally(scheduleNextPoll);
-
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        refreshNow();
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    };
-  }, [categorySlug]);
 
   useEffect(() => {
     const intervalId = setInterval(() => {
@@ -182,8 +90,13 @@ export default function CategoryLobbyPage() {
                 const roomHref = `/spinpro/${categorySlug}/${room.id}`;
                 const currentRound = room.currentRound;
                 const status = currentRound?.status ?? room.status;
-                const phaseLabel = getRoundPhaseLabel(status);
                 const msUntilLock = getAdjustedMsUntilLock(room, clientNowMs);
+                const phase = getPublicRoundPhase(currentRound);
+                const phaseLabel = getDisplayRoundPhaseLabel(
+                  currentRound ?? status,
+                  msUntilLock,
+                );
+                const actionLabel = getRoomActionLabel(currentRound);
 
                 return (
                   <Link
@@ -201,7 +114,7 @@ export default function CategoryLobbyPage() {
                         </h2>
                       </div>
                       <StatusPill
-                        tone={getRoundStatusTone(status)}
+                        tone={getRoundStatusTone(currentRound ?? status)}
                       >
                         {phaseLabel}
                       </StatusPill>
@@ -214,7 +127,7 @@ export default function CategoryLobbyPage() {
                           : "Waiting"}
                       </span>
                       <span className="font-mono font-black text-text-primary">
-                        {status === "OPEN" && msUntilLock > 0
+                        {phase === "ENTRY_OPEN" && msUntilLock > 0
                           ? formatLockCountdown(msUntilLock)
                           : phaseLabel}
                       </span>
@@ -242,7 +155,7 @@ export default function CategoryLobbyPage() {
                     <span
                       className={`${buttonClassName("primary")} mt-5 w-full`}
                     >
-                      {isSignedIn ? "Join room" : "Sign in to join"}
+                      {actionLabel}
                       <ArrowRight
                         className="ml-2 h-4 w-4 transition group-hover:translate-x-0.5"
                         aria-hidden="true"

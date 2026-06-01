@@ -1,33 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
-import { RoundStatus } from '@kingspin/db';
+import { GameMode, RoundStatus } from '@kingspin/db';
 import { EntriesService } from './entries.service';
 
 const now = new Date('2026-05-26T12:00:00.000Z');
-
-function buildPreflight(overrides?: Record<string, unknown>) {
-  return {
-    userId: 'user-1',
-    userEmail: 'dev+player-1@kingspin.local',
-    userUsername: 'dev_player-1',
-    userFullName: 'Dev Player player-1',
-    userImage: null,
-    userBannedAt: null,
-    userCreatedAt: now,
-    userUpdatedAt: now,
-    roomId: 'room-1',
-    roomStatus: 'ACTIVE',
-    roomGameMode: 'FLEXIBLE_PROPORTIONAL',
-    roomFixedEntryAmount: null,
-    categoryIsActive: true,
-    categoryMinEntryAmount: 1_000n,
-    categoryMaxEntryAmount: 5_000n,
-    roundId: 'round-1',
-    roundStatus: RoundStatus.OPEN,
-    walletId: 'wallet-1',
-    walletBalanceSnapshot: 10_000n,
-    ...overrides,
-  };
-}
 
 function buildPlacementRow(overrides?: Record<string, unknown>) {
   return {
@@ -35,6 +10,13 @@ function buildPlacementRow(overrides?: Record<string, unknown>) {
     reused: false,
     existingEntryAmount: null,
     walletBalanceSnapshot: 9_000n,
+    gameMode: GameMode.FLEXIBLE_PROPORTIONAL,
+    categoryMinEntryAmount: 1_000n,
+    categoryMaxEntryAmount: 5_000n,
+    userId: 'user-1',
+    userEmail: 'dev+player-1@kingspin.local',
+    userUsername: 'dev_player-1',
+    userFullName: 'Dev Player player-1',
     entryId: 'entry-1',
     entryRoundId: 'round-1',
     entryUserId: 'user-1',
@@ -81,19 +63,20 @@ function buildService(args?: {
   preflight?: Record<string, unknown>;
   placementRows?: Record<string, unknown>[];
 }) {
-  const tx = {
+  const prisma: {
+    $queryRaw: jest.Mock;
+    $transaction: jest.Mock;
+  } = {
     $queryRaw: jest
       .fn()
       .mockResolvedValueOnce([buildPlacementRow(args?.placementRows?.[0])])
       .mockResolvedValueOnce([buildPlacementRow(args?.placementRows?.[1])]),
+    $transaction: jest.fn(),
   };
 
-  const prisma = {
-    $queryRaw: jest.fn().mockResolvedValue([buildPreflight(args?.preflight)]),
-    $transaction: jest.fn(async (callback: (txClient: typeof tx) => unknown) =>
-      callback(tx),
-    ),
-  };
+  prisma.$transaction.mockImplementation(
+    async (callback: (txClient: typeof prisma) => unknown) => callback(prisma),
+  );
 
   const roundsService = {
     toRoundSnapshot: jest.fn((round) => ({
@@ -103,19 +86,31 @@ function buildService(args?: {
       totalEntryAmount: round.totalEntryAmount.toString(),
       payoutAmount: round.payoutAmount.toString(),
     })),
+    toLiveRoundSnapshot: jest.fn((round) => ({
+      id: round.id,
+      roomId: round.roomId,
+      status: round.status,
+      totalEntryAmount: round.totalEntryAmount.toString(),
+      payoutAmount: round.payoutAmount.toString(),
+      msUntilLock: 45_000,
+      phase: 'ENTRY_OPEN',
+      phaseLabel: 'ENTRY OPEN',
+      msUntilPhaseEnd: 45_000,
+      msUntilNextRound: null,
+      resultReason: null,
+    })),
   };
 
   return {
     service: new EntriesService(prisma as any, roundsService as any),
     prisma,
-    tx,
     roundsService,
   };
 }
 
 describe('EntriesService hot path', () => {
   it('first entry returns the authoritative debited wallet and round total', async () => {
-    const { service, prisma, tx } = buildService();
+    const { service, prisma } = buildService();
 
     const result = await service.placeEntryForUser({
       roomId: 'room-1',
@@ -130,11 +125,9 @@ describe('EntriesService hot path', () => {
     expect(result.currentRound?.totalEntryAmount).toBe('1000');
     expect(result.player.id).toBe('user-1');
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
-    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
     const hotPathSql =
-      tx.$queryRaw.mock.calls[0]?.[0]?.strings?.join(' ') ??
-      String(tx.$queryRaw.mock.calls[0]?.[0] ?? '');
+      prisma.$queryRaw.mock.calls[0]?.[0]?.strings?.join(' ') ??
+      String(prisma.$queryRaw.mock.calls[0]?.[0] ?? '');
     expect(hotPathSql).toContain('pg_advisory_xact_lock_shared');
     expect(hotPathSql).not.toContain('UPDATE rounds r');
   });
@@ -230,7 +223,7 @@ describe('EntriesService hot path', () => {
   );
 
   it('duplicate idempotency replay returns the existing result without another debit', async () => {
-    const { service, tx } = buildService({
+    const { service, prisma } = buildService({
       placementRows: [
         {
           status: 'REPLAY',
@@ -251,7 +244,7 @@ describe('EntriesService hot path', () => {
 
     expect(result.reused).toBe(true);
     expect(result.wallet.balanceSnapshot).toBe('9000');
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
 
   it('idempotency key reused with different request details fails safely', async () => {
@@ -270,7 +263,7 @@ describe('EntriesService hot path', () => {
   });
 
   it('insufficient balance creates no committed entry response or ledger drift', async () => {
-    const { service, tx } = buildService({
+    const { service, prisma } = buildService({
       preflight: { walletBalanceSnapshot: 500n },
       placementRows: [
         {
@@ -290,7 +283,7 @@ describe('EntriesService hot path', () => {
         idempotencyKey: 'entry-key-1',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
 
   it('round not OPEN rejects inside the compact transaction', async () => {
@@ -425,7 +418,7 @@ describe('EntriesService hot path', () => {
   });
 
   it('same-key concurrent double click resolves as one write plus one replay', async () => {
-    const { service, tx } = buildService({
+    const { service, prisma } = buildService({
       placementRows: [
         {
           status: 'SUCCESS',
@@ -460,11 +453,11 @@ describe('EntriesService hot path', () => {
       '9000',
       '9000',
     ]);
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(2);
   });
 
   it('fixed mode idempotency replay returns the existing entry without another debit', async () => {
-    const { service, tx } = buildService({
+    const { service, prisma } = buildService({
       preflight: {
         roomGameMode: 'FIXED_EQUAL_CHANCE',
         roomFixedEntryAmount: 10n,
@@ -492,15 +485,18 @@ describe('EntriesService hot path', () => {
 
     expect(result.reused).toBe(true);
     expect(result.wallet.balanceSnapshot).toBe('90');
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
 
-  it('prevalidation rejects rooms without an OPEN round before money writes', async () => {
+  it('single statement rejects rooms without an OPEN round without money writes', async () => {
     const { service, prisma } = buildService({
-      preflight: {
-        roundId: null,
-        roundStatus: null,
-      },
+      placementRows: [
+        {
+          status: 'ROUND_NOT_OPEN',
+          entryId: null,
+          roundId: null,
+        },
+      ],
     });
 
     await expect(
@@ -511,19 +507,18 @@ describe('EntriesService hot path', () => {
         idempotencyKey: 'entry-key-1',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
 
-  it('locked fixed mode rejects before money writes when prevalidation has no OPEN round', async () => {
+  it('locked fixed mode rejects inside the single statement when there is no OPEN round', async () => {
     const { service, prisma } = buildService({
-      preflight: {
-        roomGameMode: 'FIXED_EQUAL_CHANCE',
-        roomFixedEntryAmount: 10n,
-        categoryMinEntryAmount: 10n,
-        categoryMaxEntryAmount: 10n,
-        roundId: null,
-        roundStatus: RoundStatus.LOCKED,
-      },
+      placementRows: [
+        {
+          status: 'ROUND_NOT_OPEN',
+          entryId: null,
+          roundId: null,
+        },
+      ],
     });
 
     await expect(
@@ -534,15 +529,18 @@ describe('EntriesService hot path', () => {
         idempotencyKey: 'fixed-locked-entry',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects entries after a round is no longer OPEN before money writes', async () => {
+  it('rejects entries after a round is no longer OPEN inside the single statement', async () => {
     const { service, prisma } = buildService({
-      preflight: {
-        roundId: 'round-1',
-        roundStatus: RoundStatus.LOCKED,
-      },
+      placementRows: [
+        {
+          status: 'ROUND_NOT_OPEN',
+          entryId: null,
+          roundId: null,
+        },
+      ],
     });
 
     await expect(
@@ -553,6 +551,6 @@ describe('EntriesService hot path', () => {
         idempotencyKey: 'locked-entry-key',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
-    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
   });
 });

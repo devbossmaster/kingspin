@@ -7,10 +7,19 @@ import {
   OnModuleInit,
   Optional,
 } from '@nestjs/common';
-import { Prisma, RoundStatus } from '@kingspin/db';
+import { Prisma, RoomStatus, RoundStatus } from '@kingspin/db';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RealtimeMetricsService } from '../redis/realtime-metrics.service';
 import { RedisService } from '../redis/redis.service';
+import {
+  buildPublicRoundPhaseView,
+  PUBLIC_CANCELLED_ROUND_VISIBILITY_MS,
+  PUBLIC_COMPLETED_ROUND_VISIBILITY_MS,
+} from '../rounds/public-round-phase';
+import type {
+  PublicRoundPhase,
+  PublicRoundResultReason,
+} from '@kingspin/contracts';
 
 const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
   RoundStatus.OPEN,
@@ -20,8 +29,8 @@ const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
   RoundStatus.SETTLING,
 ];
 
-const COMPLETED_ROUND_VISIBILITY_MS = 8_000;
-const CANCELLED_ROUND_VISIBILITY_MS = 2_500;
+const COMPLETED_ROUND_VISIBILITY_MS = PUBLIC_COMPLETED_ROUND_VISIBILITY_MS;
+const CANCELLED_ROUND_VISIBILITY_MS = PUBLIC_CANCELLED_ROUND_VISIBILITY_MS;
 
 type RoomLiveStateSnapshot = {
   serverNow: string;
@@ -52,6 +61,8 @@ type RoomLiveStateSnapshot = {
     roomId: string;
     roundNumber: number;
     status: RoundStatus;
+    phase: PublicRoundPhase;
+    phaseLabel: string;
     totalEntryAmount: string;
     houseFeeAmount: string;
     payoutAmount: string;
@@ -69,6 +80,9 @@ type RoomLiveStateSnapshot = {
     winnerEntryId: string | null;
     spinAngle: number | null;
     msUntilLock: number;
+    msUntilPhaseEnd: number;
+    msUntilNextRound: number | null;
+    resultReason: PublicRoundResultReason;
   } | null;
   entries: {
     id: string;
@@ -154,7 +168,7 @@ type RoomLiveStateRow = {
 
 const LIVE_STATE_CACHE_TTL_MS = 500;
 const LIVE_STATE_INVALIDATION_CHANNEL = 'room-live-state:invalidate';
-const LIVE_STATE_TIMING_WARN_THRESHOLD_MS = 1_000;
+const LIVE_STATE_TIMING_WARN_THRESHOLD_MS = 300;
 
 @Injectable()
 export class PublicGameService implements OnModuleInit, OnModuleDestroy {
@@ -194,14 +208,27 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getRoomLiveState(roomId: string): Promise<RoomLiveStateSnapshot> {
+    const startedAt = Date.now();
+
     if (!roomId) {
       throw new BadRequestException('roomId is required.');
     }
 
+    const versionStartedAt = Date.now();
     const version = await this.getLiveStateVersion(roomId);
+    const versionMs = Date.now() - versionStartedAt;
+    const cacheStartedAt = Date.now();
     const cached = await this.getCachedLiveState(roomId, version);
+    const cacheMs = Date.now() - cacheStartedAt;
 
     if (cached) {
+      this.logLiveStateRequestTiming(roomId, {
+        source: 'cache',
+        totalMs: Date.now() - startedAt,
+        cacheMs,
+        versionMs,
+        entryCount: cached.entries.length,
+      });
       return cached;
     }
 
@@ -220,7 +247,19 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
     const existingInFlight = this.inFlightLiveStateByRoom.get(inFlightKey);
 
     if (existingInFlight) {
-      return existingInFlight;
+      const waitStartedAt = Date.now();
+      const snapshot = await existingInFlight;
+
+      this.logLiveStateRequestTiming(roomId, {
+        source: 'in-flight',
+        totalMs: Date.now() - startedAt,
+        cacheMs,
+        versionMs,
+        inFlightWaitMs: Date.now() - waitStartedAt,
+        entryCount: snapshot.entries.length,
+      });
+
+      return snapshot;
     }
 
     const request = this.measureLiveState(roomId, () =>
@@ -249,7 +288,17 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
 
     this.inFlightLiveStateByRoom.set(inFlightKey, request);
 
-    return request;
+    const snapshot = await request;
+
+    this.logLiveStateRequestTiming(roomId, {
+      source: 'db',
+      totalMs: Date.now() - startedAt,
+      cacheMs,
+      versionMs,
+      entryCount: snapshot.entries.length,
+    });
+
+    return snapshot;
   }
 
   async invalidateRoomLiveState(roomId: string) {
@@ -262,7 +311,10 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
     if (this.redisService?.isAvailable()) {
       await Promise.allSettled([
         this.redisService.del(this.getRedisCacheKey(roomId)),
-        this.redisService.incr(this.getRedisVersionKey(roomId), 60 * 60 * 1_000),
+        this.redisService.incr(
+          this.getRedisVersionKey(roomId),
+          60 * 60 * 1_000,
+        ),
         this.redisService.publish(LIVE_STATE_INVALIDATION_CHANNEL, roomId),
       ]);
     }
@@ -332,6 +384,26 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
       `[live-state-timing:${roomId}] ${label} duration=${durationMs}ms${
         details ? ` ${details}` : ''
       }`,
+    );
+  }
+
+  private logLiveStateRequestTiming(
+    roomId: string,
+    details: {
+      source: 'cache' | 'in-flight' | 'db';
+      totalMs: number;
+      versionMs: number;
+      cacheMs: number;
+      inFlightWaitMs?: number;
+      entryCount?: number;
+    },
+  ) {
+    if (details.totalMs < LIVE_STATE_TIMING_WARN_THRESHOLD_MS) {
+      return;
+    }
+
+    this.logger.warn(
+      `[live-state-timing:${roomId}] source=${details.source} total=${details.totalMs}ms version=${details.versionMs}ms cache=${details.cacheMs}ms inFlightWait=${details.inFlightWaitMs ?? 0}ms entries=${details.entryCount ?? 'n/a'} dbWaitMayBeIncluded=true`,
     );
   }
 
@@ -461,9 +533,30 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
               AND ro."cancelledAt" IS NOT NULL
               AND ro."cancelledAt" >= ${cancelledVisibleSince}
             )
+            OR (
+              r.status = CAST(${RoomStatus.ACTIVE} AS "RoomStatus")
+              AND r."isPermanent" = true
+              AND ro.status IN (
+                CAST(${RoundStatus.COMPLETED} AS "RoundStatus"),
+                CAST(${RoundStatus.CANCELLED} AS "RoundStatus")
+              )
+            )
           )
         ORDER BY
-          CASE WHEN ro.status IN (${activeStatuses}) THEN 0 ELSE 1 END,
+          CASE
+            WHEN ro.status IN (${activeStatuses}) THEN 0
+            WHEN (
+              ro.status = CAST(${RoundStatus.COMPLETED} AS "RoundStatus")
+              AND ro."completedAt" IS NOT NULL
+              AND ro."completedAt" >= ${completedVisibleSince}
+            ) THEN 1
+            WHEN (
+              ro.status = CAST(${RoundStatus.CANCELLED} AS "RoundStatus")
+              AND ro."cancelledAt" IS NOT NULL
+              AND ro."cancelledAt" >= ${cancelledVisibleSince}
+            ) THEN 1
+            ELSE 2
+          END,
           ro."roundNumber" DESC
         LIMIT 1
       ) cr ON true
@@ -489,12 +582,25 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
       room.roundStatus === RoundStatus.OPEN && room.roundLocksAt
         ? Math.max(0, room.roundLocksAt.getTime() - serverNow.getTime())
         : 0;
+    const entryCount = rows.filter((entry) => Boolean(entry.entryId)).length;
+    const publicRoundView = buildPublicRoundPhaseView(
+      {
+        status: room.roundStatus as RoundStatus | null,
+        locksAt: room.roundLocksAt,
+        lockedAt: room.roundLockedAt,
+        drawingAt: room.roundDrawingAt,
+        spinningAt: room.roundSpinningAt,
+        settlingAt: room.roundSettlingAt,
+        completedAt: room.roundCompletedAt,
+        cancelledAt: room.roundCancelledAt,
+        winnerEntryId: room.roundWinnerEntryId,
+        entryCount,
+      },
+      serverNow,
+    );
     const liveOpenEntryTotal =
       room.roundStatus === RoundStatus.OPEN
-        ? rows.reduce(
-            (sum, row) => sum + (row.entryAmount ?? 0n),
-            0n,
-          )
+        ? rows.reduce((sum, row) => sum + (row.entryAmount ?? 0n), 0n)
         : null;
 
     return {
@@ -527,12 +633,18 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
             roomId: room.roundRoomId ?? room.roomId,
             roundNumber: room.roundNumber ?? 0,
             status: room.roundStatus as RoundStatus,
+            phase: publicRoundView.phase,
+            phaseLabel: publicRoundView.phaseLabel,
             totalEntryAmount: (
-              liveOpenEntryTotal ?? room.roundTotalEntryAmount ?? 0n
+              liveOpenEntryTotal ??
+              room.roundTotalEntryAmount ??
+              0n
             ).toString(),
             houseFeeAmount: room.roundHouseFeeAmount?.toString() ?? '0',
             payoutAmount: (
-              liveOpenEntryTotal ?? room.roundPayoutAmount ?? 0n
+              liveOpenEntryTotal ??
+              room.roundPayoutAmount ??
+              0n
             ).toString(),
             openedAt:
               room.roundOpenedAt?.toISOString() ?? serverNow.toISOString(),
@@ -553,6 +665,9 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
             winnerEntryId: room.roundWinnerEntryId,
             spinAngle: room.roundSpinAngle,
             msUntilLock,
+            msUntilPhaseEnd: publicRoundView.msUntilPhaseEnd,
+            msUntilNextRound: publicRoundView.msUntilNextRound,
+            resultReason: publicRoundView.resultReason,
           }
         : null,
       entries: rows.flatMap((entry) => {
@@ -614,11 +729,7 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
   private async getCachedLiveState(roomId: string, version: number) {
     const cached = this.liveStateCacheByRoom.get(roomId);
 
-    if (
-      cached &&
-      cached.expiresAt > Date.now() &&
-      cached.version === version
-    ) {
+    if (cached && cached.expiresAt > Date.now() && cached.version === version) {
       this.metrics?.increment('liveStateCacheHitCount');
       this.logLiveStatePart(roomId, 'cache hit', 0, 'source=memory');
       return cached.snapshot;
@@ -635,7 +746,9 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
     }
 
     const startedAt = Date.now();
-    const rawCached = await this.redisService.get(this.getRedisCacheKey(roomId));
+    const rawCached = await this.redisService.get(
+      this.getRedisCacheKey(roomId),
+    );
 
     if (!rawCached) {
       this.metrics?.increment('liveStateCacheMissCount');

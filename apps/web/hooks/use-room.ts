@@ -12,12 +12,18 @@ import type {
 } from "@kingspin/contracts";
 import { apiClient, type PlaceEntryResponse } from "../lib/api-client";
 import { deriveChipOptions } from "../lib/format";
+import { getPublicRoundPhase } from "../lib/room-summary";
 import { getGameSocket } from "../lib/socket-client";
 import { useAuthStore } from "../stores/auth-store";
 import { useRoomStore } from "../stores/room-store";
 
 type LiveEntry = RoomLiveState["entries"][number];
 type RoundSnapshot = NonNullable<RoomLiveState["currentRound"]>;
+type PendingLiveEntry = LiveEntry & {
+  pending?: boolean;
+  optimisticKey?: string;
+  optimisticBaseEntryId?: string | null;
+};
 
 function createIdempotencyKey(roomId: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -48,7 +54,9 @@ function isNewOpenRound(
   previousRound: RoundLiveStateRound | null | undefined,
   nextRound: RoundLiveStateRound | null | undefined,
 ) {
-  if (!nextRound || nextRound.status !== "OPEN") return false;
+  if (!nextRound || getPublicRoundPhase(nextRound) !== "ENTRY_OPEN") {
+    return false;
+  }
   if (!previousRound) return true;
 
   return previousRound.id !== nextRound.id;
@@ -81,6 +89,10 @@ export function useRoom(roomId: string) {
   const transientNoRoundSinceRef = useRef<number | null>(null);
   const resultFetchTimerRef = useRef<number | null>(null);
   const walletRefreshTimerRef = useRef<number | null>(null);
+  const pendingEntriesRef = useRef<Map<string, PendingLiveEntry>>(new Map());
+  const pendingEntryBackupsRef = useRef<Map<string, LiveEntry | null>>(
+    new Map(),
+  );
 
   const user = useAuthStore((store) => store.user);
   const wallet = useAuthStore((store) => store.wallet);
@@ -108,6 +120,43 @@ export function useRoom(roomId: string) {
       window.clearTimeout(walletRefreshTimerRef.current);
       walletRefreshTimerRef.current = null;
     }
+  }, []);
+
+  const mergePendingEntries = useCallback((nextState: RoomLiveState) => {
+    if (!nextState.currentRound || pendingEntriesRef.current.size === 0) {
+      return nextState;
+    }
+
+    const pendingEntries = [...pendingEntriesRef.current.values()].filter(
+      (entry) => entry.roundId === nextState.currentRound?.id,
+    );
+
+    if (pendingEntries.length === 0) {
+      return nextState;
+    }
+
+    const entries = [...nextState.entries] as PendingLiveEntry[];
+
+    for (const pendingEntry of pendingEntries) {
+      const existingIndex = entries.findIndex((entry) => {
+        return (
+          entry.id === pendingEntry.optimisticBaseEntryId ||
+          entry.id === pendingEntry.id ||
+          entry.userId === pendingEntry.userId
+        );
+      });
+
+      if (existingIndex >= 0) {
+        entries[existingIndex] = pendingEntry;
+      } else {
+        entries.push(pendingEntry);
+      }
+    }
+
+    return {
+      ...nextState,
+      entries: entries.sort(compareEntriesByCreatedAt),
+    };
   }, []);
 
   const normalizeIncomingState = useCallback((nextState: RoomLiveState) => {
@@ -156,14 +205,21 @@ export function useRoom(roomId: string) {
   }, []);
   const applyState = useCallback(
     (nextState: RoomLiveState) => {
-      const normalizedState = normalizeIncomingState(nextState);
+      const normalizedState = mergePendingEntries(
+        normalizeIncomingState(nextState),
+      );
       const previousRound = lastRoundRef.current;
       const nextRound = normalizedState.currentRound;
 
-      if (previousRound?.status !== nextRound?.status) {
-        devLog("round status changed", {
+      if (
+        previousRound?.status !== nextRound?.status ||
+        previousRound?.phase !== nextRound?.phase
+      ) {
+        devLog("round phase changed", {
           from: previousRound?.status ?? null,
           to: nextRound?.status ?? null,
+          publicFrom: previousRound?.phase ?? null,
+          publicTo: nextRound?.phase ?? null,
           roundId: nextRound?.id ?? null,
           roundNumber: nextRound?.roundNumber ?? null,
         });
@@ -172,6 +228,8 @@ export function useRoom(roomId: string) {
       if (isNewOpenRound(previousRound, nextRound)) {
         clearResultTimer();
         clearWalletTimer();
+        pendingEntriesRef.current.clear();
+        pendingEntryBackupsRef.current.clear();
         setLatestResult(null);
         dismissWinner();
         setFastWallet(null);
@@ -193,6 +251,7 @@ export function useRoom(roomId: string) {
       clearResultTimer,
       clearWalletTimer,
       dismissWinner,
+      mergePendingEntries,
       normalizeIncomingState,
       setChipOptions,
     ],
@@ -229,9 +288,12 @@ export function useRoom(roomId: string) {
         })();
       }, delayMs);
 
-      walletRefreshTimerRef.current = window.setTimeout(() => {
-        void refreshWallet();
-      }, Math.max(delayMs, 1200));
+      walletRefreshTimerRef.current = window.setTimeout(
+        () => {
+          void refreshWallet();
+        },
+        Math.max(delayMs, 1200),
+      );
     },
     [clearResultTimer, clearWalletTimer, fetchLatestResult, showWinner],
   );
@@ -242,7 +304,7 @@ export function useRoom(roomId: string) {
 
       if (!round) return;
 
-      if (round.status === "SPINNING") {
+      if (getPublicRoundPhase(round) === "SPINNING") {
         devLog("spinning phase active", {
           roundId: round.id,
           spinAngle: round.spinAngle,
@@ -297,6 +359,16 @@ export function useRoom(roomId: string) {
 
   const applyEntryPlacementResult = useCallback(
     (result: PlaceEntryResponse) => {
+      for (const [key, pendingEntry] of pendingEntriesRef.current) {
+        if (
+          pendingEntry.roundId === result.entry.roundId &&
+          pendingEntry.userId === result.entry.userId
+        ) {
+          pendingEntriesRef.current.delete(key);
+          pendingEntryBackupsRef.current.delete(key);
+        }
+      }
+
       setState((currentState) => {
         if (!currentState) {
           return currentState;
@@ -338,6 +410,125 @@ export function useRoom(roomId: string) {
     },
     [],
   );
+
+  const addOptimisticEntry = useCallback(
+    (amount: number, optimisticKey: string) => {
+      if (!user) return;
+
+      const nowIso = new Date().toISOString();
+
+      setState((currentState) => {
+        const round = currentState?.currentRound;
+
+        if (
+          !currentState ||
+          !round ||
+          getPublicRoundPhase(round) !== "ENTRY_OPEN"
+        ) {
+          return currentState;
+        }
+
+        const existingEntry =
+          currentState.entries.find(
+            (entry) => entry.userId === user.id || entry.player?.id === user.id,
+          ) ?? null;
+
+        pendingEntryBackupsRef.current.set(optimisticKey, existingEntry);
+
+        const optimisticAmount = existingEntry
+          ? (BigInt(existingEntry.amount) + BigInt(amount)).toString()
+          : String(amount);
+
+        const pendingEntry: PendingLiveEntry = {
+          ...(existingEntry ?? {
+            id: `pending:${optimisticKey}`,
+            roundId: round.id,
+            userId: user.id,
+            ticketStart: null,
+            ticketEnd: null,
+            isWinner: false,
+            createdAt: nowIso,
+          }),
+          amount: optimisticAmount,
+          updatedAt: nowIso,
+          player: {
+            id: user.id,
+            username: user.username,
+            fullName: user.fullName,
+          },
+          pending: true,
+          optimisticKey,
+          optimisticBaseEntryId: existingEntry?.id ?? null,
+        };
+
+        pendingEntriesRef.current.set(optimisticKey, pendingEntry);
+
+        const entries = existingEntry
+          ? currentState.entries.map((entry) =>
+              entry.id === existingEntry.id ? pendingEntry : entry,
+            )
+          : [...currentState.entries, pendingEntry];
+
+        const nextTotal = (
+          BigInt(round.totalEntryAmount ?? "0") + BigInt(amount)
+        ).toString();
+
+        return {
+          ...currentState,
+          currentRound: {
+            ...round,
+            totalEntryAmount: nextTotal,
+            payoutAmount: nextTotal,
+          },
+          entries: entries.sort(compareEntriesByCreatedAt),
+        };
+      });
+    },
+    [user],
+  );
+
+  const removeOptimisticEntry = useCallback((optimisticKey: string) => {
+    const pendingEntry = pendingEntriesRef.current.get(optimisticKey);
+    const backupEntry = pendingEntryBackupsRef.current.get(optimisticKey);
+
+    pendingEntriesRef.current.delete(optimisticKey);
+    pendingEntryBackupsRef.current.delete(optimisticKey);
+
+    if (!pendingEntry) return;
+
+    setState((currentState) => {
+      if (!currentState) return currentState;
+
+      const amountDelta =
+        BigInt(pendingEntry.amount) - BigInt(backupEntry?.amount ?? "0");
+      const nextEntries = backupEntry
+        ? currentState.entries.map((entry) =>
+            entry.id === pendingEntry.id ||
+            entry.id === pendingEntry.optimisticBaseEntryId
+              ? backupEntry
+              : entry,
+          )
+        : currentState.entries.filter((entry) => entry.id !== pendingEntry.id);
+
+      const round = currentState.currentRound;
+
+      return {
+        ...currentState,
+        currentRound: round
+          ? {
+              ...round,
+              totalEntryAmount: (
+                BigInt(round.totalEntryAmount ?? "0") - amountDelta
+              ).toString(),
+              payoutAmount: (
+                BigInt(round.payoutAmount ?? "0") - amountDelta
+              ).toString(),
+            }
+          : round,
+        entries: nextEntries.sort(compareEntriesByCreatedAt),
+      };
+    });
+  }, []);
 
   useEffect(() => {
     void fetchMe();
@@ -411,7 +602,10 @@ export function useRoom(roomId: string) {
     const onMachineEvent = (payload: SocketMachineEvent) => {
       if (payload.roomId !== roomId) return;
 
-      if (payload.action === "STARTED_OPEN_ROUND") {
+      if (
+        payload.action === "STARTED_OPEN_ROUND" ||
+        payload.action === "STARTED_NEXT_ROUND_AFTER_COMPLETION"
+      ) {
         clearResultTimer();
         clearWalletTimer();
         setLatestResult(null);
@@ -484,7 +678,12 @@ export function useRoom(roomId: string) {
   useEffect(() => {
     const round = state?.currentRound;
 
-    if (!roomId || !round || round.status !== "OPEN" || !round.locksAt) {
+    if (
+      !roomId ||
+      !round ||
+      getPublicRoundPhase(round) !== "ENTRY_OPEN" ||
+      !round.locksAt
+    ) {
       return;
     }
 
@@ -541,6 +740,7 @@ export function useRoom(roomId: string) {
     state?.currentRound?.id,
     state?.currentRound?.roundNumber,
     state?.currentRound?.status,
+    state?.currentRound?.phase,
     state?.currentRound?.locksAt,
   ]);
   const placeEntry = useCallback(
@@ -556,10 +756,27 @@ export function useRoom(roomId: string) {
       setIsPlacingEntry(true);
       setError(null);
 
+      const idempotencyKey = createIdempotencyKey(roomId);
+      const clickStartedAt =
+        typeof performance !== "undefined" ? performance.now() : Date.now();
+
+      addOptimisticEntry(amount, idempotencyKey);
+
       try {
+        const requestStartedAt =
+          typeof performance !== "undefined" ? performance.now() : Date.now();
+        const clickToRequestMs = requestStartedAt - clickStartedAt;
+
+        if (process.env.NODE_ENV !== "production" && clickToRequestMs > 16) {
+          console.debug("[room] entry click-to-request", {
+            roomId,
+            durationMs: Math.round(clickToRequestMs),
+          });
+        }
+
         const result = await apiClient.placeEntry(roomId, {
           amount,
-          idempotencyKey: createIdempotencyKey(roomId),
+          idempotencyKey,
         });
 
         applyEntryPlacementResult(result);
@@ -568,12 +785,12 @@ export function useRoom(roomId: string) {
           void refresh();
         }
       } catch (caught) {
+        removeOptimisticEntry(idempotencyKey);
         setFastWallet(null);
         const message =
           caught instanceof Error ? caught.message : "Failed to place entry.";
         const lockedMessage =
-          message.includes("no longer OPEN") ||
-          message.includes("OPEN round")
+          message.includes("no longer OPEN") || message.includes("OPEN round")
             ? "Round locked. Entry was not accepted."
             : message;
 
@@ -588,7 +805,15 @@ export function useRoom(roomId: string) {
         setIsPlacingEntry(false);
       }
     },
-    [applyEntryPlacementResult, refresh, refreshWallet, roomId, visibleWallet],
+    [
+      addOptimisticEntry,
+      applyEntryPlacementResult,
+      refresh,
+      refreshWallet,
+      removeOptimisticEntry,
+      roomId,
+      visibleWallet,
+    ],
   );
 
   const entriesTotal = useMemo(() => {
@@ -622,6 +847,3 @@ export function useRoom(roomId: string) {
     placeEntry,
   };
 }
-
-
-

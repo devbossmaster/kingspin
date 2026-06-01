@@ -42,6 +42,7 @@ type MeasuredResult<T> =
 
 type StressSummary = {
   name: string;
+  totalRequests: number;
   successCount: number;
   errorCount: number;
   min: number;
@@ -106,6 +107,104 @@ function withStressConnectionLimit(databaseUrl: string) {
     return url.toString();
   } catch {
     return databaseUrl;
+  }
+}
+
+function describeDatabaseUrl(databaseUrl: string | undefined) {
+  if (!databaseUrl) {
+    return 'DATABASE_URL=missing';
+  }
+
+  try {
+    const url = new URL(databaseUrl);
+    const host = url.hostname;
+    const hostKind = host.includes('pooler.supabase')
+      ? 'supabase-pooler'
+      : host.includes('supabase')
+        ? 'supabase-direct'
+        : host === 'localhost' || host === '127.0.0.1'
+          ? 'local-postgres'
+          : 'remote-postgres';
+
+    return [
+      `kind=${hostKind}`,
+      `host=${host}`,
+      `database=${url.pathname.replace(/^\//, '') || 'unknown'}`,
+      `connection_limit=${url.searchParams.get('connection_limit') ?? 'default'}`,
+      `pool_timeout=${url.searchParams.get('pool_timeout') ?? 'default'}`,
+      `label=${process.env.STRESS_DB_CONNECTION_LABEL ?? 'default'}`,
+    ].join(' ');
+  } catch {
+    return 'DATABASE_URL=unparseable';
+  }
+}
+
+async function logDatabaseDiagnostics(label: string) {
+  try {
+    const settings = await prisma.$queryRaw<
+      {
+        maxConnections: string;
+        currentDatabase: string;
+        serverAddress: string | null;
+        serverPort: number | null;
+      }[]
+    >(Prisma.sql`
+      SELECT
+        current_setting('max_connections') AS "maxConnections",
+        current_database() AS "currentDatabase",
+        inet_server_addr()::text AS "serverAddress",
+        inet_server_port() AS "serverPort"
+    `);
+    const setting = settings[0];
+
+    console.log(
+      [
+        `[entry-stress-db] label=${label}`,
+        `max_connections=${setting?.maxConnections ?? 'unknown'}`,
+        `database=${setting?.currentDatabase ?? 'unknown'}`,
+        `server=${setting?.serverAddress ?? 'unknown'}:${setting?.serverPort ?? 'unknown'}`,
+      ].join(' '),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[entry-stress-db] label=${label} settings unavailable: ${message}`);
+  }
+
+  try {
+    const activity = await prisma.$queryRaw<
+      {
+        state: string;
+        waitEventType: string;
+        waitEvent: string;
+        count: number;
+      }[]
+    >(Prisma.sql`
+      SELECT
+        COALESCE(state, 'unknown') AS "state",
+        COALESCE(wait_event_type, 'none') AS "waitEventType",
+        COALESCE(wait_event, 'none') AS "waitEvent",
+        COUNT(*)::int AS "count"
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+      GROUP BY 1, 2, 3
+      ORDER BY COUNT(*) DESC
+    `);
+
+    const summary = activity
+      .map(
+        (row) =>
+          `${row.state}/${row.waitEventType}/${row.waitEvent}:${row.count}`,
+      )
+      .join(', ');
+
+    console.log(
+      `[entry-stress-db] label=${label} pg_stat_activity=${summary || 'empty'}`,
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[entry-stress-db] label=${label} pg_stat_activity unavailable: ${message}`,
+    );
   }
 }
 
@@ -482,8 +581,12 @@ async function expectCoreInvariants(
 describe('EntriesService concurrency stress', () => {
   beforeAll(async () => {
     loadDatabaseUrl();
+    console.log(
+      `[entry-stress-db] ${describeDatabaseUrl(process.env.DATABASE_URL)}`,
+    );
     prisma = new PrismaService();
     await prisma.$connect();
+    await logDatabaseDiagnostics('before-all');
     roundsService = new RoundsService(prisma, {} as never);
     entriesService = new EntriesService(prisma, roundsService);
   });
@@ -513,6 +616,17 @@ describe('EntriesService concurrency stress', () => {
         startingBalance: 100n,
       });
 
+      const activityProbe =
+        users >= 100
+          ? new Promise<void>((resolve) => {
+              setTimeout(() => {
+                void logDatabaseDiagnostics(`${users}-users-during`).finally(
+                  resolve,
+                );
+              }, 100);
+            })
+          : Promise.resolve();
+
       const results = await Promise.all(
         fixture.userIds.map((userId, index) =>
           placeEntry(
@@ -523,6 +637,11 @@ describe('EntriesService concurrency stress', () => {
           ),
         ),
       );
+      await activityProbe;
+
+      if (users >= 100) {
+        await logDatabaseDiagnostics(`${users}-users-after`);
+      }
 
       summarize(`${users}-users-open-round`, results);
 

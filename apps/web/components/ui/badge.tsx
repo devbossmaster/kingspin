@@ -16,9 +16,12 @@ const variantClassName: Record<BadgeVariant, string> = {
   locked: "border-[rgba(246,197,71,0.42)] bg-[rgba(246,197,71,0.12)] text-gold",
   spinning:
     "border-[rgba(232,121,249,0.38)] bg-[rgba(232,121,249,0.12)] text-magenta",
-  settled: "border-[rgba(45,212,191,0.38)] bg-[rgba(45,212,191,0.12)] text-teal",
-  danger: "border-[rgba(248,113,113,0.42)] bg-[rgba(248,113,113,0.12)] text-red-hot",
-  success: "border-[rgba(74,222,128,0.38)] bg-[rgba(74,222,128,0.12)] text-green-go",
+  settled:
+    "border-[rgba(45,212,191,0.38)] bg-[rgba(45,212,191,0.12)] text-teal",
+  danger:
+    "border-[rgba(248,113,113,0.42)] bg-[rgba(248,113,113,0.12)] text-red-hot",
+  success:
+    "border-[rgba(74,222,128,0.38)] bg-[rgba(74,222,128,0.12)] text-green-go",
 };
 
 export function Badge({
@@ -43,10 +46,14 @@ export function Badge({
   );
 }
 
-export function phaseBadgeVariant(status: string | null | undefined): BadgeVariant {
+export function phaseBadgeVariant(
+  status: string | null | undefined,
+): BadgeVariant {
   switch (status) {
+    case "ENTRY_OPEN":
     case "OPEN":
       return "open";
+    case "RANDOMIZING":
     case "LOCKED":
     case "DRAWING":
       return "locked";

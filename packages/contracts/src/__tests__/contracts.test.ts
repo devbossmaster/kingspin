@@ -112,6 +112,11 @@ describe("contracts", () => {
         winnerEntryId: null,
         spinAngle: null,
         msUntilLock: 30332,
+        phase: "ENTRY_OPEN",
+        phaseLabel: "ENTRY OPEN",
+        msUntilPhaseEnd: 30332,
+        msUntilNextRound: null,
+        resultReason: null,
       },
       entries: [],
     });

@@ -1,37 +1,131 @@
 import type { RoomListItem } from "./api-client";
 
-export const ROUND_PHASE_LABELS: Record<string, string> = {
-  OPEN: "Entries open",
-  LOCKED: "Assigning tickets",
-  DRAWING: "Selecting winner",
-  SPINNING: "Wheel spinning",
-  SETTLING: "Finalizing payout",
-  COMPLETED: "Next round soon",
-  CANCELLED: "Skipped/refunded",
+export type PublicRoundPhase =
+  | "ENTRY_OPEN"
+  | "RANDOMIZING"
+  | "SPINNING"
+  | "RESULT";
+
+type RoundPhaseSource = {
+  phase?: string | null;
+  phaseLabel?: string | null;
+  status?: string | null;
+  msUntilLock?: number | null;
+  msUntilPhaseEnd?: number | null;
+  msUntilNextRound?: number | null;
+  locksAt?: string | null;
 };
 
-export function getRoundPhaseLabel(status?: string | null) {
-  if (!status) {
-    return "Waiting";
-  }
+export const PUBLIC_ROUND_PHASE_LABELS: Record<PublicRoundPhase, string> = {
+  ENTRY_OPEN: "ENTRY OPEN",
+  RANDOMIZING: "RANDOMIZING",
+  SPINNING: "SPINNING",
+  RESULT: "RESULT",
+};
 
-  return ROUND_PHASE_LABELS[status] ?? status;
+const STATUS_TO_PUBLIC_PHASE: Record<string, PublicRoundPhase> = {
+  OPEN: "ENTRY_OPEN",
+  LOCKED: "RANDOMIZING",
+  DRAWING: "RANDOMIZING",
+  SPINNING: "SPINNING",
+  SETTLING: "RESULT",
+  COMPLETED: "RESULT",
+  CANCELLED: "RESULT",
+};
+
+function isPublicRoundPhase(
+  value: string | null | undefined,
+): value is PublicRoundPhase {
+  return (
+    value === "ENTRY_OPEN" ||
+    value === "RANDOMIZING" ||
+    value === "SPINNING" ||
+    value === "RESULT"
+  );
 }
 
-export function getRoundStatusTone(status?: string | null) {
-  switch (status) {
-    case "OPEN":
-      return "lime";
-    case "LOCKED":
-    case "DRAWING":
+export function getPublicRoundPhase(
+  roundOrStatus?: RoundPhaseSource | string | null,
+): PublicRoundPhase | null {
+  if (!roundOrStatus) {
+    return null;
+  }
+
+  if (typeof roundOrStatus === "string") {
+    return STATUS_TO_PUBLIC_PHASE[roundOrStatus] ?? null;
+  }
+
+  if (isPublicRoundPhase(roundOrStatus.phase)) {
+    return roundOrStatus.phase;
+  }
+
+  return roundOrStatus.status
+    ? (STATUS_TO_PUBLIC_PHASE[roundOrStatus.status] ?? null)
+    : null;
+}
+
+export function getRoundPhaseLabel(
+  roundOrStatus?: RoundPhaseSource | string | null,
+) {
+  if (roundOrStatus && typeof roundOrStatus !== "string") {
+    const label = roundOrStatus.phaseLabel?.trim();
+
+    if (label) {
+      return label;
+    }
+  }
+
+  const phase = getPublicRoundPhase(roundOrStatus);
+
+  return phase ? PUBLIC_ROUND_PHASE_LABELS[phase] : "PREPARING";
+}
+
+export function getDisplayRoundPhaseLabel(
+  roundOrStatus?: RoundPhaseSource | string | null,
+  msUntilLock?: number | null,
+) {
+  if (getPublicRoundPhase(roundOrStatus) === "ENTRY_OPEN") {
+    const sourceMs =
+      roundOrStatus && typeof roundOrStatus !== "string"
+        ? (roundOrStatus.msUntilLock ?? roundOrStatus.msUntilPhaseEnd)
+        : null;
+    const openMs = msUntilLock ?? sourceMs;
+
+    if (typeof openMs === "number" && Number.isFinite(openMs) && openMs <= 0) {
+      return "LOCKING...";
+    }
+  }
+
+  return getRoundPhaseLabel(roundOrStatus);
+}
+
+export function getRoomActionLabel(
+  roundOrStatus?: RoundPhaseSource | string | null,
+) {
+  switch (getPublicRoundPhase(roundOrStatus)) {
+    case "ENTRY_OPEN":
+      return "Join room";
+    case "RANDOMIZING":
     case "SPINNING":
+    case "RESULT":
+      return "Watch live";
+    default:
+      return "Preparing";
+  }
+}
+
+export function getRoundStatusTone(
+  roundOrStatus?: RoundPhaseSource | string | null,
+) {
+  switch (getPublicRoundPhase(roundOrStatus)) {
+    case "ENTRY_OPEN":
+      return "lime";
+    case "RANDOMIZING":
       return "teal";
-    case "SETTLING":
-      return "gold";
-    case "COMPLETED":
+    case "SPINNING":
       return "purple";
-    case "CANCELLED":
-      return "danger";
+    case "RESULT":
+      return "gold";
     default:
       return "muted";
   }
@@ -54,17 +148,39 @@ export function getRoomEntryCount(room?: RoomListItem | null) {
   return room?.currentRound?.entryCount ?? room?.currentRound?.playerCount ?? 0;
 }
 
+export function getAdjustedMsUntilPhaseEnd(
+  room?: RoomListItem | null,
+  clientNowMs = Date.now(),
+) {
+  const round = room?.currentRound;
+
+  if (!round) {
+    return 0;
+  }
+
+  let initialMs = round.msUntilPhaseEnd ?? round.msUntilLock ?? 0;
+
+  if (!Number.isFinite(initialMs) || initialMs < 0) {
+    initialMs = 0;
+  }
+
+  const receivedAtMs = room?.receivedAtMs ?? clientNowMs;
+  const elapsedMs = Math.max(0, clientNowMs - receivedAtMs);
+
+  return Math.max(0, initialMs - elapsedMs);
+}
+
 export function getAdjustedMsUntilLock(
   room?: RoomListItem | null,
   clientNowMs = Date.now(),
 ) {
   const round = room?.currentRound;
 
-  if (!round || round.status !== "OPEN") {
+  if (!round || getPublicRoundPhase(round) !== "ENTRY_OPEN") {
     return 0;
   }
 
-  let initialMs = round.msUntilLock ?? 0;
+  let initialMs = round.msUntilPhaseEnd ?? round.msUntilLock ?? 0;
 
   if ((!Number.isFinite(initialMs) || initialMs <= 0) && round.locksAt) {
     const locksAtMs = Date.parse(round.locksAt);

@@ -135,6 +135,10 @@ function buildLatestResultRows(round: any, entries: any[]) {
 }
 
 describe('RoundsService', () => {
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('assigns proportional ticket ranges when locking the current round', async () => {
     const openRound = buildRound({
       totalEntryAmount: 0n,
@@ -348,9 +352,7 @@ describe('RoundsService', () => {
     const prisma = {
       round: {
         findFirst: jest.fn().mockResolvedValue(openRound),
-        updateMany: jest
-          .fn()
-          .mockResolvedValueOnce({ count: 1 }),
+        updateMany: jest.fn().mockResolvedValueOnce({ count: 1 }),
         findUniqueOrThrow: jest.fn().mockResolvedValue(cancelledRound),
       },
       entry: {
@@ -389,6 +391,322 @@ describe('RoundsService', () => {
         refundedAmount: '3500',
       }),
     );
+  });
+
+  it('cancels an expired empty OPEN round and creates the next OPEN in one transaction', async () => {
+    jest.useFakeTimers().setSystemTime(now);
+    const expiredRound = buildRound({
+      totalEntryAmount: 0n,
+      payoutAmount: 0n,
+      locksAt: new Date('2026-05-26T11:59:00.000Z'),
+    });
+    const cancelledRound = buildRound({
+      ...expiredRound,
+      status: RoundStatus.CANCELLED,
+      cancelledAt: now,
+    });
+    const nextRound = buildRound({
+      id: 'round-3',
+      roundNumber: 3,
+      totalEntryAmount: 0n,
+      payoutAmount: 0n,
+      openedAt: now,
+      locksAt: new Date('2026-05-26T12:00:45.000Z'),
+      idempotencyKey: 'round:start:room-1:3',
+    });
+    const tx = {
+      $queryRaw: jest.fn().mockResolvedValue([{ locked: true }]),
+      $executeRaw: jest.fn(),
+      room: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'room-1',
+          status: 'ACTIVE',
+          roundDurationMs: 45_000,
+        }),
+      },
+      round: {
+        findUnique: jest.fn().mockResolvedValueOnce(expiredRound),
+        findUniqueOrThrow: jest
+          .fn()
+          .mockResolvedValueOnce(expiredRound)
+          .mockResolvedValueOnce(cancelledRound),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findFirst: jest.fn((query?: { where?: { status?: unknown } }) => {
+          if (query?.where?.status) {
+            return Promise.resolve(null);
+          }
+
+          return Promise.resolve({ roundNumber: expiredRound.roundNumber });
+        }),
+        create: jest.fn().mockResolvedValue(nextRound),
+      },
+      entry: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (txClient: typeof tx) => unknown) =>
+        callback(tx),
+      ),
+    };
+    const walletsService = {
+      refundEntryHolds: jest.fn(),
+    };
+    const service = new RoundsService(prisma as any, walletsService as any);
+
+    const result = await service.cancelExpiredOpenRoundAndStartNextForRoom(
+      'room-1',
+      expiredRound.id,
+    );
+
+    expect(tx.round.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: expiredRound.id,
+        status: { in: [RoundStatus.OPEN, RoundStatus.LOCKED] },
+      },
+      data: {
+        status: RoundStatus.CANCELLED,
+        cancelledAt: expect.any(Date),
+      },
+    });
+    expect(tx.round.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          roomId: 'room-1',
+          roundNumber: 3,
+          status: RoundStatus.OPEN,
+          locksAt: new Date('2026-05-26T12:00:45.000Z'),
+        }),
+      }),
+    );
+    expect(walletsService.refundEntryHolds).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        cancelledRound: expect.objectContaining({
+          status: RoundStatus.CANCELLED,
+        }),
+        currentRound: expect.objectContaining({
+          id: 'round-3',
+          status: RoundStatus.OPEN,
+          locksAt: '2026-05-26T12:00:45.000Z',
+        }),
+      }),
+    );
+  });
+
+  it('fast-cancels an expired empty OPEN round and creates the next OPEN with one DB statement', async () => {
+    jest.useFakeTimers().setSystemTime(now);
+    const expiredRound = buildRound({
+      totalEntryAmount: 0n,
+      payoutAmount: 0n,
+      locksAt: new Date('2026-05-26T11:59:00.000Z'),
+    });
+    const cancelledRound = buildRound({
+      ...expiredRound,
+      status: RoundStatus.CANCELLED,
+      cancelledAt: now,
+    });
+    const nextRound = buildRound({
+      id: 'round-3',
+      roundNumber: 3,
+      totalEntryAmount: 0n,
+      payoutAmount: 0n,
+      openedAt: now,
+      locksAt: new Date('2026-05-26T12:00:45.000Z'),
+    });
+    const row = {
+      cancelledId: cancelledRound.id,
+      cancelledRoomId: cancelledRound.roomId,
+      cancelledRoundNumber: cancelledRound.roundNumber,
+      cancelledStatus: cancelledRound.status,
+      cancelledTotalEntryAmount: cancelledRound.totalEntryAmount,
+      cancelledHouseFeeAmount: cancelledRound.houseFeeAmount,
+      cancelledPayoutAmount: cancelledRound.payoutAmount,
+      cancelledOpenedAt: cancelledRound.openedAt,
+      cancelledLocksAt: cancelledRound.locksAt,
+      cancelledLockedAt: cancelledRound.lockedAt,
+      cancelledDrawingAt: cancelledRound.drawingAt,
+      cancelledSpinningAt: cancelledRound.spinningAt,
+      cancelledSettlingAt: cancelledRound.settlingAt,
+      cancelledCompletedAt: cancelledRound.completedAt,
+      cancelledCancelledAt: cancelledRound.cancelledAt,
+      cancelledServerSeedHash: cancelledRound.serverSeedHash,
+      cancelledWinningTicket: cancelledRound.winningTicket,
+      cancelledWinnerUserId: cancelledRound.winnerUserId,
+      cancelledWinnerEntryId: cancelledRound.winnerEntryId,
+      cancelledSpinAngle: cancelledRound.spinAngle,
+      nextId: nextRound.id,
+      nextRoomId: nextRound.roomId,
+      nextRoundNumber: nextRound.roundNumber,
+      nextStatus: nextRound.status,
+      nextTotalEntryAmount: nextRound.totalEntryAmount,
+      nextHouseFeeAmount: nextRound.houseFeeAmount,
+      nextPayoutAmount: nextRound.payoutAmount,
+      nextOpenedAt: nextRound.openedAt,
+      nextLocksAt: nextRound.locksAt,
+      nextLockedAt: nextRound.lockedAt,
+      nextDrawingAt: nextRound.drawingAt,
+      nextSpinningAt: nextRound.spinningAt,
+      nextSettlingAt: nextRound.settlingAt,
+      nextCompletedAt: nextRound.completedAt,
+      nextCancelledAt: nextRound.cancelledAt,
+      nextServerSeedHash: nextRound.serverSeedHash,
+      nextWinningTicket: nextRound.winningTicket,
+      nextWinnerUserId: nextRound.winnerUserId,
+      nextWinnerEntryId: nextRound.winnerEntryId,
+      nextSpinAngle: nextRound.spinAngle,
+    };
+    const prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([row]),
+    };
+    const walletsService = {
+      refundEntryHolds: jest.fn(),
+    };
+    const service = new RoundsService(prisma as any, walletsService as any);
+
+    const result =
+      await service.cancelExpiredEmptyOpenRoundAndStartNextForRoom(
+        'room-1',
+        expiredRound.id,
+      );
+
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(walletsService.refundEntryHolds).not.toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        cancelledRound: expect.objectContaining({
+          status: RoundStatus.CANCELLED,
+        }),
+        currentRound: expect.objectContaining({
+          id: 'round-3',
+          status: RoundStatus.OPEN,
+          locksAt: '2026-05-26T12:00:45.000Z',
+        }),
+        refundSummary: expect.objectContaining({
+          refundedCount: 0,
+          refundedAmount: '0',
+        }),
+      }),
+    );
+  });
+
+  it('falls back from the fast empty transition when the DB does not confirm zero entries', async () => {
+    const prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
+    };
+    const service = new RoundsService(prisma as any, {} as any);
+
+    await expect(
+      service.cancelExpiredEmptyOpenRoundAndStartNextForRoom(
+        'room-1',
+        'round-1',
+      ),
+    ).resolves.toBeNull();
+  });
+
+  it('cancels an expired OPEN round directly without persisting LOCKED', async () => {
+    const expiredRound = buildRound({
+      locksAt: new Date('2026-05-26T11:59:00.000Z'),
+      totalEntryAmount: 0n,
+      payoutAmount: 0n,
+    });
+    const cancelledRound = buildRound({
+      ...expiredRound,
+      status: RoundStatus.CANCELLED,
+      cancelledAt: now,
+    });
+    const tx = {
+      $executeRaw: jest.fn(),
+      round: {
+        findUnique: jest.fn().mockResolvedValue(expiredRound),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue(cancelledRound),
+      },
+      entry: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (txClient: typeof tx) => unknown) =>
+        callback(tx),
+      ),
+    };
+    const walletsService = {
+      refundEntryHolds: jest.fn(),
+    };
+    const service = new RoundsService(prisma as any, walletsService as any);
+
+    const result = await service.cancelExpiredOpenRoundForRoom(
+      'room-1',
+      expiredRound.id,
+    );
+
+    expect(tx.round.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: expiredRound.id,
+        status: RoundStatus.OPEN,
+      },
+      data: {
+        status: RoundStatus.CANCELLED,
+        cancelledAt: expect.any(Date),
+      },
+    });
+    expect(tx.round.updateMany.mock.calls[0][0].data).not.toHaveProperty(
+      'lockedAt',
+    );
+    expect(walletsService.refundEntryHolds).not.toHaveBeenCalled();
+    expect(result.currentRound.status).toBe(RoundStatus.CANCELLED);
+    expect(result.refundedCount).toBe(0);
+  });
+
+  it('refunds a single-entry expired OPEN round before opening the next round can proceed', async () => {
+    const expiredRound = buildRound({
+      locksAt: new Date('2026-05-26T11:59:00.000Z'),
+    });
+    const cancelledRound = buildRound({
+      ...expiredRound,
+      status: RoundStatus.CANCELLED,
+      cancelledAt: now,
+    });
+    const entry = buildEntry('a', 1_500n);
+    const tx = {
+      $executeRaw: jest.fn(),
+      round: {
+        findUnique: jest.fn().mockResolvedValue(expiredRound),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findUniqueOrThrow: jest.fn().mockResolvedValue(cancelledRound),
+      },
+      entry: {
+        findMany: jest.fn().mockResolvedValue([entry]),
+      },
+    };
+    const prisma = {
+      $transaction: jest.fn((callback: (txClient: typeof tx) => unknown) =>
+        callback(tx),
+      ),
+    };
+    const walletsService = {
+      refundEntryHolds: jest.fn().mockResolvedValue({
+        entryId: entry.id,
+        refunded: true,
+        amount: entry.amount,
+        reason: 'REFUNDED',
+      }),
+    };
+    const service = new RoundsService(prisma as any, walletsService as any);
+
+    const result = await service.cancelExpiredOpenRoundForRoom(
+      'room-1',
+      expiredRound.id,
+    );
+
+    expect(walletsService.refundEntryHolds).toHaveBeenCalledWith(tx, {
+      roundId: expiredRound.id,
+      entryId: entry.id,
+    });
+    expect(result.currentRound.status).toBe(RoundStatus.CANCELLED);
+    expect(result.refundedCount).toBe(1);
+    expect(result.refundedAmount).toBe('1500');
   });
 
   it('starts SETTLING from SPINNING without crediting payout yet', async () => {

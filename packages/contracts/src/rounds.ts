@@ -16,6 +16,17 @@ export const RoundStatusSchema = z.enum([
   "CANCELLED",
 ]);
 
+export const PublicRoundPhaseSchema = z.enum([
+  "ENTRY_OPEN",
+  "RANDOMIZING",
+  "SPINNING",
+  "RESULT",
+]);
+
+export const PublicRoundResultReasonSchema = z
+  .enum(["WINNER", "SKIPPED_EMPTY", "REFUNDED_SINGLE"])
+  .nullable();
+
 export const RoundSnapshotSchema = z.object({
   id: z.string(),
   roomId: z.string(),
@@ -41,6 +52,11 @@ export const RoundSnapshotSchema = z.object({
 
 export const LiveRoundSnapshotSchema = RoundSnapshotSchema.extend({
   msUntilLock: z.number().int().nonnegative(),
+  phase: PublicRoundPhaseSchema,
+  phaseLabel: z.string(),
+  msUntilPhaseEnd: z.number().int().nonnegative(),
+  msUntilNextRound: z.number().int().nonnegative().nullable(),
+  resultReason: PublicRoundResultReasonSchema,
 });
 
 export const FairnessProofSchema = z.object({
@@ -65,9 +81,11 @@ export const LatestRoundResultSchema = z.object({
 });
 
 export type RoundStatus = z.infer<typeof RoundStatusSchema>;
+export type PublicRoundPhase = z.infer<typeof PublicRoundPhaseSchema>;
+export type PublicRoundResultReason = z.infer<
+  typeof PublicRoundResultReasonSchema
+>;
 export type RoundSnapshot = z.infer<typeof RoundSnapshotSchema>;
 export type LiveRoundSnapshot = z.infer<typeof LiveRoundSnapshotSchema>;
 export type FairnessProof = z.infer<typeof FairnessProofSchema>;
 export type LatestRoundResult = z.infer<typeof LatestRoundResultSchema>;
-
-

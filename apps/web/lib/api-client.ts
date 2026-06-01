@@ -5,6 +5,7 @@ import type {
   LatestRoundResult,
   MeWallet,
   PlaceEntryInput,
+  RoomLiveSummary,
   RoomSnapshot,
   RoomLiveState,
   WalletSnapshot,
@@ -17,23 +18,7 @@ export type CategoryListItem = CategorySnapshot & {
   sortOrder?: number;
 };
 
-export type RoomListItem = Omit<RoomSnapshot, "name"> & {
-  name: string | null;
-  serverNow?: string;
-  receivedAtMs?: number;
-  currentRound?: {
-    id: string;
-    roundNumber?: number;
-    status: string;
-    locksAt?: string | null;
-    msUntilLock?: number;
-    playerCount: number;
-    entryCount?: number;
-    totalEntryAmount: string;
-    payoutAmount: string;
-    totalPool?: string;
-  } | null;
-};
+export type RoomListItem = RoomLiveSummary;
 
 export type AdminRoomCommand = "activate" | "pause" | "close" | "archive";
 
@@ -103,7 +88,7 @@ export const apiClient = {
   getRoomsByCategory(categorySlug: string) {
     const params = new URLSearchParams({ categorySlug });
 
-    return requestJson<RoomListItem[]>(`/rooms?${params.toString()}`).then(
+    return requestJson<RoomListItem[]>(`/rooms/live?${params.toString()}`).then(
       (rooms) => {
         const receivedAtMs = Date.now();
 

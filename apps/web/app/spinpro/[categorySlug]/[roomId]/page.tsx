@@ -6,6 +6,7 @@ import type {
   LiveRoundSnapshot,
 } from "@kingspin/contracts";
 import { useParams } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { ConnectionPill } from "../../../../components/layout/connection-pill";
 import { NavBar } from "../../../../components/layout/nav-bar";
 import { BottomNav } from "../../../../components/player/bottom-nav";
@@ -20,39 +21,61 @@ import { useCountdown } from "../../../../hooks/use-countdown";
 import { useRoom } from "../../../../hooks/use-room";
 import { useSession } from "../../../../lib/auth-client";
 import { formatCoins, formatMs, truncateId } from "../../../../lib/format";
+import { getPublicRoundPhase } from "../../../../lib/room-summary";
 import { useAuthStore } from "../../../../stores/auth-store";
 import { useRoomStore } from "../../../../stores/room-store";
 
 const PLAYER_PHASES = [
   "ENTRY OPEN",
-  "LOCKED / DRAW",
+  "RANDOMIZING",
   "SPINNING",
   "RESULT",
 ] as const;
 
-type PlayerPhase = (typeof PLAYER_PHASES)[number] | "SKIPPED / REFUNDED" | "WAITING";
+type PlayerPhase = (typeof PLAYER_PHASES)[number] | "WAITING";
 
-function getPlayerPhase(status: string | null | undefined): PlayerPhase {
-  switch (status) {
-    case "OPEN":
+function getPlayerPhase(
+  phase: string | null | undefined,
+  status?: string | null,
+): PlayerPhase {
+  switch (getPublicRoundPhase({ phase, status })) {
+    case "ENTRY_OPEN":
       return "ENTRY OPEN";
-    case "LOCKED":
-    case "DRAWING":
-      return "LOCKED / DRAW";
+    case "RANDOMIZING":
+      return "RANDOMIZING";
     case "SPINNING":
       return "SPINNING";
-    case "SETTLING":
-    case "COMPLETED":
+    case "RESULT":
       return "RESULT";
-    case "CANCELLED":
-      return "SKIPPED / REFUNDED";
     default:
       return "WAITING";
   }
 }
 
-function getPhaseCopy(status: string | null | undefined, msLeft: number) {
-  if (status === "OPEN") {
+function getPhaseCopy({
+  phase,
+  status,
+  resultReason,
+  msLeft,
+}: {
+  phase: string | null | undefined;
+  status: string | null | undefined;
+  resultReason?: string | null;
+  msLeft: number;
+}) {
+  const publicPhase = getPublicRoundPhase({ phase, status });
+
+  if (publicPhase === "ENTRY_OPEN") {
+    if (msLeft <= 0) {
+      return {
+        title: "ENTRY OPEN",
+        message: "Final second. Entries close on the server at zero.",
+        badge: "Closing",
+        tone: "border-[rgba(250,204,21,0.36)] bg-[rgba(250,204,21,0.08)]",
+        bar: "bg-[var(--gold)]",
+      };
+    }
+
     return {
       title: "ENTRY OPEN",
       message:
@@ -65,27 +88,17 @@ function getPhaseCopy(status: string | null | undefined, msLeft: number) {
     };
   }
 
-  if (status === "LOCKED") {
+  if (publicPhase === "RANDOMIZING") {
     return {
-      title: "LOCKED / DRAW",
-      message: "Entries locked. Assigning tickets.",
-      badge: "Locked",
-      tone: "border-[rgba(250,204,21,0.36)] bg-[rgba(250,204,21,0.08)]",
-      bar: "bg-[var(--gold)]",
+      title: "RANDOMIZING",
+      message: "Entries are closed. The server is resolving the result.",
+      badge: "Randomizing",
+      tone: "border-[rgba(45,212,191,0.34)] bg-[rgba(45,212,191,0.08)]",
+      bar: "bg-teal",
     };
   }
 
-  if (status === "DRAWING") {
-    return {
-      title: "LOCKED / DRAW",
-      message: "Selecting winner securely.",
-      badge: "Drawing",
-      tone: "border-[rgba(96,165,250,0.34)] bg-[rgba(96,165,250,0.08)]",
-      bar: "bg-blue-300",
-    };
-  }
-
-  if (status === "SPINNING") {
+  if (publicPhase === "SPINNING") {
     return {
       title: "SPINNING",
       message: "Wheel spinning. Revealing result.",
@@ -95,33 +108,33 @@ function getPhaseCopy(status: string | null | undefined, msLeft: number) {
     };
   }
 
-  if (status === "SETTLING") {
-    return {
-      title: "RESULT",
-      message: "Finalizing payout.",
-      badge: "Settling",
-      tone: "border-[rgba(45,212,191,0.34)] bg-[rgba(45,212,191,0.08)]",
-      bar: "bg-teal",
-    };
-  }
+  if (publicPhase === "RESULT") {
+    if (resultReason === "SKIPPED_EMPTY") {
+      return {
+        title: "RESULT",
+        message: "No entries were received. Next round starts soon.",
+        badge: "Skipped",
+        tone: "border-[rgba(148,163,184,0.28)] bg-white/[0.04]",
+        bar: "bg-white/[0.35]",
+      };
+    }
 
-  if (status === "COMPLETED") {
+    if (resultReason === "REFUNDED_SINGLE") {
+      return {
+        title: "RESULT",
+        message: "Only one player entered, so the entry was refunded.",
+        badge: "Refunded",
+        tone: "border-[rgba(250,204,21,0.36)] bg-[rgba(250,204,21,0.08)]",
+        bar: "bg-[var(--gold)]",
+      };
+    }
+
     return {
       title: "RESULT",
       message: "Winner revealed. Next round soon.",
       badge: "Complete",
       tone: "border-[rgba(250,204,21,0.38)] bg-[rgba(250,204,21,0.08)]",
       bar: "bg-[var(--gold)]",
-    };
-  }
-
-  if (status === "CANCELLED") {
-    return {
-      title: "SKIPPED / REFUNDED",
-      message: "Round skipped/refunded. Next round soon.",
-      badge: "Skipped",
-      tone: "border-[rgba(248,113,113,0.36)] bg-[rgba(248,113,113,0.08)]",
-      bar: "bg-[var(--red-hot)]",
     };
   }
 
@@ -134,17 +147,15 @@ function getPhaseCopy(status: string | null | undefined, msLeft: number) {
   };
 }
 
-function PhaseStepper({ status }: { status: string | null | undefined }) {
-  const playerPhase = getPlayerPhase(status);
+function PhaseStepper({
+  phase,
+  status,
+}: {
+  phase: string | null | undefined;
+  status?: string | null;
+}) {
+  const playerPhase = getPlayerPhase(phase, status);
   const activeIndex = PLAYER_PHASES.findIndex((phase) => phase === playerPhase);
-
-  if (playerPhase === "SKIPPED / REFUNDED") {
-    return (
-      <div className="rounded-md border border-[rgba(248,113,113,0.26)] bg-black/20 px-3 py-2 text-xs font-semibold text-text-secondary">
-        No winner was drawn for this round.
-      </div>
-    );
-  }
 
   return (
     <div className="grid grid-cols-4 gap-1">
@@ -163,10 +174,7 @@ function PhaseStepper({ status }: { status: string | null | undefined }) {
                     : "bg-white/[0.12]"
               } ${
                 isActive &&
-                (status === "LOCKED" ||
-                  status === "DRAWING" ||
-                  status === "SPINNING" ||
-                  status === "SETTLING")
+                (playerPhase === "RANDOMIZING" || playerPhase === "SPINNING")
                   ? "animate-pulse"
                   : ""
               }`}
@@ -189,97 +197,149 @@ function PhaseStepper({ status }: { status: string | null | undefined }) {
   );
 }
 
+function usePhaseMsLeft({
+  phaseKey,
+  serverNow,
+  msUntilPhaseEnd,
+}: {
+  phaseKey: string;
+  serverNow: string;
+  msUntilPhaseEnd?: number | null;
+}) {
+  const [clientNowMs, setClientNowMs] = useState(() => Date.now());
+  const targetAtMsRef = useRef<number>(Date.now());
+
+  useEffect(() => {
+    const serverNowMs = Date.parse(serverNow);
+    const initialMs =
+      typeof msUntilPhaseEnd === "number" && Number.isFinite(msUntilPhaseEnd)
+        ? Math.max(0, msUntilPhaseEnd)
+        : 0;
+
+    targetAtMsRef.current = Number.isFinite(serverNowMs)
+      ? Date.now() + initialMs
+      : Date.now();
+    setClientNowMs(Date.now());
+
+    const intervalId = window.setInterval(() => {
+      setClientNowMs(Date.now());
+    }, 1_000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [phaseKey, serverNow, msUntilPhaseEnd]);
+
+  return Math.max(0, targetAtMsRef.current - clientNowMs);
+}
+
 function MainPhasePanel({
   status,
+  phase,
+  resultReason,
   roundNumber,
   serverNow,
   locksAt,
+  msUntilPhaseEnd,
+  msUntilNextRound,
   durationMs,
   entryCount,
-  totalEntryAmount,
 }: {
   status: string | null | undefined;
+  phase: string | null | undefined;
+  resultReason?: string | null;
   roundNumber: number | null | undefined;
   serverNow: string;
   locksAt: string | null | undefined;
+  msUntilPhaseEnd?: number | null;
+  msUntilNextRound?: number | null;
   durationMs: number;
   entryCount: number;
-  totalEntryAmount: string;
 }) {
-  const { msLeft } = useCountdown({
+  const publicPhase = getPublicRoundPhase({ phase, status });
+  const { msLeft: openMsLeft } = useCountdown({
     locksAt,
     serverNow,
-    enabled: status === "OPEN",
+    enabled: publicPhase === "ENTRY_OPEN",
   });
-  const copy = getPhaseCopy(status, msLeft);
+  const phaseMsLeft = usePhaseMsLeft({
+    phaseKey: `${roundNumber ?? "pending"}:${phase ?? status ?? "waiting"}`,
+    serverNow,
+    msUntilPhaseEnd,
+  });
+  const msLeft = publicPhase === "ENTRY_OPEN" ? openMsLeft : phaseMsLeft;
+  const nextRoundMsLeft =
+    publicPhase === "RESULT" && typeof msUntilNextRound === "number"
+      ? phaseMsLeft
+      : null;
+  const copy = getPhaseCopy({ phase, status, resultReason, msLeft });
   const remainingRatio =
-    status === "OPEN" && durationMs > 0
+    publicPhase === "ENTRY_OPEN" && durationMs > 0
       ? Math.max(0, Math.min(1, msLeft / durationMs))
-      : status
-        ? 1
-        : 0;
+      : publicPhase === "RESULT" && typeof nextRoundMsLeft === "number"
+        ? Math.max(0, Math.min(1, nextRoundMsLeft / 10_000))
+        : publicPhase
+          ? 1
+          : 0;
 
   return (
     <section
-      className={`arcadia-surface relative overflow-hidden rounded-lg border p-4 ${copy.tone}`}
+      className={`arcadia-surface relative overflow-hidden rounded-lg border p-3 ${copy.tone}`}
       aria-live="polite"
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(250,204,21,0.64)] to-transparent" />
 
-      <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="grid gap-3 lg:grid-cols-[0.9fr_1.4fr_auto] lg:items-center">
         <div className="min-w-0">
-          <p className="text-xs font-black uppercase tracking-[0.22em] text-[var(--gold)]">
-            Round #{roundNumber ?? "-"}
-          </p>
-          <h2 className="mt-1 font-display text-2xl font-black text-text-primary">
-            {copy.title}
-          </h2>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant={phaseBadgeVariant(phase ?? status)}>
+              {copy.title}
+            </Badge>
+            <span className="font-mono text-xs font-black uppercase tracking-[0.14em] text-text-dim">
+              Round #{roundNumber ?? "-"}
+            </span>
+          </div>
           <p className="mt-1 text-sm text-text-secondary">{copy.message}</p>
         </div>
 
-        <div className="grid gap-2 text-right">
-          <Badge variant={phaseBadgeVariant(status)}>{copy.badge}</Badge>
-          {status === "OPEN" ? (
-            <p className="font-mono text-2xl font-black text-text-primary">
-              {formatMs(msLeft)}
-            </p>
-          ) : null}
+        <PhaseStepper phase={phase} status={status} />
+
+        <div className="text-left lg:text-right">
+          <p className="text-xs font-bold uppercase text-text-dim">
+            {copy.badge}
+          </p>
+          <p className="font-mono text-xl font-black text-text-primary">
+            {publicPhase === "ENTRY_OPEN"
+              ? formatMs(msLeft)
+              : publicPhase === "RESULT" && nextRoundMsLeft !== null
+                ? formatMs(nextRoundMsLeft)
+                : entryCount}
+          </p>
         </div>
       </div>
 
-      <div className="mt-4 h-2 overflow-hidden rounded-full bg-[var(--bg-raised)]">
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--bg-raised)]">
         <div
           className={`h-full rounded-full ${copy.bar} transition-[width] duration-300`}
           style={{ width: `${remainingRatio * 100}%` }}
         />
       </div>
-
-      <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_0.32fr_0.32fr]">
-        <PhaseStepper status={status} />
-
-        <div className="rounded-md border border-[var(--border)] bg-black/20 px-3 py-2">
-          <p className="text-xs font-bold uppercase text-text-dim">Pool</p>
-          <p className="mt-1 font-mono text-sm font-black text-[var(--gold)]">
-            {formatCoins(totalEntryAmount)}
-          </p>
-        </div>
-
-        <div className="rounded-md border border-[var(--border)] bg-black/20 px-3 py-2">
-          <p className="text-xs font-bold uppercase text-text-dim">Entries</p>
-          <p className="mt-1 font-mono text-sm font-black text-text-primary">
-            {entryCount}
-          </p>
-        </div>
-      </div>
     </section>
   );
 }
 
-function winnerName(entry: EntryWithPlayerSnapshot | null | undefined, userId?: string | null) {
+function winnerName(
+  entry: EntryWithPlayerSnapshot | null | undefined,
+  userId?: string | null,
+) {
   return (
     entry?.player?.username ??
     entry?.player?.fullName ??
-    (entry?.userId ? truncateId(entry.userId, 6) : userId ? truncateId(userId, 6) : "Pending")
+    (entry?.userId
+      ? truncateId(entry.userId, 6)
+      : userId
+        ? truncateId(userId, 6)
+        : "Pending")
   );
 }
 
@@ -292,14 +352,39 @@ function RoundResultPanel({
   winnerEntry: EntryWithPlayerSnapshot | null;
   latestResult: LatestRoundResult | null;
 }) {
-  if (
-    currentRound.status !== "SETTLING" &&
-    currentRound.status !== "COMPLETED"
-  ) {
+  if (getPublicRoundPhase(currentRound) !== "RESULT") {
     return null;
   }
 
   const isCompleted = currentRound.status === "COMPLETED";
+  const skippedEmpty = currentRound.resultReason === "SKIPPED_EMPTY";
+  const refundedSingle = currentRound.resultReason === "REFUNDED_SINGLE";
+
+  if (skippedEmpty || refundedSingle) {
+    return (
+      <section className="arcadia-surface relative overflow-hidden rounded-lg border border-[rgba(250,204,21,0.28)] bg-[rgba(250,204,21,0.06)] p-4">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[var(--gold)] to-transparent" />
+
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-black uppercase tracking-[0.22em] text-[var(--gold)]">
+              Result
+            </p>
+            <h2 className="mt-1 font-display text-xl font-black text-text-primary">
+              {skippedEmpty ? "Round skipped" : "Entry refunded"}
+            </h2>
+            <p className="mt-1 text-sm text-text-secondary">
+              {skippedEmpty
+                ? "No entries were received before the timer ended."
+                : "A single-player round is refunded without a draw."}
+            </p>
+          </div>
+
+          <Badge variant="locked">Next round soon</Badge>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="arcadia-surface relative overflow-hidden rounded-lg border border-[rgba(45,212,191,0.28)] bg-[rgba(45,212,191,0.06)] p-4">
@@ -362,13 +447,7 @@ function RoundResultPanel({
   );
 }
 
-function HeaderStat({
-  label,
-  value,
-}: {
-  label: string;
-  value: string;
-}) {
+function HeaderStat({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-[120px] rounded-md border border-[var(--border)] bg-white/[0.04] px-3 py-2">
       <p className="text-xs font-bold uppercase text-text-dim">{label}</p>
@@ -441,6 +520,8 @@ export default function LiveRoomPage() {
 
   const currentRound = state.currentRound;
   const roundStatus = currentRound?.status;
+  const roundPhase = currentRound?.phase ?? null;
+  const publicPhase = getPublicRoundPhase(currentRound);
   const totalEntryAmount = currentRound?.totalEntryAmount ?? "0";
   const isFixedMode = state.room.gameMode === "FIXED_EQUAL_CHANCE";
   const modeLabel = isFixedMode
@@ -448,7 +529,7 @@ export default function LiveRoomPage() {
     : "Pro Mode / Flexible";
 
   const visibleWinnerEntryId =
-    roundStatus === "SETTLING" || roundStatus === "COMPLETED"
+    publicPhase === "RESULT" && currentRound?.resultReason !== "SKIPPED_EMPTY"
       ? currentRound?.winnerEntryId
       : null;
 
@@ -473,7 +554,7 @@ export default function LiveRoomPage() {
                   {state.category.name}
                 </p>
                 <h1 className="mt-1 truncate font-display text-3xl font-black md:text-4xl">
-                  {state.room.name}
+                  {state.room.name ?? "SpinPro Room"}
                 </h1>
 
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
@@ -483,8 +564,8 @@ export default function LiveRoomPage() {
                   <span className="rounded-md border border-[var(--border)] bg-white/[0.04] px-2 py-1 font-mono">
                     Socket {connectionStatus}
                   </span>
-                  <Badge variant={phaseBadgeVariant(roundStatus)}>
-                    {getPlayerPhase(roundStatus)}
+                  <Badge variant={phaseBadgeVariant(roundPhase ?? roundStatus)}>
+                    {getPlayerPhase(roundPhase, roundStatus)}
                   </Badge>
                   <span className="rounded-md border border-[var(--border)] bg-white/[0.04] px-2 py-1 font-mono">
                     {modeLabel}
@@ -508,12 +589,15 @@ export default function LiveRoomPage() {
 
           <MainPhasePanel
             status={roundStatus}
+            phase={roundPhase}
+            resultReason={currentRound?.resultReason}
             roundNumber={currentRound?.roundNumber}
             serverNow={state.serverNow}
             locksAt={currentRound?.locksAt}
+            msUntilPhaseEnd={currentRound?.msUntilPhaseEnd}
+            msUntilNextRound={currentRound?.msUntilNextRound}
             durationMs={state.room.roundDurationMs}
             entryCount={state.entries.length}
-            totalEntryAmount={totalEntryAmount}
           />
 
           <SpinningWheel
@@ -521,7 +605,12 @@ export default function LiveRoomPage() {
             totalEntryAmount={totalEntryAmount}
             spinAngle={currentRound?.spinAngle}
             status={roundStatus}
+            phase={roundPhase}
+            resultReason={currentRound?.resultReason}
             winnerEntryId={visibleWinnerEntryId}
+            locksAt={currentRound?.locksAt}
+            serverNow={state.serverNow}
+            durationMs={state.room.roundDurationMs}
           />
 
           {currentRound ? (
@@ -558,6 +647,7 @@ export default function LiveRoomPage() {
 
           <EntryPanel
             status={roundStatus}
+            phase={roundPhase}
             wallet={wallet}
             hasSession={Boolean(session?.user)}
             emailVerified={session?.user.emailVerified}

@@ -2,25 +2,29 @@
 
 import type { EntryWithPlayerSnapshot } from "@kingspin/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useCountdown } from "../../hooks/use-countdown";
 import { formatCoins } from "../../lib/format";
+import { getPublicRoundPhase } from "../../lib/room-summary";
 import { WheelPointer } from "./wheel-pointer";
 
 type SpinningWheelProps = {
-  entries: EntryWithPlayerSnapshot[];
+  entries: (EntryWithPlayerSnapshot & { pending?: boolean })[];
   totalEntryAmount: string;
   spinAngle: number | null | undefined;
   status: string | null | undefined;
+  phase?: string | null | undefined;
+  resultReason?: string | null | undefined;
   winnerEntryId?: string | null;
+  locksAt?: string | null;
+  serverNow?: string | null;
+  durationMs?: number;
 };
 
 type WheelPhase =
-  | "OPEN"
-  | "LOCKED"
-  | "DRAWING"
+  | "ENTRY_OPEN"
+  | "RANDOMIZING"
   | "SPINNING"
-  | "SETTLING"
-  | "COMPLETED"
-  | "CANCELLED"
+  | "RESULT"
   | "WAITING";
 
 export const WHEEL_SLICE_COLORS = [
@@ -36,25 +40,25 @@ export const WHEEL_SLICE_COLORS = [
   "#84CC16",
 ];
 
-const SPIN_DURATION_MS = 7000;
+const SPIN_DURATION_MS = 5000;
+const WHEEL_CENTER = 150;
+const WHEEL_OUTER_RADIUS = 144;
+const WHEEL_SLICE_RADIUS = 132;
+const COUNTDOWN_CIRCUMFERENCE = 2 * Math.PI * WHEEL_OUTER_RADIUS;
 
 export function getWheelSliceColor(index: number) {
   return WHEEL_SLICE_COLORS[index % WHEEL_SLICE_COLORS.length] ?? "#F6C547";
 }
 
-function normalizePhase(status: string | null | undefined): WheelPhase {
-  switch (status) {
-    case "OPEN":
-    case "LOCKED":
-    case "DRAWING":
-    case "SPINNING":
-    case "SETTLING":
-    case "COMPLETED":
-    case "CANCELLED":
-      return status;
-    default:
-      return "WAITING";
-  }
+function normalizePhase(
+  phase: string | null | undefined,
+  status: string | null | undefined,
+): WheelPhase {
+  return getPublicRoundPhase({ phase, status }) ?? "WAITING";
+}
+
+function normalizeDegrees(value: number) {
+  return ((value % 360) + 360) % 360;
 }
 
 function polarToCartesian(
@@ -105,7 +109,7 @@ function entryWeight(entry: EntryWithPlayerSnapshot) {
 
 function getWheelStatusCopy(phase: WheelPhase) {
   switch (phase) {
-    case "OPEN":
+    case "ENTRY_OPEN":
       return {
         label: "Entries open",
         helper: "Players can enter while the countdown is running.",
@@ -114,22 +118,13 @@ function getWheelStatusCopy(phase: WheelPhase) {
         overlay: null,
       };
 
-    case "LOCKED":
+    case "RANDOMIZING":
       return {
-        label: "Entries locked",
-        helper: "Final ticket ranges are being assigned.",
+        label: "Randomizing",
+        helper: "Tickets and the winning position are being resolved.",
         badge:
-          "border-[rgba(250,204,21,0.32)] bg-[rgba(250,204,21,0.1)] text-[var(--gold)]",
-        overlay: "Assigning tickets",
-      };
-
-    case "DRAWING":
-      return {
-        label: "Selecting winner",
-        helper: "The server is resolving the winning ticket securely.",
-        badge:
-          "border-[rgba(96,165,250,0.32)] bg-[rgba(96,165,250,0.1)] text-blue-300",
-        overlay: "Drawing winner",
+          "border-[rgba(45,212,191,0.32)] bg-[rgba(45,212,191,0.1)] text-teal",
+        overlay: "Randomizing",
       };
 
     case "SPINNING":
@@ -141,31 +136,13 @@ function getWheelStatusCopy(phase: WheelPhase) {
         overlay: "Revealing winner",
       };
 
-    case "SETTLING":
+    case "RESULT":
       return {
-        label: "Finalizing payout",
-        helper: "The ledger payout is being settled safely.",
-        badge:
-          "border-[rgba(251,146,60,0.32)] bg-[rgba(251,146,60,0.1)] text-orange-300",
-        overlay: "Settling payout",
-      };
-
-    case "COMPLETED":
-      return {
-        label: "Round complete",
-        helper: "Winner selected and payout settled. Next round starts soon.",
+        label: "Result",
+        helper: "Result is visible. Next round starts soon.",
         badge:
           "border-[rgba(250,204,21,0.32)] bg-[rgba(250,204,21,0.1)] text-[var(--gold)]",
-        overlay: "Winner revealed",
-      };
-
-    case "CANCELLED":
-      return {
-        label: "Round skipped",
-        helper: "This round was skipped or refunded. Next round is preparing.",
-        badge:
-          "border-[rgba(248,113,113,0.36)] bg-[rgba(248,113,113,0.1)] text-red-hot",
-        overlay: "Skipped",
+        overlay: "Result",
       };
 
     default:
@@ -184,7 +161,9 @@ function getFinalWheelAngle(spinAngle: number | null | undefined) {
     return null;
   }
 
-  return 360 - (spinAngle % 360);
+  const normalized = normalizeDegrees(spinAngle);
+
+  return normalizeDegrees(360 - normalized);
 }
 
 function devLog(message: string, details?: unknown) {
@@ -203,7 +182,12 @@ export function SpinningWheel({
   totalEntryAmount,
   spinAngle,
   status,
+  phase: publicPhase,
+  resultReason,
   winnerEntryId,
+  locksAt,
+  serverNow,
+  durationMs = 45_000,
 }: SpinningWheelProps) {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [rotation, setRotation] = useState(0);
@@ -211,9 +195,21 @@ export function SpinningWheel({
 
   const previousPhaseRef = useRef<WheelPhase>("WAITING");
   const spinStartedForKeyRef = useRef<string | null>(null);
+  const resultSettledForKeyRef = useRef<string | null>(null);
 
-  const phase = normalizePhase(status);
+  const phase = normalizePhase(publicPhase, status);
   const statusCopy = getWheelStatusCopy(phase);
+
+  const { msLeft } = useCountdown({
+    locksAt,
+    serverNow,
+    enabled: phase === "ENTRY_OPEN",
+  });
+
+  const countdownRatio =
+    phase === "ENTRY_OPEN" && durationMs > 0
+      ? Math.max(0, Math.min(1, msLeft / durationMs))
+      : 0;
 
   const weights = useMemo(() => entries.map(entryWeight), [entries]);
 
@@ -245,7 +241,13 @@ export function SpinningWheel({
         index,
         startAngle,
         endAngle,
-        path: describeSlice(150, 150, 132, startAngle, endAngle),
+        path: describeSlice(
+          WHEEL_CENTER,
+          WHEEL_CENTER,
+          WHEEL_SLICE_RADIUS,
+          startAngle,
+          endAngle,
+        ),
       };
     });
   }, [entries, total, weights]);
@@ -268,106 +270,116 @@ export function SpinningWheel({
     const previousPhase = previousPhaseRef.current;
     previousPhaseRef.current = phase;
 
-    if (phase === "OPEN" || phase === "WAITING" || phase === "CANCELLED") {
+    const setTransitionIfChanged = (nextTransitionMs: number) => {
+      setTransitionMs((currentTransitionMs) =>
+        currentTransitionMs === nextTransitionMs
+          ? currentTransitionMs
+          : nextTransitionMs,
+      );
+    };
+
+    if (phase === "ENTRY_OPEN" || phase === "WAITING") {
       spinStartedForKeyRef.current = null;
-      setTransitionMs(phase === "OPEN" ? 700 : 400);
-      setRotation(0);
+      resultSettledForKeyRef.current = null;
+
+      setTransitionIfChanged(phase === "ENTRY_OPEN" ? 700 : 400);
+
+      setRotation((currentRotation) =>
+        currentRotation === 0 ? currentRotation : 0,
+      );
+
       return;
     }
 
-    if (phase === "LOCKED" || phase === "DRAWING") {
-      setTransitionMs(500);
+    if (phase === "RANDOMIZING") {
+      resultSettledForKeyRef.current = null;
+      setTransitionIfChanged(500);
       return;
     }
 
     if (phase === "SPINNING" && finalAngle !== null) {
       if (spinStartedForKeyRef.current !== spinKey) {
         spinStartedForKeyRef.current = spinKey;
+        resultSettledForKeyRef.current = null;
 
-        const currentRotation = rotation;
-        const currentNormalized = ((currentRotation % 360) + 360) % 360;
-        const finalNormalized = ((finalAngle % 360) + 360) % 360;
-        const distanceToFinal =
-          (finalNormalized - currentNormalized + 360) % 360;
-        const extraTurns = prefersReducedMotion ? 0 : 5;
-        const nextRotation =
-          currentRotation + extraTurns * 360 + distanceToFinal;
+        const nextTransitionMs = prefersReducedMotion ? 0 : SPIN_DURATION_MS;
+        setTransitionIfChanged(nextTransitionMs);
 
-        devLog("spinning animation started", {
-          from: previousPhase,
-          to: phase,
-          spinAngle,
-          winnerEntryId,
-          nextRotation,
+        setRotation((currentRotation) => {
+          const currentNormalized = normalizeDegrees(currentRotation);
+          const distanceToFinal = normalizeDegrees(
+            finalAngle - currentNormalized,
+          );
+          const extraTurns = prefersReducedMotion ? 0 : 5;
+          const nextRotation =
+            currentRotation + extraTurns * 360 + distanceToFinal;
+
+          devLog("spinning animation started", {
+            from: previousPhase,
+            to: phase,
+            spinAngle,
+            winnerEntryId,
+            nextRotation,
+          });
+
+          return nextRotation;
         });
-
-        setTransitionMs(prefersReducedMotion ? 0 : SPIN_DURATION_MS);
-        setRotation(nextRotation);
       }
 
       return;
     }
 
-    if (
-      (phase === "SETTLING" || phase === "COMPLETED") &&
-      finalAngle !== null
-    ) {
-      const currentTurns = Math.floor(rotation / 360);
-      const minimumRotation = currentTurns * 360 + finalAngle;
-      const finalRotation =
-        minimumRotation < rotation ? minimumRotation + 360 : minimumRotation;
+    if (phase === "RESULT" && finalAngle !== null) {
+      if (resultSettledForKeyRef.current !== spinKey) {
+        resultSettledForKeyRef.current = spinKey;
+        setTransitionIfChanged(500);
 
-      setTransitionMs(phase === "COMPLETED" ? 500 : 900);
-      setRotation(finalRotation);
+        setRotation((currentRotation) => {
+          const currentNormalized = normalizeDegrees(currentRotation);
+          const distanceToFinal = normalizeDegrees(
+            finalAngle - currentNormalized,
+          );
+
+          if (distanceToFinal === 0) {
+            return currentRotation;
+          }
+
+          return currentRotation + distanceToFinal;
+        });
+      }
     }
   }, [
     finalAngle,
     phase,
     prefersReducedMotion,
-    rotation,
     spinAngle,
     spinKey,
     winnerEntryId,
   ]);
 
-  const isSuspensePhase =
-    phase === "LOCKED" || phase === "DRAWING" || phase === "SPINNING";
-
-  const shouldPulse =
-    !prefersReducedMotion &&
-    (phase === "LOCKED" ||
-      phase === "DRAWING" ||
-      phase === "SPINNING" ||
-      phase === "SETTLING");
-
-  const showWinnerName = phase === "COMPLETED" || phase === "SETTLING";
+  const isSuspensePhase = phase === "RANDOMIZING" || phase === "SPINNING";
+  const shouldPulse = !prefersReducedMotion && phase === "SPINNING";
+  const showWinnerName = phase === "RESULT" && resultReason !== "SKIPPED_EMPTY";
 
   return (
-    <section className="arcadia-surface relative overflow-hidden rounded-lg p-4 md:p-6">
+    <section className="arcadia-surface relative overflow-hidden rounded-lg p-3 md:p-5">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(250,204,21,0.7)] to-transparent" />
-      <div className="pointer-events-none absolute left-1/2 top-1/2 h-56 w-56 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[rgba(250,204,21,0.08)] blur-3xl" />
 
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
         <div>
           <p className="text-xs font-black uppercase tracking-[0.22em] text-[var(--gold)]">
             Prize Wheel
-          </p>
-          <h2 className="mt-1 font-display text-xl font-black text-text-primary">
-            {statusCopy.label}
-          </h2>
-          <p className="mt-1 text-sm text-text-secondary">
-            {statusCopy.helper}
           </p>
         </div>
 
         <div
           className={`rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.16em] ${statusCopy.badge}`}
         >
-          {phase === "WAITING" ? "NO ROUND" : phase}
+          {phase === "WAITING" ? "PREPARING" : statusCopy.label}
         </div>
       </div>
 
-      <div className="relative flex min-h-[320px] items-center justify-center md:min-h-[390px]">
+      <div className="relative flex min-h-[390px] items-center justify-center md:min-h-[520px]">
         <WheelPointer />
 
         {statusCopy.overlay ? (
@@ -388,14 +400,34 @@ export function SpinningWheel({
           }
           className="relative z-10 drop-shadow-2xl"
           style={{
-            width: "clamp(280px, 42vw, 390px)",
-            height: "clamp(280px, 42vw, 390px)",
-            transform: `rotate(${rotation}deg)`,
-            transition: prefersReducedMotion
-              ? "none"
-              : `transform ${transitionMs}ms cubic-bezier(0.05, 0.8, 0.15, 1)`,
+            width: "clamp(320px, 80vw, 480px)",
+            height: "clamp(320px, 80vw, 480px)",
           }}
         >
+          <defs>
+            <radialGradient id="wheelHubGlow" cx="50%" cy="50%" r="60%">
+              <stop offset="0%" stopColor="rgba(250,204,21,0.22)" />
+              <stop offset="55%" stopColor="rgba(17,24,39,0.95)" />
+              <stop offset="100%" stopColor="rgba(8,12,20,1)" />
+            </radialGradient>
+
+            <filter id="wheelSoftGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="3" result="blur" />
+              <feMerge>
+                <feMergeNode in="blur" />
+                <feMergeNode in="SourceGraphic" />
+              </feMerge>
+            </filter>
+          </defs>
+
+          <circle
+            cx="150"
+            cy="150"
+            r="146"
+            fill="rgba(250,204,21,0.1)"
+            filter="url(#wheelSoftGlow)"
+          />
+
           <circle
             cx="150"
             cy="150"
@@ -404,6 +436,21 @@ export function SpinningWheel({
             stroke="#F6C547"
             strokeWidth="5"
           />
+
+          {phase === "ENTRY_OPEN" ? (
+            <circle
+              cx="150"
+              cy="150"
+              r="144"
+              fill="none"
+              stroke="#4ADE80"
+              strokeWidth="5"
+              strokeLinecap="round"
+              strokeDasharray={COUNTDOWN_CIRCUMFERENCE}
+              strokeDashoffset={COUNTDOWN_CIRCUMFERENCE * (1 - countdownRatio)}
+              transform="rotate(-90 150 150)"
+            />
+          ) : null}
 
           <circle
             cx="150"
@@ -414,8 +461,16 @@ export function SpinningWheel({
             strokeWidth="2"
           />
 
-          {!hasEntries ? (
-            <>
+          <g
+            style={{
+              transform: `rotate(${rotation}deg)`,
+              transformOrigin: "150px 150px",
+              transition: prefersReducedMotion
+                ? "none"
+                : `transform ${transitionMs}ms cubic-bezier(0.15, 0, 0.1, 1)`,
+            }}
+          >
+            {!hasEntries ? (
               <circle
                 cx="150"
                 cy="150"
@@ -424,73 +479,86 @@ export function SpinningWheel({
                 stroke="rgba(250,204,21,0.24)"
                 strokeWidth="3"
               />
+            ) : entries.length === 1 ? (
+              <circle
+                cx="150"
+                cy="150"
+                r="132"
+                fill={getWheelSliceColor(0)}
+                opacity={entries[0]?.pending ? 0.72 : 1}
+                stroke={
+                  entries[0]?.id === winnerEntryId && phase === "RESULT"
+                    ? "#FFFFFF"
+                    : "#080C14"
+                }
+                strokeWidth={
+                  entries[0]?.id === winnerEntryId && phase === "RESULT"
+                    ? "7"
+                    : "3"
+                }
+              />
+            ) : (
+              slices.map(({ entry, index, path }) => {
+                const isWinner =
+                  phase === "RESULT" && winnerEntryId === entry.id;
+
+                return (
+                  <path
+                    key={entry.id}
+                    d={path}
+                    fill={getWheelSliceColor(index)}
+                    opacity={entry.pending ? 0.72 : 1}
+                    stroke={isWinner ? "#FFFFFF" : "#080C14"}
+                    strokeWidth={isWinner ? "7" : "3"}
+                  />
+                );
+              })
+            )}
+          </g>
+
+          {!hasEntries ? (
+            <>
               <text
                 x="150"
-                y="142"
+                y="138"
                 textAnchor="middle"
-                className="fill-text-primary text-sm font-black"
+                className="fill-text-primary text-xs font-black"
               >
-                Waiting for entries
+                Waiting
               </text>
               <text
                 x="150"
-                y="166"
+                y="158"
                 textAnchor="middle"
-                className="fill-text-dim text-xs"
+                className="fill-text-dim text-[10px]"
               >
                 Pool is empty
               </text>
             </>
-          ) : entries.length === 1 ? (
-            <circle
-              cx="150"
-              cy="150"
-              r="132"
-              fill={getWheelSliceColor(0)}
-              stroke={
-                entries[0]?.id === winnerEntryId &&
-                (phase === "COMPLETED" || phase === "SETTLING")
-                  ? "#FFFFFF"
-                  : "#080C14"
-              }
-              strokeWidth={
-                entries[0]?.id === winnerEntryId &&
-                (phase === "COMPLETED" || phase === "SETTLING")
-                  ? "7"
-                  : "3"
-              }
-            />
-          ) : (
-            slices.map(({ entry, index, path }) => {
-              const isWinner =
-                (phase === "COMPLETED" || phase === "SETTLING") &&
-                winnerEntryId === entry.id;
-
-              return (
-                <path
-                  key={entry.id}
-                  d={path}
-                  fill={getWheelSliceColor(index)}
-                  stroke={isWinner ? "#FFFFFF" : "#080C14"}
-                  strokeWidth={isWinner ? "7" : "3"}
-                />
-              );
-            })
-          )}
+          ) : null}
 
           <circle
             cx="150"
             cy="150"
-            r="53"
-            fill="#080C14"
-            stroke="rgba(250,204,21,0.8)"
+            r="61"
+            fill="rgba(250,204,21,0.16)"
+            stroke="rgba(250,204,21,0.44)"
+            strokeWidth="2"
+          />
+
+          <circle
+            cx="150"
+            cy="150"
+            r="58"
+            fill="url(#wheelHubGlow)"
+            stroke="rgba(250,204,21,0.9)"
             strokeWidth="5"
           />
 
           <circle
             cx="150"
             cy="150"
-            r="42"
+            r="45"
             fill="#111827"
             stroke="rgba(255,255,255,0.12)"
             strokeWidth="2"
@@ -498,26 +566,34 @@ export function SpinningWheel({
 
           <text
             x="150"
-            y="143"
+            y="132"
             textAnchor="middle"
-            className="fill-text-primary text-lg font-black"
+            className="fill-[var(--gold)] text-[10px] font-black uppercase tracking-widest"
           >
-            {hasEntries ? entries.length : "0"}
+            POOL
           </text>
           <text
             x="150"
-            y="165"
+            y="154"
             textAnchor="middle"
-            className="fill-text-secondary text-xs"
+            className="fill-text-primary text-lg font-black"
           >
-            players
+            {formatCoins(totalEntryAmount)}
+          </text>
+          <text
+            x="150"
+            y="174"
+            textAnchor="middle"
+            className="fill-text-secondary text-[10px]"
+          >
+            {entries.length} {entries.length === 1 ? "entry" : "entries"}
           </text>
         </svg>
 
         {shouldPulse ? (
           <>
-            <div className="pointer-events-none absolute h-[86%] w-[86%] rounded-full border border-[rgba(250,204,21,0.18)] animate-pulse" />
-            <div className="pointer-events-none absolute h-[72%] w-[72%] rounded-full border border-[rgba(232,121,249,0.12)] animate-pulse" />
+            <div className="pointer-events-none absolute h-[86%] w-[86%] animate-pulse rounded-full border border-[rgba(250,204,21,0.18)]" />
+            <div className="pointer-events-none absolute h-[72%] w-[72%] animate-pulse rounded-full border border-[rgba(232,121,249,0.12)]" />
           </>
         ) : null}
 
@@ -525,42 +601,21 @@ export function SpinningWheel({
           <div className="pointer-events-none absolute bottom-3 z-20 rounded-full bg-black/45 px-4 py-2 text-center text-xs font-semibold text-text-secondary backdrop-blur">
             {phase === "SPINNING"
               ? "Server result locked · wheel reveal running"
-              : phase === "DRAWING"
-                ? "Provably fair draw in progress"
-                : "Entries are closed for this round"}
+              : "Randomizing round"}
           </div>
         ) : null}
       </div>
 
-      <div className="mt-4 grid gap-2 sm:grid-cols-3">
-        <div className="rounded-md border border-[var(--border)] bg-[rgba(255,255,255,0.03)] px-3 py-2">
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-text-dim">
-            Pool
-          </p>
-          <p className="mt-1 font-mono text-sm font-black text-[var(--gold)]">
-            {formatCoins(totalEntryAmount)}
-          </p>
-        </div>
+      <div className="mt-2 flex flex-wrap items-center justify-center gap-2 text-sm text-text-secondary">
+        <span>{statusCopy.helper}</span>
 
-        <div className="rounded-md border border-[var(--border)] bg-[rgba(255,255,255,0.03)] px-3 py-2">
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-text-dim">
-            Entries
-          </p>
-          <p className="mt-1 font-mono text-sm font-black text-text-primary">
-            {entries.length}
-          </p>
-        </div>
-
-        <div className="rounded-md border border-[var(--border)] bg-[rgba(255,255,255,0.03)] px-3 py-2">
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-text-dim">
-            Winner
-          </p>
-          <p className="mt-1 truncate font-mono text-sm font-black text-text-primary">
-            {showWinnerName
-              ? (winner?.player?.username ?? winner?.player?.fullName ?? "Revealing")
-              : "Pending"}
-          </p>
-        </div>
+        {showWinnerName ? (
+          <span className="font-mono font-black text-[var(--gold)]">
+            {winner?.player?.username ??
+              winner?.player?.fullName ??
+              "Revealing"}
+          </span>
+        ) : null}
       </div>
     </section>
   );

@@ -6,7 +6,7 @@ import { formatCoins, ticketRangeLabel } from "../../lib/format";
 import { getWheelSliceColor } from "./spinning-wheel";
 
 type PlayersListProps = {
-  entries: EntryWithPlayerSnapshot[];
+  entries: (EntryWithPlayerSnapshot & { pending?: boolean })[];
   totalEntryAmount: string;
   winnerEntryId?: string | null;
 };
@@ -24,9 +24,7 @@ function getEntryChance(entryAmount: string, totalEntryAmount: string) {
 
 function playerName(entry: EntryWithPlayerSnapshot, index: number) {
   return (
-    entry.player?.username ??
-    entry.player?.fullName ??
-    `Player ${index + 1}`
+    entry.player?.username ?? entry.player?.fullName ?? `Player ${index + 1}`
   );
 }
 
@@ -37,21 +35,34 @@ export function PlayersList({
 }: PlayersListProps) {
   const sortedEntries = useMemo(() => {
     return [...entries].sort((left, right) => {
-      const rightAmount = Number(right.amount);
-      const leftAmount = Number(left.amount);
+      const leftTime = new Date(left.createdAt).getTime();
+      const rightTime = new Date(right.createdAt).getTime();
 
-      if (rightAmount !== leftAmount) {
-        return rightAmount - leftAmount;
+      if (leftTime !== rightTime) {
+        return leftTime - rightTime;
       }
 
       return left.id.localeCompare(right.id);
     });
   }, [entries]);
 
-  const topEntry = sortedEntries[0] ?? null;
+  const topEntry = useMemo(() => {
+    return (
+      [...entries].sort((left, right) => {
+        const rightAmount = Number(right.amount);
+        const leftAmount = Number(left.amount);
+
+        if (rightAmount !== leftAmount) {
+          return rightAmount - leftAmount;
+        }
+
+        return left.id.localeCompare(right.id);
+      })[0] ?? null
+    );
+  }, [entries]);
 
   return (
-    <section className="arcadia-surface relative overflow-hidden rounded-lg p-5">
+    <section className="arcadia-surface relative overflow-hidden rounded-lg p-4">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(250,204,21,0.65)] to-transparent" />
 
       <div className="flex items-start justify-between gap-3">
@@ -59,11 +70,9 @@ export function PlayersList({
           <p className="text-xs font-black uppercase tracking-[0.22em] text-[var(--gold)]">
             Players
           </p>
-          <h2 className="mt-1 font-display text-xl font-black text-text-primary">
-            Live Entries
-          </h2>
           <p className="mt-1 text-sm text-text-secondary">
-            {entries.length} {entries.length === 1 ? "player" : "players"} in this round
+            {entries.length} {entries.length === 1 ? "player" : "players"} in
+            this round
           </p>
         </div>
 
@@ -90,7 +99,7 @@ export function PlayersList({
         </div>
       ) : null}
 
-      <div className="mt-4 max-h-[430px] space-y-2 overflow-y-auto pr-1">
+      <div className="mt-3 max-h-[330px] space-y-2 overflow-y-auto pr-1">
         {sortedEntries.length === 0 ? (
           <div className="rounded-md border border-dashed border-[var(--border)] bg-white/[0.03] p-5 text-center">
             <p className="font-display text-lg font-black text-text-primary">
@@ -103,8 +112,11 @@ export function PlayersList({
         ) : (
           sortedEntries.map((entry, index) => {
             const isWinner = winnerEntryId === entry.id;
+            const isPending = Boolean(entry.pending);
             const chance = getEntryChance(entry.amount, totalEntryAmount);
             const displayName = playerName(entry, index);
+            const hasTicketRange =
+              entry.ticketStart !== null && entry.ticketEnd !== null;
 
             return (
               <div
@@ -112,7 +124,9 @@ export function PlayersList({
                 className={`group rounded-md border p-3 transition ${
                   isWinner
                     ? "border-[var(--gold)] bg-[rgba(250,204,21,0.13)] shadow-[0_0_24px_rgba(250,204,21,0.12)]"
-                    : "border-[var(--border)] bg-white/[0.04] hover:border-[rgba(250,204,21,0.28)] hover:bg-white/[0.06]"
+                    : isPending
+                      ? "border-[rgba(45,212,191,0.4)] bg-[rgba(45,212,191,0.1)]"
+                      : "border-[var(--border)] bg-white/[0.04] hover:border-[rgba(250,204,21,0.28)] hover:bg-white/[0.06]"
                 }`}
               >
                 <div className="flex items-center justify-between gap-3">
@@ -134,11 +148,21 @@ export function PlayersList({
                             Winner
                           </span>
                         ) : null}
+
+                        {isPending ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-[rgba(45,212,191,0.35)] bg-[rgba(45,212,191,0.12)] px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-teal">
+                            <span className="h-1.5 w-1.5 rounded-full bg-teal animate-pulse" />
+                            Pending
+                          </span>
+                        ) : null}
                       </div>
 
-                      <p className="mt-1 font-mono text-xs text-text-secondary">
-                        Tickets {ticketRangeLabel(entry.ticketStart, entry.ticketEnd)}
-                      </p>
+                      {hasTicketRange ? (
+                        <p className="mt-1 font-mono text-xs text-text-secondary">
+                          Tickets{" "}
+                          {ticketRangeLabel(entry.ticketStart, entry.ticketEnd)}
+                        </p>
+                      ) : null}
                     </div>
                   </div>
 

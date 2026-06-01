@@ -17,6 +17,11 @@ import {
 } from '@nestjs/websockets';
 import {
   SOCKET_EVENTS,
+  SocketCategoryJoinAckSchema,
+  SocketCategoryJoinPayloadSchema,
+  SocketCategoryLeaveAckSchema,
+  SocketCategoryLeavePayloadSchema,
+  SocketCategoryStateEventSchema,
   SocketMachineEventSchema,
   SocketPresenceEventSchema,
   SocketRoomJoinAckSchema,
@@ -27,11 +32,13 @@ import {
   type ClientToServerEvents,
   type ServerToClientEvents,
 } from '@kingspin/contracts';
+import { RoundStatus } from '@kingspin/db';
 import { createAdapter } from '@socket.io/redis-adapter';
 import type { Server, Socket } from 'socket.io';
 import { getApiEnv } from '../config/api-env';
 import { PublicGameService } from '../modules/public-game/public-game.service';
 import { RealtimeMetricsService } from '../modules/redis/realtime-metrics.service';
+import { RoomsService } from '../modules/rooms/rooms.service';
 import {
   RedisService,
   type RedisDedicatedClient,
@@ -49,11 +56,37 @@ type PendingRoomBroadcast = {
   reject: (error: unknown) => void;
   promise: Promise<void>;
 };
+type PendingCategoryBroadcast = PendingRoomBroadcast & {
+  useCachedSummary: boolean;
+};
+type OpenRoundSummaryPatch = {
+  id: string;
+  roomId: string;
+  roundNumber: number;
+  status: RoundStatus;
+  totalEntryAmount: string;
+  houseFeeAmount: string;
+  payoutAmount: string;
+  openedAt: string;
+  locksAt: string | null;
+  lockedAt: string | null;
+  drawingAt: string | null;
+  spinningAt: string | null;
+  settlingAt: string | null;
+  completedAt: string | null;
+  cancelledAt: string | null;
+  serverSeedHash: string | null;
+  winningTicket: string | null;
+  winnerUserId: string | null;
+  winnerEntryId: string | null;
+  spinAngle: number | null;
+};
 
-const ROOM_BROADCAST_COALESCE_MS = 150;
+const ROOM_BROADCAST_COALESCE_MS = 50;
 const ROOM_BROADCAST_REDIS_LOCK_TTL_MS = 1_000;
 const PRESENCE_TTL_MS = 30_000;
 const PRESENCE_HEARTBEAT_MS = 15_000;
+const BROADCAST_TIMING_WARN_THRESHOLD_MS = 300;
 
 function allowConfiguredSocketOrigin(
   origin: string | undefined,
@@ -92,11 +125,20 @@ export class RoomGateway
     string,
     PendingRoomBroadcast
   >();
+  private readonly pendingBroadcastsByCategory = new Map<
+    string,
+    PendingCategoryBroadcast
+  >();
+  private readonly pendingOpenRoundSummaryPatchesByRoom = new Map<
+    string,
+    OpenRoundSummaryPatch
+  >();
   private readonly socketRoomsById = new Map<string, Set<string>>();
   private presenceHeartbeat: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly publicGameService: PublicGameService,
+    private readonly roomsService: RoomsService,
     @Optional() private readonly redisService?: RedisService,
     @Optional() private readonly metrics?: RealtimeMetricsService,
   ) {}
@@ -129,7 +171,14 @@ export class RoomGateway
       pending.resolve();
     }
 
+    for (const pending of this.pendingBroadcastsByCategory.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve();
+    }
+
     this.pendingBroadcastsByRoom.clear();
+    this.pendingBroadcastsByCategory.clear();
+    this.pendingOpenRoundSummaryPatchesByRoom.clear();
 
     await Promise.allSettled([
       this.redisSubscriber?.quit(),
@@ -224,11 +273,85 @@ export class RoomGateway
     });
   }
 
+  @SubscribeMessage(SOCKET_EVENTS.CATEGORY_JOIN)
+  async handleCategoryJoin(
+    @ConnectedSocket() client: GameSocket,
+    @MessageBody() payload: unknown,
+  ) {
+    const parsedPayload = SocketCategoryJoinPayloadSchema.safeParse(payload);
+
+    if (!parsedPayload.success) {
+      throw new WsException('Invalid category:join payload.');
+    }
+
+    const categorySlug = this.parseCategorySlug(parsedPayload.data.categorySlug);
+    const channel = this.getCategoryChannel(categorySlug);
+
+    await client.join(channel);
+    this.logRealtimeDebug(
+      `category joined categorySlug=${categorySlug} socketId=${client.id} reason=JOINED_CATEGORY`,
+    );
+
+    const rooms = await this.roomsService.findActiveByCategorySlug(categorySlug);
+    const emittedAt = new Date().toISOString();
+    const categoryState = SocketCategoryStateEventSchema.parse({
+      categorySlug,
+      reason: 'JOINED_CATEGORY',
+      rooms,
+      emittedAt,
+    });
+
+    client.emit(SOCKET_EVENTS.CATEGORY_STATE, categoryState);
+
+    return SocketCategoryJoinAckSchema.parse({
+      ok: true,
+      categorySlug,
+      joinedAt: emittedAt,
+    });
+  }
+
+  @SubscribeMessage(SOCKET_EVENTS.CATEGORY_LEAVE)
+  async handleCategoryLeave(
+    @ConnectedSocket() client: GameSocket,
+    @MessageBody() payload: unknown,
+  ) {
+    const parsedPayload = SocketCategoryLeavePayloadSchema.safeParse(payload);
+
+    if (!parsedPayload.success) {
+      throw new WsException('Invalid category:leave payload.');
+    }
+
+    const categorySlug = this.parseCategorySlug(parsedPayload.data.categorySlug);
+    const channel = this.getCategoryChannel(categorySlug);
+
+    await client.leave(channel);
+    const leftAt = new Date().toISOString();
+
+    return SocketCategoryLeaveAckSchema.parse({
+      ok: true,
+      categorySlug,
+      leftAt,
+    });
+  }
+
   async broadcastRoundState(roomId: string, reason: string) {
     try {
       return this.scheduleRoomStateBroadcast(roomId, reason);
     } catch (error) {
       this.logBroadcastFailed(roomId, reason, error);
+      throw error;
+    }
+  }
+
+  async broadcastCategoryState(categorySlug: string, reason: string) {
+    try {
+      return this.scheduleCategoryStateBroadcast(categorySlug, reason);
+    } catch (error) {
+      this.logBroadcastFailed(
+        this.getCategoryChannel(categorySlug),
+        reason,
+        error,
+      );
       throw error;
     }
   }
@@ -252,16 +375,33 @@ export class RoomGateway
         ? String((payload as { action?: unknown }).action)
         : 'UNKNOWN';
 
-    void this.broadcastRoundState(roomId, action).catch(
-      (error: unknown) => {
-        const message =
-          error instanceof Error ? error.message : 'Unknown round state error';
+    this.queueOpenRoundSummaryPatch(roomId, payload);
 
-        this.logger.warn(
-          `Failed to broadcast room state for ${roomId} after machine result: ${message}`,
-        );
-      },
-    );
+    if (this.isOpenRoundStartAction(action)) {
+      void this.broadcastOpenRoundSummaryPatch(roomId, action).catch(
+        (error: unknown) => {
+          const message =
+            error instanceof Error
+              ? error.message
+              : 'Unknown category state error';
+
+          this.logger.warn(
+            `Failed to broadcast patched category state for ${roomId} after ${action}: ${message}`,
+          );
+        },
+      );
+    } else {
+      void this.broadcastRoundState(roomId, action).catch(
+        (error: unknown) => {
+          const message =
+            error instanceof Error ? error.message : 'Unknown round state error';
+
+          this.logger.warn(
+            `Failed to broadcast room state for ${roomId} after machine result: ${message}`,
+          );
+        },
+      );
+    }
 
     if (action === 'STARTED_OPEN_ROUND') {
       this.emitMachineEvent(
@@ -420,6 +560,21 @@ export class RoomGateway
     return rawRoomId.trim();
   }
 
+  private parseCategorySlug(rawCategorySlug: unknown) {
+    if (
+      typeof rawCategorySlug !== 'string' ||
+      rawCategorySlug.trim().length === 0
+    ) {
+      throw new BadRequestException('categorySlug is required.');
+    }
+
+    return rawCategorySlug.trim();
+  }
+
+  private getCategoryChannel(categorySlug: string) {
+    return `category:${categorySlug}`;
+  }
+
   private async getRoomStateSnapshot(roomId: string) {
     return this.publicGameService.getRoomLiveState(roomId);
   }
@@ -467,6 +622,7 @@ export class RoomGateway
   }
 
   private async flushRoomStateBroadcast(roomId: string) {
+    const startedAt = Date.now();
     const pending = this.pendingBroadcastsByRoom.get(roomId);
 
     if (!pending) {
@@ -494,7 +650,46 @@ export class RoomGateway
         }
       }
 
-      await this.publicGameService.invalidateRoomLiveState(roomId);
+      const refreshSnapshots = this.shouldRefreshSnapshotsForReasons(
+        pending.reasons,
+      );
+
+      if (refreshSnapshots) {
+        await this.publicGameService.invalidateRoomLiveState(roomId);
+      }
+
+      const categorySlug = refreshSnapshots
+        ? await this.roomsService.findCategorySlugForRoom(roomId)
+        : null;
+
+      if (categorySlug) {
+        const openRoundPatch =
+          this.pendingOpenRoundSummaryPatchesByRoom.get(roomId) ?? null;
+        const useCachedSummary =
+          openRoundPatch !== null &&
+          this.roomsService.patchLiveRoomSummaryCacheWithOpenRound(
+            roomId,
+            openRoundPatch,
+          );
+
+        this.pendingOpenRoundSummaryPatchesByRoom.delete(roomId);
+
+        if (!useCachedSummary) {
+          this.roomsService.invalidateLiveRoomSummariesForCategory(categorySlug);
+        }
+
+        void this.scheduleCategoryStateBroadcast(categorySlug, [
+          ...pending.reasons,
+        ].join('+'), {
+          useCachedSummary,
+        }).catch((error: unknown) => {
+          this.logBroadcastFailed(
+            this.getCategoryChannel(categorySlug),
+            [...pending.reasons].join('+') || 'UNKNOWN',
+            error,
+          );
+        });
+      }
 
       if (!this.hasRoomObservers(roomId)) {
         this.metrics?.increment('socketCoalescedBroadcastCount', pending.count);
@@ -538,6 +733,127 @@ export class RoomGateway
       if (lock) {
         await this.redisService?.releaseLock(lock);
       }
+
+      this.logBroadcastTiming(roomId, 'room', Date.now() - startedAt, {
+        pendingCount: pending.count,
+        observers: this.hasRoomObservers(roomId),
+      });
+    }
+  }
+
+  private scheduleCategoryStateBroadcast(
+    categorySlug: string,
+    reason: string,
+    options: { useCachedSummary?: boolean } = {},
+  ) {
+    const normalizedSlug = this.parseCategorySlug(categorySlug);
+    const existing = this.pendingBroadcastsByCategory.get(normalizedSlug);
+
+    if (existing) {
+      existing.reasons.add(reason);
+      existing.count += 1;
+      existing.useCachedSummary =
+        existing.useCachedSummary && options.useCachedSummary === true;
+      this.metrics?.increment('socketCoalescedBroadcastCount');
+      this.logRealtimeDebug(
+        `category broadcast scheduled categorySlug=${normalizedSlug} reason=${reason} coalesced=true pending=${existing.count}`,
+      );
+      return existing.promise;
+    }
+
+    let resolve!: () => void;
+    let reject!: (error: unknown) => void;
+    const promise = new Promise<void>((innerResolve, innerReject) => {
+      resolve = innerResolve;
+      reject = innerReject;
+    });
+
+    const pending: PendingCategoryBroadcast = {
+      timer: setTimeout(() => {
+        void this.flushCategoryStateBroadcast(normalizedSlug).catch(
+          (error: unknown) => {
+            const current =
+              this.pendingBroadcastsByCategory.get(normalizedSlug);
+            current?.reject(error);
+          },
+        );
+      }, ROOM_BROADCAST_COALESCE_MS),
+      reasons: new Set([reason]),
+      count: 1,
+      resolve,
+      reject,
+      promise,
+      useCachedSummary: options.useCachedSummary === true,
+    };
+
+    this.pendingBroadcastsByCategory.set(normalizedSlug, pending);
+    this.logRealtimeDebug(
+      `category broadcast scheduled categorySlug=${normalizedSlug} reason=${reason} coalesced=false pending=1`,
+    );
+
+    return promise;
+  }
+
+  private async flushCategoryStateBroadcast(categorySlug: string) {
+    const startedAt = Date.now();
+    const pending = this.pendingBroadcastsByCategory.get(categorySlug);
+
+    if (!pending) {
+      return;
+    }
+
+    this.pendingBroadcastsByCategory.delete(categorySlug);
+
+    try {
+      if (!pending.useCachedSummary) {
+        this.roomsService.invalidateLiveRoomSummariesForCategory(categorySlug);
+      }
+
+      const channel = this.getCategoryChannel(categorySlug);
+
+      if (!this.hasChannelObservers(channel)) {
+        this.metrics?.increment('socketCoalescedBroadcastCount', pending.count);
+        this.logRealtimeDebug(
+          `category broadcast skipped categorySlug=${categorySlug} reason=${[...pending.reasons].join('+')} pending=${pending.count} observers=0`,
+        );
+        pending.resolve();
+        return;
+      }
+
+      const rooms = await this.roomsService.findActiveByCategorySlug(
+        categorySlug,
+      );
+      const reasons = [...pending.reasons];
+      const payload = SocketCategoryStateEventSchema.parse({
+        categorySlug,
+        reason: reasons.length === 1 ? reasons[0] : reasons.join('+'),
+        rooms,
+        emittedAt: new Date().toISOString(),
+      });
+
+      this.server.to(channel).emit(SOCKET_EVENTS.CATEGORY_STATE, payload);
+      this.metrics?.increment('socketBroadcastCount');
+      this.metrics?.increment('socketBroadcastFlushCount');
+      this.logRealtimeDebug(
+        `category broadcast flushed categorySlug=${categorySlug} reason=${payload.reason} pending=${pending.count}`,
+      );
+
+      pending.resolve();
+    } catch (error) {
+      const reason = [...pending.reasons].join('+') || 'UNKNOWN';
+      this.logBroadcastFailed(this.getCategoryChannel(categorySlug), reason, error);
+      pending.reject(error);
+      throw error;
+    } finally {
+      this.logBroadcastTiming(
+        this.getCategoryChannel(categorySlug),
+        'category',
+        Date.now() - startedAt,
+        {
+          pendingCount: pending.count,
+          observers: this.hasChannelObservers(this.getCategoryChannel(categorySlug)),
+        },
+      );
     }
   }
 
@@ -629,12 +945,120 @@ export class RoomGateway
     );
   }
 
-  private hasRoomObservers(roomId: string) {
-    const localSize = this.server?.sockets?.adapter?.rooms?.get?.(roomId)?.size;
+  private queueOpenRoundSummaryPatch(roomId: string, payload: unknown) {
+    if (!payload || typeof payload !== 'object') {
+      return;
+    }
 
-    if (typeof localSize !== 'number') {
+    const currentRound = (payload as { currentRound?: unknown }).currentRound;
+
+    if (!this.isOpenRoundSummaryPatch(currentRound)) {
+      return;
+    }
+
+    this.pendingOpenRoundSummaryPatchesByRoom.set(roomId, currentRound);
+  }
+
+  private async broadcastOpenRoundSummaryPatch(
+    roomId: string,
+    reason: string,
+  ) {
+    const categorySlug = await this.roomsService.findCategorySlugForRoom(roomId);
+    const openRoundPatch =
+      this.pendingOpenRoundSummaryPatchesByRoom.get(roomId) ?? null;
+
+    if (!categorySlug) {
+      this.pendingOpenRoundSummaryPatchesByRoom.delete(roomId);
+      return;
+    }
+
+    const useCachedSummary =
+      openRoundPatch !== null &&
+      this.roomsService.patchLiveRoomSummaryCacheWithOpenRound(
+        roomId,
+        openRoundPatch,
+      );
+
+    this.pendingOpenRoundSummaryPatchesByRoom.delete(roomId);
+
+    if (!useCachedSummary) {
+      this.roomsService.invalidateLiveRoomSummariesForCategory(categorySlug);
+    }
+
+    await this.scheduleCategoryStateBroadcast(categorySlug, reason, {
+      useCachedSummary,
+    });
+  }
+
+  private isOpenRoundStartAction(action: string) {
+    return (
+      action === 'STARTED_OPEN_ROUND' ||
+      action === 'CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT' ||
+      action === 'CANCELLED_SINGLE_PLAYER_ROUND_AND_STARTED_NEXT' ||
+      action === 'CANCELLED_EMPTY_LOCKED_ROUND_AND_STARTED_NEXT' ||
+      action === 'CANCELLED_SINGLE_PLAYER_LOCKED_ROUND_AND_STARTED_NEXT' ||
+      action === 'STARTED_NEXT_ROUND_AFTER_COMPLETION'
+    );
+  }
+
+  private isOpenRoundSummaryPatch(
+    value: unknown,
+  ): value is OpenRoundSummaryPatch {
+    if (!value || typeof value !== 'object') {
+      return false;
+    }
+
+    const round = value as Partial<OpenRoundSummaryPatch>;
+
+    return (
+      typeof round.id === 'string' &&
+      typeof round.roomId === 'string' &&
+      typeof round.roundNumber === 'number' &&
+      round.status === RoundStatus.OPEN &&
+      typeof round.totalEntryAmount === 'string' &&
+      typeof round.houseFeeAmount === 'string' &&
+      typeof round.payoutAmount === 'string' &&
+      typeof round.openedAt === 'string' &&
+      (typeof round.locksAt === 'string' || round.locksAt === null) &&
+      (typeof round.lockedAt === 'string' || round.lockedAt === null) &&
+      (typeof round.drawingAt === 'string' || round.drawingAt === null) &&
+      (typeof round.spinningAt === 'string' || round.spinningAt === null) &&
+      (typeof round.settlingAt === 'string' || round.settlingAt === null) &&
+      (typeof round.completedAt === 'string' || round.completedAt === null) &&
+      (typeof round.cancelledAt === 'string' || round.cancelledAt === null) &&
+      (typeof round.serverSeedHash === 'string' ||
+        round.serverSeedHash === null) &&
+      (typeof round.winningTicket === 'string' ||
+        round.winningTicket === null) &&
+      (typeof round.winnerUserId === 'string' || round.winnerUserId === null) &&
+      (typeof round.winnerEntryId === 'string' ||
+        round.winnerEntryId === null) &&
+      (typeof round.spinAngle === 'number' || round.spinAngle === null)
+    );
+  }
+
+  private shouldRefreshSnapshotsForReasons(reasons: Set<string>) {
+    for (const reason of reasons) {
+      if (reason !== 'MACHINE_STARTED' && reason !== 'MACHINE_STOPPED') {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private hasRoomObservers(roomId: string) {
+    return this.hasChannelObservers(roomId);
+  }
+
+  private hasChannelObservers(channel: string) {
+    const adapterRooms = this.server?.sockets?.adapter?.rooms;
+
+    if (!adapterRooms || typeof adapterRooms.get !== 'function') {
       return true;
     }
+
+    const localSize = adapterRooms.get(channel)?.size ?? 0;
 
     if (localSize > 0) {
       return true;
@@ -660,6 +1084,24 @@ export class RoomGateway
     }
 
     this.logger.log(message);
+  }
+
+  private logBroadcastTiming(
+    channel: string,
+    kind: 'room' | 'category',
+    durationMs: number,
+    details: {
+      pendingCount: number;
+      observers: boolean;
+    },
+  ) {
+    if (durationMs < BROADCAST_TIMING_WARN_THRESHOLD_MS) {
+      return;
+    }
+
+    this.logger.warn(
+      `[socket-broadcast-timing:${channel}] kind=${kind} duration=${durationMs}ms pending=${details.pendingCount} observers=${details.observers} dbWaitMayBeIncluded=true`,
+    );
   }
 }
 

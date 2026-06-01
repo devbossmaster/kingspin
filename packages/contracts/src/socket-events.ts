@@ -1,11 +1,14 @@
 import { z } from "zod";
 import { IsoDateStringSchema } from "./common";
-import { RoomLiveStateSchema } from "./rooms";
+import { RoomLiveStateSchema, RoomLiveSummarySchema } from "./rooms";
 
 export const SOCKET_EVENTS = {
   ROOM_JOIN: "room:join",
   ROOM_LEAVE: "room:leave",
+  CATEGORY_JOIN: "category:join",
+  CATEGORY_LEAVE: "category:leave",
   ROUND_STATE: "round:state",
+  CATEGORY_STATE: "category:state",
   ROUND_UPDATED: "round:updated",
   ROUND_LOCKED: "round:locked",
   ROUND_SPINNING: "round:spinning",
@@ -22,6 +25,14 @@ export const SocketRoomLeavePayloadSchema = z.object({
   roomId: z.string().min(1),
 });
 
+export const SocketCategoryJoinPayloadSchema = z.object({
+  categorySlug: z.string().min(1),
+});
+
+export const SocketCategoryLeavePayloadSchema = z.object({
+  categorySlug: z.string().min(1),
+});
+
 export const SocketRoomJoinAckSchema = z.object({
   ok: z.boolean(),
   roomId: z.string(),
@@ -34,12 +45,31 @@ export const SocketRoomLeaveAckSchema = z.object({
   leftAt: IsoDateStringSchema,
 });
 
+export const SocketCategoryJoinAckSchema = z.object({
+  ok: z.boolean(),
+  categorySlug: z.string(),
+  joinedAt: IsoDateStringSchema,
+});
+
+export const SocketCategoryLeaveAckSchema = z.object({
+  ok: z.boolean(),
+  categorySlug: z.string(),
+  leftAt: IsoDateStringSchema,
+});
+
 export const SocketRoundStateEventSchema = z.object({
   roomId: z.string(),
   reason: z.string(),
   snapshot: RoomLiveStateSchema.omit({ serverNow: true }).extend({
     serverNow: IsoDateStringSchema.optional(),
   }),
+  emittedAt: IsoDateStringSchema,
+});
+
+export const SocketCategoryStateEventSchema = z.object({
+  categorySlug: z.string(),
+  reason: z.string(),
+  rooms: z.array(RoomLiveSummarySchema),
   emittedAt: IsoDateStringSchema,
 });
 
@@ -59,6 +89,7 @@ export const SocketPresenceEventSchema = z.object({
 
 export const ServerToClientEventsSchema = z.object({
   "round:state": SocketRoundStateEventSchema,
+  "category:state": SocketCategoryStateEventSchema,
   "round:updated": SocketMachineEventSchema,
   "round:locked": SocketMachineEventSchema,
   "round:spinning": SocketMachineEventSchema,
@@ -69,14 +100,20 @@ export const ServerToClientEventsSchema = z.object({
 
 export type SocketRoomJoinPayload = z.infer<typeof SocketRoomJoinPayloadSchema>;
 export type SocketRoomLeavePayload = z.infer<typeof SocketRoomLeavePayloadSchema>;
+export type SocketCategoryJoinPayload = z.infer<typeof SocketCategoryJoinPayloadSchema>;
+export type SocketCategoryLeavePayload = z.infer<typeof SocketCategoryLeavePayloadSchema>;
 export type SocketRoomJoinAck = z.infer<typeof SocketRoomJoinAckSchema>;
 export type SocketRoomLeaveAck = z.infer<typeof SocketRoomLeaveAckSchema>;
+export type SocketCategoryJoinAck = z.infer<typeof SocketCategoryJoinAckSchema>;
+export type SocketCategoryLeaveAck = z.infer<typeof SocketCategoryLeaveAckSchema>;
 export type SocketRoundStateEvent = z.infer<typeof SocketRoundStateEventSchema>;
+export type SocketCategoryStateEvent = z.infer<typeof SocketCategoryStateEventSchema>;
 export type SocketMachineEvent = z.infer<typeof SocketMachineEventSchema>;
 export type SocketPresenceEvent = z.infer<typeof SocketPresenceEventSchema>;
 
 export type ServerToClientEvents = {
   "round:state": (payload: SocketRoundStateEvent) => void;
+  "category:state": (payload: SocketCategoryStateEvent) => void;
   "round:updated": (payload: SocketMachineEvent) => void;
   "round:locked": (payload: SocketMachineEvent) => void;
   "round:spinning": (payload: SocketMachineEvent) => void;
@@ -93,5 +130,13 @@ export type ClientToServerEvents = {
   "room:leave": (
     payload: SocketRoomLeavePayload,
     ack?: (response: SocketRoomLeaveAck) => void,
+  ) => void;
+  "category:join": (
+    payload: SocketCategoryJoinPayload,
+    ack?: (response: SocketCategoryJoinAck) => void,
+  ) => void;
+  "category:leave": (
+    payload: SocketCategoryLeavePayload,
+    ack?: (response: SocketCategoryLeaveAck) => void,
   ) => void;
 };

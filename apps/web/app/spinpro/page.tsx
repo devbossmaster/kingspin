@@ -7,7 +7,6 @@ import { GameShell } from "../../components/player/game-shell";
 import { ModeCard } from "../../components/player/mode-card";
 import { SectionHeader } from "../../components/player/section-header";
 import { StatusPill } from "../../components/player/status-pill";
-import { apiClient, type RoomListItem } from "../../lib/api-client";
 import { useSession } from "../../lib/auth-client";
 import {
   type PlayerMode,
@@ -16,9 +15,7 @@ import {
   sortPlayerCategories,
 } from "../../lib/game-modes";
 import { useCategories } from "../../hooks/use-categories";
-
-const VISIBLE_POLL_MS = 2_000;
-const HIDDEN_POLL_MS = 10_000;
+import { useRoomSummaries } from "../../hooks/use-room-summaries";
 
 function SpinProLobbyContent() {
   const searchParams = useSearchParams();
@@ -30,11 +27,6 @@ function SpinProLobbyContent() {
     loading: categoriesLoading,
     error: categoriesError,
   } = useCategories();
-  const [roomsBySlug, setRoomsBySlug] = useState<
-    Record<string, RoomListItem[]>
-  >({});
-  const [roomsLoading, setRoomsLoading] = useState(false);
-  const [roomsError, setRoomsError] = useState<string | null>(null);
   const [clientNowMs, setClientNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -56,119 +48,15 @@ function SpinProLobbyContent() {
       ),
     [playerCategories, selectedMode],
   );
-
-  useEffect(() => {
-    let cancelled = false;
-    let inFlight = false;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    let hasLoaded = false;
-
-    async function loadRooms(showLoading: boolean) {
-      if (inFlight) {
-        return;
-      }
-
-      inFlight = true;
-
-      if (showLoading) {
-        setRoomsLoading(true);
-      }
-
-      try {
-        let nextError: string | null = null;
-        const entries = await Promise.all(
-          visibleCategories.map(async (category) => {
-            try {
-              return [
-                category.slug,
-                await apiClient.getRoomsByCategory(category.slug),
-              ] as const;
-            } catch (caught) {
-              nextError =
-                caught instanceof Error
-                  ? caught.message
-                  : "Could not load rooms.";
-              return [category.slug, []] as const;
-            }
-          }),
-        );
-
-        if (!cancelled) {
-          setRoomsBySlug((current) => ({
-            ...current,
-            ...Object.fromEntries(entries),
-          }));
-          setRoomsError(nextError);
-          setRoomsLoading(false);
-          hasLoaded = true;
-        }
-      } finally {
-        inFlight = false;
-      }
-    }
-
-    function scheduleNextPoll() {
-      if (cancelled || visibleCategories.length === 0) {
-        return;
-      }
-
-      const delay =
-        typeof document !== "undefined" && document.hidden
-          ? HIDDEN_POLL_MS
-          : VISIBLE_POLL_MS;
-
-      timeoutId = setTimeout(() => {
-        timeoutId = null;
-        void loadRooms(false).finally(scheduleNextPoll);
-      }, delay);
-    }
-
-    function refreshNow() {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-
-      if (!inFlight) {
-        void loadRooms(false).finally(scheduleNextPoll);
-      }
-    }
-
-    if (visibleCategories.length > 0) {
-      void loadRooms(true)
-        .catch((caught) => {
-          if (!cancelled) {
-            if (!hasLoaded) {
-              setRoomsBySlug({});
-            }
-            setRoomsError(
-              caught instanceof Error ? caught.message : "Could not load rooms.",
-            );
-            setRoomsLoading(false);
-          }
-        })
-        .finally(scheduleNextPoll);
-    } else {
-      setRoomsLoading(false);
-    }
-
-    const handleVisibilityChange = () => {
-      if (!document.hidden) {
-        refreshNow();
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      cancelled = true;
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    };
-  }, [visibleCategories]);
+  const visibleCategorySlugs = useMemo(
+    () => visibleCategories.map((category) => category.slug),
+    [visibleCategories],
+  );
+  const {
+    roomsBySlug,
+    loading: roomsLoading,
+    error: roomsError,
+  } = useRoomSummaries(visibleCategorySlugs);
 
   useEffect(() => {
     const intervalId = setInterval(() => {

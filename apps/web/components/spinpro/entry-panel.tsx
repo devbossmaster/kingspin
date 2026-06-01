@@ -7,11 +7,13 @@ import type {
   WalletSnapshot,
 } from "@kingspin/contracts";
 import { formatCoins } from "../../lib/format";
+import { getPublicRoundPhase } from "../../lib/room-summary";
 import { Button, buttonClassName } from "../ui/button";
 import { Chip } from "../ui/chip";
 
 type EntryPanelProps = {
   status: string | null | undefined;
+  phase?: string | null | undefined;
   wallet: WalletSnapshot | null;
   hasSession: boolean;
   emailVerified?: boolean;
@@ -20,7 +22,7 @@ type EntryPanelProps = {
   selectedChip: number;
   gameMode?: string | null;
   fixedEntryAmount?: string | null;
-  myEntry: EntryWithPlayerSnapshot | null;
+  myEntry: (EntryWithPlayerSnapshot & { pending?: boolean }) | null;
   isPlacingEntry: boolean;
   onSelectChip: (amount: number) => void;
   onPlaceEntry: (amount: number) => void;
@@ -28,6 +30,7 @@ type EntryPanelProps = {
 
 export function EntryPanel({
   status,
+  phase,
   wallet,
   hasSession,
   emailVerified,
@@ -70,16 +73,18 @@ export function EntryPanel({
   const entryAmount = fixedModeAmount ?? boundedCustomAmount ?? selectedChip;
   const walletBalance = Number(wallet?.balanceSnapshot ?? 0);
 
-  const entriesOpen = status === "OPEN";
+  const publicPhase = getPublicRoundPhase({ phase, status });
+  const entriesOpen = publicPhase === "ENTRY_OPEN";
   const needsVerification = hasSession && emailVerified === false;
   const customAmountInvalid = hasCustomAmount && boundedCustomAmount === null;
   const hasWallet = Boolean(wallet);
   const hasEnoughBalance = hasWallet && walletBalance >= entryAmount;
   const insufficientBalance = hasWallet && !hasEnoughBalance;
   const fixedModeAlreadyEntered = isFixedMode && Boolean(myEntry);
+  const entryPending = Boolean(myEntry?.pending);
 
   const disabledReason = useMemo(() => {
-    if (!entriesOpen) return "Round locked. Entries are closed.";
+    if (!entriesOpen) return "Entries are closed for this phase.";
     if (!hasWallet) return "Wallet is unavailable.";
     if (needsVerification) return "Verify your email before entering.";
     if (isFixedMode && !fixedModeAmount) {
@@ -122,21 +127,27 @@ export function EntryPanel({
 
   const buttonLabel = isPlacingEntry
     ? "Submitting..."
-    : needsVerification
-      ? "Verify email first"
-      : !entriesOpen
-        ? status === "CANCELLED"
-          ? "Skipped"
-          : "Round locked"
-        : !hasWallet
-          ? "Wallet unavailable"
-          : insufficientBalance
-            ? "Insufficient balance"
-            : myEntry
-              ? isFixedMode
-                ? "You are in"
-              : `Add ${formatCoins(entryAmount)}`
-              : `Enter ${formatCoins(entryAmount)}`;
+    : entryPending
+      ? "Pending..."
+      : needsVerification
+        ? "Verify email first"
+        : !entriesOpen
+          ? publicPhase === "RANDOMIZING"
+            ? "Randomizing"
+            : publicPhase === "SPINNING"
+              ? "Wheel spinning"
+              : publicPhase === "RESULT"
+                ? "Next round soon"
+                : "Preparing"
+          : !hasWallet
+            ? "Wallet unavailable"
+            : insufficientBalance
+              ? "Insufficient balance"
+              : myEntry
+                ? isFixedMode
+                  ? "You are in"
+                  : `Add ${formatCoins(entryAmount)}`
+                : `Enter ${formatCoins(entryAmount)}`;
 
   const submitEntry = () => {
     if (!canPlaceEntry) return;
@@ -168,7 +179,9 @@ export function EntryPanel({
       {myEntry ? (
         <div className="mt-4 rounded-md border border-[rgba(45,212,191,0.34)] bg-[rgba(45,212,191,0.1)] px-3 py-2 text-sm">
           <div className="flex items-center justify-between gap-3">
-            <span className="font-bold text-teal">You&apos;re in</span>
+            <span className="font-bold text-teal">
+              {entryPending ? "Pending..." : "You&apos;re in"}
+            </span>
             <span className="font-mono font-black text-text-primary">
               {formatCoins(myEntry.amount)} coins
             </span>
@@ -177,7 +190,9 @@ export function EntryPanel({
             <p className="mt-1 text-xs text-text-secondary">
               {isFixedMode
                 ? "Fixed mode allows one entry per round."
-                : "You can still add more while the round is open."}
+                : entryPending
+                  ? "Confirming with the server now."
+                  : "You can still add more while the round is open."}
             </p>
           ) : null}
         </div>

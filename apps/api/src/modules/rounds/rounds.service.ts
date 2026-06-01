@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, RoundStatus, type Entry } from '@kingspin/db';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
   calculateSpinAngle as calculateGameSpinAngle,
   selectWinner,
@@ -18,6 +18,11 @@ import {
   WalletsService,
   type EntryRefundResult,
 } from '../wallets/wallets.service';
+import { buildPublicRoundPhaseView } from './public-round-phase';
+import type {
+  PublicRoundPhase,
+  PublicRoundResultReason,
+} from '@kingspin/contracts';
 
 const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
   RoundStatus.OPEN,
@@ -33,6 +38,7 @@ const CANCELLABLE_ROUND_STATUSES: RoundStatus[] = [
 ];
 
 const LATEST_RESULT_TIMING_WARN_THRESHOLD_MS = 1_000;
+const ROUND_TRANSACTION_TIMING_WARN_THRESHOLD_MS = 300;
 
 export type RoundSnapshot = {
   id: string;
@@ -55,6 +61,15 @@ export type RoundSnapshot = {
   winnerUserId: string | null;
   winnerEntryId: string | null;
   spinAngle: number | null;
+};
+
+export type LiveRoundSnapshot = RoundSnapshot & {
+  msUntilLock: number;
+  phase: PublicRoundPhase;
+  phaseLabel: string;
+  msUntilPhaseEnd: number;
+  msUntilNextRound: number | null;
+  resultReason: PublicRoundResultReason;
 };
 
 type EntrySnapshot = {
@@ -140,6 +155,59 @@ type LatestRoundResultRound = RoundSnapshotSource & {
   serverSeedReveal: string | null;
 };
 
+type CancelAndStartTiming = {
+  transactionWaitMs: number;
+  roomLockMs: number;
+  roundLockMs: number;
+  findEntriesMs: number;
+  refundMs: number;
+  cancelMs: number;
+  nextRoundMs: number;
+};
+
+type EmptyCancelAndStartRow = {
+  cancelledId: string;
+  cancelledRoomId: string;
+  cancelledRoundNumber: number;
+  cancelledStatus: RoundStatus;
+  cancelledTotalEntryAmount: bigint;
+  cancelledHouseFeeAmount: bigint;
+  cancelledPayoutAmount: bigint;
+  cancelledOpenedAt: Date;
+  cancelledLocksAt: Date | null;
+  cancelledLockedAt: Date | null;
+  cancelledDrawingAt: Date | null;
+  cancelledSpinningAt: Date | null;
+  cancelledSettlingAt: Date | null;
+  cancelledCompletedAt: Date | null;
+  cancelledCancelledAt: Date | null;
+  cancelledServerSeedHash: string | null;
+  cancelledWinningTicket: bigint | null;
+  cancelledWinnerUserId: string | null;
+  cancelledWinnerEntryId: string | null;
+  cancelledSpinAngle: number | null;
+  nextId: string;
+  nextRoomId: string;
+  nextRoundNumber: number;
+  nextStatus: RoundStatus;
+  nextTotalEntryAmount: bigint;
+  nextHouseFeeAmount: bigint;
+  nextPayoutAmount: bigint;
+  nextOpenedAt: Date;
+  nextLocksAt: Date | null;
+  nextLockedAt: Date | null;
+  nextDrawingAt: Date | null;
+  nextSpinningAt: Date | null;
+  nextSettlingAt: Date | null;
+  nextCompletedAt: Date | null;
+  nextCancelledAt: Date | null;
+  nextServerSeedHash: string | null;
+  nextWinningTicket: bigint | null;
+  nextWinnerUserId: string | null;
+  nextWinnerEntryId: string | null;
+  nextSpinAngle: number | null;
+};
+
 @Injectable()
 export class RoundsService {
   private readonly logger = new Logger(RoundsService.name);
@@ -211,26 +279,10 @@ export class RoundsService {
         select: { roundNumber: true },
       });
 
-      const roundNumber = (latestRound?.roundNumber ?? 0) + 1;
-      const openedAt = new Date();
-      const locksAt = new Date(openedAt.getTime() + room.roundDurationMs);
-
-      const serverSeed = randomBytes(32).toString('hex');
-      const serverSeedHash = createHash('sha256')
-        .update(serverSeed)
-        .digest('hex');
-
-      return tx.round.create({
-        data: {
-          roomId,
-          roundNumber,
-          status: RoundStatus.OPEN,
-          openedAt,
-          locksAt,
-          serverSeedHash,
-          serverSeedReveal: serverSeed,
-          idempotencyKey: `round:start:${roomId}:${roundNumber}`,
-        },
+      return this.createOpenRoundForRoomTx(tx, {
+        roomId,
+        roundDurationMs: room.roundDurationMs,
+        latestRoundNumber: latestRound?.roundNumber ?? 0,
       });
     }, this.transactionOptions);
 
@@ -251,6 +303,69 @@ export class RoundsService {
     });
 
     return round ? this.toRoundSnapshot(round) : null;
+  }
+
+  private createOpenRoundForRoomTx(
+    tx: Prisma.TransactionClient,
+    args: {
+      roomId: string;
+      roundDurationMs: number;
+      latestRoundNumber: number;
+    },
+  ) {
+    const roundNumber = args.latestRoundNumber + 1;
+    const openedAt = new Date();
+    const locksAt = new Date(openedAt.getTime() + args.roundDurationMs);
+
+    const serverSeed = randomBytes(32).toString('hex');
+    const serverSeedHash = createHash('sha256')
+      .update(serverSeed)
+      .digest('hex');
+
+    return tx.round.create({
+      data: {
+        roomId: args.roomId,
+        roundNumber,
+        status: RoundStatus.OPEN,
+        openedAt,
+        locksAt,
+        serverSeedHash,
+        serverSeedReveal: serverSeed,
+        idempotencyKey: `round:start:${args.roomId}:${roundNumber}`,
+      },
+    });
+  }
+
+  private async findOrCreateOpenRoundForRoomTx(
+    tx: Prisma.TransactionClient,
+    args: {
+      roomId: string;
+      roundDurationMs: number;
+    },
+  ) {
+    const existingCurrentRound = await tx.round.findFirst({
+      where: {
+        roomId: args.roomId,
+        status: { in: ACTIVE_ROUND_STATUSES },
+      },
+      orderBy: { roundNumber: 'desc' },
+    });
+
+    if (existingCurrentRound) {
+      return existingCurrentRound;
+    }
+
+    const latestRound = await tx.round.findFirst({
+      where: { roomId: args.roomId },
+      orderBy: { roundNumber: 'desc' },
+      select: { roundNumber: true },
+    });
+
+    return this.createOpenRoundForRoomTx(tx, {
+      roomId: args.roomId,
+      roundDurationMs: args.roundDurationMs,
+      latestRoundNumber: latestRound?.roundNumber ?? 0,
+    });
   }
 
   async lockCurrentRoundForRoom(roomId: string) {
@@ -846,6 +961,548 @@ export class RoundsService {
       reused: payout.reused,
     };
   }
+  async cancelExpiredOpenRoundForRoom(roomId: string, roundId: string) {
+    if (!roomId) {
+      throw new BadRequestException('roomId is required.');
+    }
+
+    if (!roundId) {
+      throw new BadRequestException('roundId is required.');
+    }
+
+    const { cancelledRound, refundResults } = await this.prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRaw`
+          SELECT pg_advisory_xact_lock(hashtext(${roundId})::bigint)
+        `;
+
+        const round = await tx.round.findUnique({
+          where: { id: roundId },
+        });
+
+        if (!round || round.roomId !== roomId) {
+          throw new NotFoundException('Round not found.');
+        }
+
+        if (round.status === RoundStatus.CANCELLED) {
+          return {
+            cancelledRound: round,
+            refundResults: [] satisfies EntryRefundResult[],
+          };
+        }
+
+        if (round.status !== RoundStatus.OPEN) {
+          throw new BadRequestException(
+            'Round changed before expired OPEN cancellation could start.',
+          );
+        }
+
+        if (!round.locksAt || round.locksAt.getTime() > Date.now()) {
+          throw new BadRequestException('Round is not an expired OPEN round.');
+        }
+
+        const entries = await tx.entry.findMany({
+          where: { roundId: round.id },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        });
+
+        const refundResults: EntryRefundResult[] = [];
+
+        for (const entry of entries) {
+          refundResults.push(
+            await this.walletsService.refundEntryHolds(tx, {
+              roundId: round.id,
+              entryId: entry.id,
+            }),
+          );
+        }
+
+        const cancelResult = await tx.round.updateMany({
+          where: {
+            id: round.id,
+            status: RoundStatus.OPEN,
+          },
+          data: {
+            status: RoundStatus.CANCELLED,
+            cancelledAt: new Date(),
+          },
+        });
+
+        if (cancelResult.count !== 1) {
+          throw new BadRequestException(
+            'Round could not be marked CANCELLED. Manual review required.',
+          );
+        }
+
+        return {
+          cancelledRound: await tx.round.findUniqueOrThrow({
+            where: { id: round.id },
+          }),
+          refundResults,
+        };
+      },
+      this.transactionOptions,
+    );
+
+    return this.toRoundCancellationResult(cancelledRound, refundResults);
+  }
+
+  async cancelExpiredOpenRoundAndStartNextForRoom(
+    roomId: string,
+    roundId: string,
+  ) {
+    if (!roomId) {
+      throw new BadRequestException('roomId is required.');
+    }
+
+    if (!roundId) {
+      throw new BadRequestException('roundId is required.');
+    }
+
+    const startedAt = Date.now();
+    const { cancelledRound, refundResults, nextRound, timing } =
+      await this.cancelRoundAndStartNextForRoomTx({
+        roomId,
+        roundId,
+        requireExpiredOpen: true,
+        requestStartedAt: startedAt,
+      });
+
+    this.logRoundTransactionIfSlow(
+      roomId,
+      'cancelExpiredOpenRoundAndStartNextForRoom',
+      Date.now() - startedAt,
+      `roundId=${roundId} refunds=${refundResults.length} ${this.formatCancelAndStartTiming(timing)}`,
+    );
+
+    const cancellation = this.toRoundCancellationResult(
+      cancelledRound,
+      refundResults,
+    );
+
+    return {
+      cancelledRound: cancellation.currentRound,
+      currentRound: this.toRoundSnapshot(nextRound),
+      refundSummary: {
+        refundedCount: cancellation.refundedCount,
+        skippedCount: cancellation.skippedCount,
+        alreadyRefundedCount: cancellation.alreadyRefundedCount,
+        refundedAmount: cancellation.refundedAmount,
+      },
+    };
+  }
+
+  async cancelExpiredEmptyOpenRoundAndStartNextForRoom(
+    roomId: string,
+    roundId: string,
+  ) {
+    if (!roomId) {
+      throw new BadRequestException('roomId is required.');
+    }
+
+    if (!roundId) {
+      throw new BadRequestException('roundId is required.');
+    }
+
+    const startedAt = Date.now();
+    const openedAt = new Date();
+    const nextRoundId = randomUUID();
+    const serverSeed = randomBytes(32).toString('hex');
+    const serverSeedHash = createHash('sha256')
+      .update(serverSeed)
+      .digest('hex');
+
+    const rows = await this.prisma.$queryRaw<EmptyCancelAndStartRow[]>(
+      Prisma.sql`
+        WITH locks AS (
+          SELECT
+            pg_try_advisory_xact_lock(hashtext(${roomId})) AS "roomLocked",
+            pg_try_advisory_xact_lock(hashtext(${roundId})::bigint) AS "roundLocked"
+        ),
+        candidate AS (
+          SELECT
+            ro.id,
+            r."roundDurationMs"
+          FROM rounds ro
+          JOIN rooms r ON r.id = ro."roomId"
+          CROSS JOIN locks
+          WHERE locks."roomLocked" = true
+            AND locks."roundLocked" = true
+            AND ro.id = ${roundId}
+            AND ro."roomId" = ${roomId}
+            AND ro.status = CAST(${RoundStatus.OPEN} AS "RoundStatus")
+            AND ro."locksAt" IS NOT NULL
+            AND ro."locksAt" <= ${openedAt}
+            AND r.status = CAST(${'ACTIVE'} AS "RoomStatus")
+            AND NOT EXISTS (
+              SELECT 1
+              FROM entries e
+              WHERE e."roundId" = ro.id
+            )
+          LIMIT 1
+        ),
+        cancelled AS (
+          UPDATE rounds ro
+          SET
+            status = CAST(${RoundStatus.CANCELLED} AS "RoundStatus"),
+            "cancelledAt" = ${openedAt},
+            "updatedAt" = ${openedAt}
+          FROM candidate c
+          WHERE ro.id = c.id
+            AND ro.status = CAST(${RoundStatus.OPEN} AS "RoundStatus")
+          RETURNING ro.*
+        ),
+        latest AS (
+          SELECT COALESCE(MAX(ro."roundNumber"), 0) + 1 AS "roundNumber"
+          FROM rounds ro
+          WHERE ro."roomId" = ${roomId}
+        ),
+        inserted AS (
+          INSERT INTO rounds (
+            id,
+            "roomId",
+            "roundNumber",
+            status,
+            "openedAt",
+            "locksAt",
+            "totalEntryAmount",
+            "houseFeeAmount",
+            "payoutAmount",
+            "serverSeedHash",
+            "serverSeedReveal",
+            "idempotencyKey",
+            "createdAt",
+            "updatedAt"
+          )
+          SELECT
+            ${nextRoundId},
+            ${roomId},
+            latest."roundNumber",
+            CAST(${RoundStatus.OPEN} AS "RoundStatus"),
+            ${openedAt},
+            ${openedAt} + (candidate."roundDurationMs" * INTERVAL '1 millisecond'),
+            0,
+            0,
+            0,
+            ${serverSeedHash},
+            ${serverSeed},
+            'round:start:' || ${roomId} || ':' || latest."roundNumber"::text,
+            ${openedAt},
+            ${openedAt}
+          FROM candidate
+          CROSS JOIN latest
+          WHERE EXISTS (SELECT 1 FROM cancelled)
+          ON CONFLICT ("roomId", "roundNumber") DO NOTHING
+          RETURNING *
+        )
+        SELECT
+          c.id AS "cancelledId",
+          c."roomId" AS "cancelledRoomId",
+          c."roundNumber" AS "cancelledRoundNumber",
+          c.status AS "cancelledStatus",
+          c."totalEntryAmount" AS "cancelledTotalEntryAmount",
+          c."houseFeeAmount" AS "cancelledHouseFeeAmount",
+          c."payoutAmount" AS "cancelledPayoutAmount",
+          c."openedAt" AS "cancelledOpenedAt",
+          c."locksAt" AS "cancelledLocksAt",
+          c."lockedAt" AS "cancelledLockedAt",
+          c."drawingAt" AS "cancelledDrawingAt",
+          c."spinningAt" AS "cancelledSpinningAt",
+          c."settlingAt" AS "cancelledSettlingAt",
+          c."completedAt" AS "cancelledCompletedAt",
+          c."cancelledAt" AS "cancelledCancelledAt",
+          c."serverSeedHash" AS "cancelledServerSeedHash",
+          c."winningTicket" AS "cancelledWinningTicket",
+          c."winnerUserId" AS "cancelledWinnerUserId",
+          c."winnerEntryId" AS "cancelledWinnerEntryId",
+          c."spinAngle" AS "cancelledSpinAngle",
+          n.id AS "nextId",
+          n."roomId" AS "nextRoomId",
+          n."roundNumber" AS "nextRoundNumber",
+          n.status AS "nextStatus",
+          n."totalEntryAmount" AS "nextTotalEntryAmount",
+          n."houseFeeAmount" AS "nextHouseFeeAmount",
+          n."payoutAmount" AS "nextPayoutAmount",
+          n."openedAt" AS "nextOpenedAt",
+          n."locksAt" AS "nextLocksAt",
+          n."lockedAt" AS "nextLockedAt",
+          n."drawingAt" AS "nextDrawingAt",
+          n."spinningAt" AS "nextSpinningAt",
+          n."settlingAt" AS "nextSettlingAt",
+          n."completedAt" AS "nextCompletedAt",
+          n."cancelledAt" AS "nextCancelledAt",
+          n."serverSeedHash" AS "nextServerSeedHash",
+          n."winningTicket" AS "nextWinningTicket",
+          n."winnerUserId" AS "nextWinnerUserId",
+          n."winnerEntryId" AS "nextWinnerEntryId",
+          n."spinAngle" AS "nextSpinAngle"
+        FROM cancelled c
+        JOIN inserted n ON true
+      `,
+    );
+
+    this.logRoundTransactionIfSlow(
+      roomId,
+      'cancelExpiredEmptyOpenRoundAndStartNextForRoomFast',
+      Date.now() - startedAt,
+      `roundId=${roundId} rows=${rows.length}`,
+    );
+
+    const row = rows[0];
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      cancelledRound: this.toRoundSnapshot(
+        this.toRoundFromEmptyCancelAndStartRow(row, 'cancelled'),
+      ),
+      currentRound: this.toRoundSnapshot(
+        this.toRoundFromEmptyCancelAndStartRow(row, 'next'),
+      ),
+      refundSummary: {
+        refundedCount: 0,
+        skippedCount: 0,
+        alreadyRefundedCount: 0,
+        refundedAmount: '0',
+      },
+    };
+  }
+
+  async cancelCurrentRoundAndStartNextForRoom(roomId: string) {
+    if (!roomId) {
+      throw new BadRequestException('roomId is required.');
+    }
+
+    const startedAt = Date.now();
+    const { cancelledRound, refundResults, nextRound, timing } =
+      await this.cancelRoundAndStartNextForRoomTx({
+        roomId,
+        requireExpiredOpen: false,
+        requestStartedAt: startedAt,
+      });
+
+    this.logRoundTransactionIfSlow(
+      roomId,
+      'cancelCurrentRoundAndStartNextForRoom',
+      Date.now() - startedAt,
+      `refunds=${refundResults.length} ${this.formatCancelAndStartTiming(timing)}`,
+    );
+
+    const cancellation = this.toRoundCancellationResult(
+      cancelledRound,
+      refundResults,
+    );
+
+    return {
+      cancelledRound: cancellation.currentRound,
+      currentRound: this.toRoundSnapshot(nextRound),
+      refundSummary: {
+        refundedCount: cancellation.refundedCount,
+        skippedCount: cancellation.skippedCount,
+        alreadyRefundedCount: cancellation.alreadyRefundedCount,
+        refundedAmount: cancellation.refundedAmount,
+      },
+    };
+  }
+
+  private async cancelRoundAndStartNextForRoomTx(args: {
+    roomId: string;
+    roundId?: string;
+    requireExpiredOpen: boolean;
+    requestStartedAt?: number;
+  }) {
+    return this.prisma.$transaction(async (tx) => {
+      const timing: CancelAndStartTiming = {
+        transactionWaitMs: Date.now() - (args.requestStartedAt ?? Date.now()),
+        roomLockMs: 0,
+        roundLockMs: 0,
+        findEntriesMs: 0,
+        refundMs: 0,
+        cancelMs: 0,
+        nextRoundMs: 0,
+      };
+
+      const roomLockStartedAt = Date.now();
+      const roomLockResult = await tx.$queryRaw<Array<{ locked: boolean }>>`
+        SELECT pg_try_advisory_xact_lock(hashtext(${args.roomId})) AS locked
+      `;
+      timing.roomLockMs = Date.now() - roomLockStartedAt;
+
+      if (roomLockResult[0]?.locked !== true) {
+        throw new ConflictException(
+          'Another round start is already running for this room.',
+        );
+      }
+
+      const room = await tx.room.findUnique({
+        where: { id: args.roomId },
+        select: {
+          id: true,
+          status: true,
+          roundDurationMs: true,
+        },
+      });
+
+      if (!room) {
+        throw new NotFoundException('Room not found.');
+      }
+
+      if (room.status !== 'ACTIVE') {
+        throw new BadRequestException('Only ACTIVE rooms can start rounds.');
+      }
+
+      let round = args.roundId
+        ? await tx.round.findUnique({
+            where: { id: args.roundId },
+          })
+        : await tx.round.findFirst({
+            where: {
+              roomId: args.roomId,
+              status: { in: CANCELLABLE_ROUND_STATUSES },
+            },
+            orderBy: { roundNumber: 'desc' },
+          });
+
+      if (!round || round.roomId !== args.roomId) {
+        throw new NotFoundException('Round not found.');
+      }
+
+      const roundLockStartedAt = Date.now();
+      const roundLockResult = await tx.$queryRaw<Array<{ locked: boolean }>>`
+        SELECT pg_try_advisory_xact_lock(hashtext(${round.id})::bigint) AS locked
+      `;
+      timing.roundLockMs = Date.now() - roundLockStartedAt;
+
+      if (roundLockResult[0]?.locked !== true) {
+        throw new ConflictException(
+          'Another round transition is already running for this round.',
+        );
+      }
+
+      round = await tx.round.findUniqueOrThrow({
+        where: { id: round.id },
+      });
+
+      if (round.status !== RoundStatus.CANCELLED) {
+        if (!CANCELLABLE_ROUND_STATUSES.includes(round.status)) {
+          throw new BadRequestException(
+            'Round changed before cancellation could start.',
+          );
+        }
+
+        if (args.requireExpiredOpen) {
+          if (round.status !== RoundStatus.OPEN) {
+            throw new BadRequestException(
+              'Round changed before expired OPEN cancellation could start.',
+            );
+          }
+
+          if (!round.locksAt || round.locksAt.getTime() > Date.now()) {
+            throw new BadRequestException('Round is not an expired OPEN round.');
+          }
+        }
+
+        if (round.status === RoundStatus.OPEN && !args.requireExpiredOpen) {
+          const stopEntryResult = await tx.round.updateMany({
+            where: {
+              id: round.id,
+              status: RoundStatus.OPEN,
+            },
+            data: {
+              status: RoundStatus.LOCKED,
+              lockedAt: new Date(),
+            },
+          });
+
+          if (stopEntryResult.count !== 1) {
+            round = await tx.round.findUniqueOrThrow({
+              where: { id: round.id },
+            });
+
+            if (!CANCELLABLE_ROUND_STATUSES.includes(round.status)) {
+              throw new BadRequestException(
+                'Round changed while cancellation was starting. Retry cancel.',
+              );
+            }
+          } else {
+            round = await tx.round.findUniqueOrThrow({
+              where: { id: round.id },
+            });
+          }
+        }
+      }
+
+      const entries =
+        round.status === RoundStatus.CANCELLED
+          ? []
+          : await this.measureCancelAndStartPart(timing, 'findEntriesMs', () =>
+              tx.entry.findMany({
+                where: { roundId: round.id },
+                orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+              }),
+            );
+
+      const refundResults: EntryRefundResult[] = [];
+
+      await this.measureCancelAndStartPart(timing, 'refundMs', async () => {
+        for (const entry of entries) {
+          refundResults.push(
+            await this.walletsService.refundEntryHolds(tx, {
+              roundId: round.id,
+              entryId: entry.id,
+            }),
+          );
+        }
+      });
+
+      if (round.status !== RoundStatus.CANCELLED) {
+        const cancelResult = await this.measureCancelAndStartPart(
+          timing,
+          'cancelMs',
+          () =>
+            tx.round.updateMany({
+              where: {
+                id: round.id,
+                status: { in: CANCELLABLE_ROUND_STATUSES },
+              },
+              data: {
+                status: RoundStatus.CANCELLED,
+                cancelledAt: new Date(),
+              },
+            }),
+        );
+
+        if (cancelResult.count !== 1) {
+          throw new BadRequestException(
+            'Round could not be marked CANCELLED. Manual review required.',
+          );
+        }
+      }
+
+      const cancelledRound = await tx.round.findUniqueOrThrow({
+        where: { id: round.id },
+      });
+      const nextRound = await this.measureCancelAndStartPart(
+        timing,
+        'nextRoundMs',
+        () =>
+          this.findOrCreateOpenRoundForRoomTx(tx, {
+            roomId: args.roomId,
+            roundDurationMs: room.roundDurationMs,
+          }),
+      );
+
+      return {
+        cancelledRound,
+        refundResults,
+        nextRound,
+        timing,
+      };
+    }, this.transactionOptions);
+  }
+
   async cancelCurrentRoundForRoom(roomId: string) {
     if (!roomId) {
       throw new BadRequestException('roomId is required.');
@@ -869,15 +1526,7 @@ export class RoundsService {
       });
 
       if (cancelledRound) {
-        return {
-          currentRound: this.toRoundSnapshot(cancelledRound),
-          refundedCount: 0,
-          skippedCount: 0,
-          alreadyRefundedCount: 0,
-          refundedAmount: '0',
-          refundResults: [],
-          reused: true,
-        };
+        return this.toRoundCancellationResult(cancelledRound, [], true);
       }
 
       throw new BadRequestException('Room does not have a cancellable round.');
@@ -909,15 +1558,7 @@ export class RoundsService {
         });
 
         if (racedRound.status === RoundStatus.CANCELLED) {
-          return {
-            currentRound: this.toRoundSnapshot(racedRound),
-            refundedCount: 0,
-            skippedCount: 0,
-            alreadyRefundedCount: 0,
-            refundedAmount: '0',
-            refundResults: [],
-            reused: true,
-          };
+          return this.toRoundCancellationResult(racedRound, [], true);
         }
 
         if (!CANCELLABLE_ROUND_STATUSES.includes(racedRound.status)) {
@@ -977,33 +1618,7 @@ export class RoundsService {
       where: { id: roundForCancellation.id },
     });
 
-    const refundedCount = refundResults.filter(
-      (result) => result.refunded,
-    ).length;
-    const skippedCount = refundResults.filter(
-      (result) => result.reason === 'NO_HOLD_FOUND',
-    ).length;
-    const alreadyRefundedCount = refundResults.filter(
-      (result) => result.reason === 'ALREADY_REFUNDED',
-    ).length;
-    const refundedAmount = refundResults.reduce(
-      (sum, result) => sum + result.amount,
-      0n,
-    );
-
-    return {
-      currentRound: this.toRoundSnapshot(cancelledRound),
-      refundedCount,
-      skippedCount,
-      alreadyRefundedCount,
-      refundedAmount: refundedAmount.toString(),
-      refundResults: refundResults.map((refund) => ({
-        entryId: refund.entryId,
-        refunded: refund.refunded,
-        amount: refund.amount.toString(),
-        reason: refund.reason,
-      })),
-    };
+    return this.toRoundCancellationResult(cancelledRound, refundResults);
   }
 
   async getLatestRoundResultForRoom(roomId: string) {
@@ -1075,6 +1690,102 @@ export class RoundsService {
         details ? ` ${details}` : ''
       }`,
     );
+  }
+
+  private logRoundTransactionIfSlow(
+    roomId: string,
+    label: string,
+    durationMs: number,
+    details?: string,
+  ) {
+    if (durationMs < ROUND_TRANSACTION_TIMING_WARN_THRESHOLD_MS) {
+      return;
+    }
+
+    this.logger.warn(
+      `[round-transaction-timing:${roomId}] ${label} duration=${durationMs}ms${
+        details ? ` ${details}` : ''
+      } dbWaitMayBeIncluded=true`,
+    );
+  }
+
+  private async measureCancelAndStartPart<T>(
+    timing: CancelAndStartTiming,
+    key: keyof Omit<CancelAndStartTiming, 'transactionWaitMs'>,
+    work: () => Promise<T> | T,
+  ) {
+    const startedAt = Date.now();
+
+    try {
+      return await work();
+    } finally {
+      timing[key] = Date.now() - startedAt;
+    }
+  }
+
+  private formatCancelAndStartTiming(timing: CancelAndStartTiming) {
+    return [
+      `txWait=${timing.transactionWaitMs}ms`,
+      `roomLock=${timing.roomLockMs}ms`,
+      `roundLock=${timing.roundLockMs}ms`,
+      `entries=${timing.findEntriesMs}ms`,
+      `refunds=${timing.refundMs}ms`,
+      `cancel=${timing.cancelMs}ms`,
+      `nextOpen=${timing.nextRoundMs}ms`,
+    ].join(' ');
+  }
+
+  private toRoundFromEmptyCancelAndStartRow(
+    row: EmptyCancelAndStartRow,
+    prefix: 'cancelled' | 'next',
+  ): RoundSnapshotSource {
+    if (prefix === 'cancelled') {
+      return {
+        id: row.cancelledId,
+        roomId: row.cancelledRoomId,
+        roundNumber: row.cancelledRoundNumber,
+        status: row.cancelledStatus,
+        totalEntryAmount: row.cancelledTotalEntryAmount,
+        houseFeeAmount: row.cancelledHouseFeeAmount,
+        payoutAmount: row.cancelledPayoutAmount,
+        openedAt: row.cancelledOpenedAt,
+        locksAt: row.cancelledLocksAt,
+        lockedAt: row.cancelledLockedAt,
+        drawingAt: row.cancelledDrawingAt,
+        spinningAt: row.cancelledSpinningAt,
+        settlingAt: row.cancelledSettlingAt,
+        completedAt: row.cancelledCompletedAt,
+        cancelledAt: row.cancelledCancelledAt,
+        serverSeedHash: row.cancelledServerSeedHash,
+        winningTicket: row.cancelledWinningTicket,
+        winnerUserId: row.cancelledWinnerUserId,
+        winnerEntryId: row.cancelledWinnerEntryId,
+        spinAngle: row.cancelledSpinAngle,
+      };
+    }
+
+    return {
+      id: row.nextId,
+      roomId: row.nextRoomId,
+      roundNumber: row.nextRoundNumber,
+      status: row.nextStatus,
+      totalEntryAmount: row.nextTotalEntryAmount,
+      houseFeeAmount: row.nextHouseFeeAmount,
+      payoutAmount: row.nextPayoutAmount,
+      openedAt: row.nextOpenedAt,
+      locksAt: row.nextLocksAt,
+      lockedAt: row.nextLockedAt,
+      drawingAt: row.nextDrawingAt,
+      spinningAt: row.nextSpinningAt,
+      settlingAt: row.nextSettlingAt,
+      completedAt: row.nextCompletedAt,
+      cancelledAt: row.nextCancelledAt,
+      serverSeedHash: row.nextServerSeedHash,
+      winningTicket: row.nextWinningTicket,
+      winnerUserId: row.nextWinnerUserId,
+      winnerEntryId: row.nextWinnerEntryId,
+      spinAngle: row.nextSpinAngle,
+    };
   }
 
   private async buildLatestRoundResultForRoom(roomId: string) {
@@ -1321,6 +2032,77 @@ export class RoundsService {
     };
   }
 
+  toLiveRoundSnapshot(
+    round: RoundSnapshotSource,
+    entryCount?: number | null,
+  ): LiveRoundSnapshot {
+    const serverNow = new Date();
+    const publicRoundView = buildPublicRoundPhaseView(
+      {
+        status: round.status,
+        locksAt: round.locksAt,
+        lockedAt: round.lockedAt,
+        drawingAt: round.drawingAt,
+        spinningAt: round.spinningAt,
+        settlingAt: round.settlingAt,
+        completedAt: round.completedAt,
+        cancelledAt: round.cancelledAt,
+        winnerEntryId: round.winnerEntryId,
+        entryCount,
+      },
+      serverNow,
+    );
+    const msUntilLock =
+      round.status === RoundStatus.OPEN && round.locksAt
+        ? Math.max(0, round.locksAt.getTime() - serverNow.getTime())
+        : 0;
+
+    return {
+      ...this.toRoundSnapshot(round),
+      msUntilLock,
+      phase: publicRoundView.phase,
+      phaseLabel: publicRoundView.phaseLabel,
+      msUntilPhaseEnd: publicRoundView.msUntilPhaseEnd,
+      msUntilNextRound: publicRoundView.msUntilNextRound,
+      resultReason: publicRoundView.resultReason,
+    };
+  }
+
+  private toRoundCancellationResult(
+    cancelledRound: RoundSnapshotSource,
+    refundResults: EntryRefundResult[],
+    reused = false,
+  ) {
+    const refundedCount = refundResults.filter(
+      (result) => result.refunded,
+    ).length;
+    const skippedCount = refundResults.filter(
+      (result) => result.reason === 'NO_HOLD_FOUND',
+    ).length;
+    const alreadyRefundedCount = refundResults.filter(
+      (result) => result.reason === 'ALREADY_REFUNDED',
+    ).length;
+    const refundedAmount = refundResults.reduce(
+      (sum, result) => sum + result.amount,
+      0n,
+    );
+
+    return {
+      currentRound: this.toRoundSnapshot(cancelledRound),
+      refundedCount,
+      skippedCount,
+      alreadyRefundedCount,
+      refundedAmount: refundedAmount.toString(),
+      refundResults: refundResults.map((refund) => ({
+        entryId: refund.entryId,
+        refunded: refund.refunded,
+        amount: refund.amount.toString(),
+        reason: refund.reason,
+      })),
+      ...(reused ? { reused: true } : {}),
+    };
+  }
+
   private toEntrySnapshot(entry: Entry): EntrySnapshot {
     return {
       id: entry.id,
@@ -1403,4 +2185,3 @@ export class RoundsService {
     };
   }
 }
-

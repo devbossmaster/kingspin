@@ -3,9 +3,21 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SocketCategoryStateEvent } from "@kingspin/contracts";
 import { apiClient, type RoomListItem } from "../lib/api-client";
+import { toastGameError } from "../lib/error-toast";
+import { toHumanErrorMessage } from "../lib/human-error";
 import { getGameSocket } from "../lib/socket-client";
 
 type RoomsBySlug = Record<string, RoomListItem[]>;
+
+function normalizeCategorySlugs(categorySlugs: string[]) {
+  return Array.from(
+    new Set(
+      categorySlugs
+        .map((slug) => slug.trim())
+        .filter((slug) => slug.length > 0),
+    ),
+  );
+}
 
 function normalizeRooms(rooms: RoomListItem[]) {
   const receivedAtMs = Date.now();
@@ -14,18 +26,14 @@ function normalizeRooms(rooms: RoomListItem[]) {
 }
 
 export function useRoomSummaries(categorySlugs: string[]) {
-  const normalizedSlugs = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          categorySlugs
-            .map((slug) => slug.trim())
-            .filter((slug) => slug.length > 0),
-        ),
-      ),
+  const slugKey = useMemo(
+    () => normalizeCategorySlugs(categorySlugs).join("\n"),
     [categorySlugs],
   );
-  const slugKey = normalizedSlugs.join("|");
+  const normalizedSlugs = useMemo(
+    () => (slugKey.length > 0 ? slugKey.split("\n") : []),
+    [slugKey],
+  );
   const [roomsBySlug, setRoomsBySlug] = useState<RoomsBySlug>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,14 +57,15 @@ export function useRoomSummaries(categorySlugs: string[]) {
             const rooms = await apiClient.getRoomsByCategory(categorySlug);
             return [categorySlug, normalizeRooms(rooms)] as const;
           } catch (caught) {
-            nextError =
-              caught instanceof Error
-                ? caught.message
-                : "Could not load rooms.";
+            nextError = toHumanErrorMessage(caught, "Could not load rooms.");
             return [categorySlug, []] as const;
           }
         }),
       );
+
+      if (nextError) {
+        toastGameError(nextError, "Could not load rooms.");
+      }
 
       setRoomsBySlug((current) => ({
         ...current,
@@ -65,7 +74,7 @@ export function useRoomSummaries(categorySlugs: string[]) {
       setError(nextError);
       setLoading(false);
     },
-    [slugKey],
+    [normalizedSlugs],
   );
 
   useEffect(() => {
@@ -81,7 +90,7 @@ export function useRoomSummaries(categorySlugs: string[]) {
     return () => {
       cancelled = true;
     };
-  }, [refresh, slugKey]);
+  }, [normalizedSlugs.length, refresh]);
 
   useEffect(() => {
     if (normalizedSlugs.length === 0) {
@@ -131,7 +140,7 @@ export function useRoomSummaries(categorySlugs: string[]) {
       socket.off("connect", onConnect);
       socket.off("category:state", onCategoryState);
     };
-  }, [refresh, slugKey]);
+  }, [normalizedSlugs, refresh]);
 
   return {
     roomsBySlug,

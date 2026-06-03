@@ -82,8 +82,10 @@ export function getRoundPhaseLabel(
 
 export function getDisplayRoundPhaseLabel(
   roundOrStatus?: RoundPhaseSource | string | null,
-  _msUntilLock?: number | null,
+  msUntilLock?: number | null,
 ) {
+  void msUntilLock;
+
   return getRoundPhaseLabel(roundOrStatus);
 }
 

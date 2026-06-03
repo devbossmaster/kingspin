@@ -68,8 +68,11 @@ function RoomBattleCard({
   clientNowMs: number;
   index: number;
 }) {
+  // Room/ring cards: consume summary data only; routing stays on category/room ids.
   const roomHref = `/spinpro/${categorySlug}/${room.id}`;
   const currentRound = room.currentRound;
+
+  // Room summaries: keep summary phase/countdown mapping unchanged.
   const status = currentRound?.status ?? room.status;
   const phase = getPublicRoundPhase(currentRound ?? status) ?? "PREPARING";
   const msUntilLock = getAdjustedMsUntilLock(room, clientNowMs);
@@ -138,10 +141,15 @@ function RoomBattleCard({
 }
 
 export default function CategoryLobbyPage() {
+  // Route params: category slug drives category metadata and room summaries.
   const params = useParams<{ categorySlug: string }>();
   const categorySlug = params.categorySlug;
+
+  // Category fetch: metadata only, no full room live-state mount on this page.
   const { categories } = useCategories();
   const [clientNowMs, setClientNowMs] = useState(() => Date.now());
+
+  // Socket summary updates: use lightweight room summaries for list cards.
   const { roomsBySlug, loading, error } = useRoomSummaries([categorySlug]);
   const rooms = roomsBySlug[categorySlug] ?? [];
 
@@ -174,6 +182,7 @@ export default function CategoryLobbyPage() {
   return (
     <GameShell backHref="/spinpro">
       <div className="mx-auto w-full max-w-[24rem] px-3 py-4 md:max-w-5xl md:px-8 md:py-8">
+        {/* Safe visual section: category/tier header card. */}
         <section className="relative grid min-h-[6.7rem] grid-cols-[5.35rem_minmax(0,1fr)] overflow-hidden rounded-lg border border-yellow-300/35 bg-[linear-gradient(145deg,rgba(5,9,27,0.98),rgba(4,7,22,0.98)_58%,rgba(24,20,49,0.9))] shadow-[0_20px_50px_rgba(0,0,0,0.36)]">
           <div className="relative overflow-hidden">
             <Image
@@ -214,12 +223,14 @@ export default function CategoryLobbyPage() {
           </div>
         </section>
 
+        {/* Loading/empty/error states: summary fetch error. */}
         {error ? (
           <div className="mt-3 rounded-md border border-red-400/35 bg-red-500/10 px-3 py-2 text-xs font-semibold text-red-200">
             {error}
           </div>
         ) : null}
 
+        {/* Room/ring cards */}
         <section className="mt-4">
           <div className="flex items-center justify-between gap-3 px-1">
             <div className="min-w-0">
@@ -236,6 +247,7 @@ export default function CategoryLobbyPage() {
           </div>
 
           {loading ? (
+            /* Loading/empty/error states: room card skeletons. */
             <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4">
               {[0, 1, 2, 3, 4, 5].map((item) => (
                 <div
@@ -258,6 +270,7 @@ export default function CategoryLobbyPage() {
             </div>
           )}
 
+          {/* Loading/empty/error states: empty room summary list. */}
           {!loading && rooms.length === 0 ? (
             <div className="mt-4 rounded-lg border border-dashed border-white/15 bg-white/[0.03] px-4 py-10 text-center text-sm font-semibold text-slate-400">
               No active room is available for this category.

@@ -2,7 +2,7 @@
 
 import { useMemo } from "react";
 import type { EntryWithPlayerSnapshot } from "@kingspin/contracts";
-import { formatCoins, ticketRangeLabel } from "../../lib/format";
+import { formatCoins } from "../../lib/format";
 import { getWheelSliceColor } from "./spinning-wheel";
 
 type PlayersListProps = {
@@ -24,8 +24,17 @@ function getEntryChance(entryAmount: string, totalEntryAmount: string) {
 
 function playerName(entry: EntryWithPlayerSnapshot, index: number) {
   return (
-    entry.player?.username ?? entry.player?.fullName ?? `Player ${index + 1}`
+    entry.player?.username ??
+    entry.player?.fullName ??
+    entry.userId?.slice(0, 6) ??
+    `Player ${index + 1}`
   );
+}
+
+function shortChance(value: number) {
+  if (value >= 10) return value.toFixed(1);
+  if (value > 0) return value.toFixed(2);
+  return "0";
 }
 
 export function PlayersList({
@@ -33,6 +42,7 @@ export function PlayersList({
   totalEntryAmount,
   winnerEntryId,
 }: PlayersListProps) {
+  // Keep player display order stable: created time first, then id.
   const sortedEntries = useMemo(() => {
     return [...entries].sort((left, right) => {
       const leftTime = new Date(left.createdAt).getTime();
@@ -46,167 +56,96 @@ export function PlayersList({
     });
   }, [entries]);
 
-  const topEntry = useMemo(() => {
+  if (sortedEntries.length === 0) {
     return (
-      [...entries].sort((left, right) => {
-        const rightAmount = Number(right.amount);
-        const leftAmount = Number(left.amount);
-
-        if (rightAmount !== leftAmount) {
-          return rightAmount - leftAmount;
-        }
-
-        return left.id.localeCompare(right.id);
-      })[0] ?? null
+      <div className="rounded-2xl border border-white/10 bg-black/20 p-5 text-center shadow-inner backdrop-blur-md">
+        <p className="text-base font-black text-white">No players yet</p>
+        <p className="mt-1 text-sm font-semibold text-slate-300">
+          Be the first one to join this round.
+        </p>
+      </div>
     );
-  }, [entries]);
+  }
 
   return (
-    <section className="arcadia-surface relative overflow-hidden rounded-lg p-4">
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(250,204,21,0.65)] to-transparent" />
+    <div className="max-h-[220px] space-y-1.5 overflow-y-auto pr-1">
+      {sortedEntries.map((entry, index) => {
+        const isWinner = winnerEntryId === entry.id;
+        const isPending = Boolean(entry.pending);
+        const chance = getEntryChance(entry.amount, totalEntryAmount);
+        const displayName = playerName(entry, index);
 
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-xs font-black uppercase tracking-[0.22em] text-[var(--gold)]">
-            Players
-          </p>
-          <p className="mt-1 text-sm text-text-secondary">
-            {entries.length} {entries.length === 1 ? "player" : "players"} in
-            this round
-          </p>
-        </div>
+        // Winner/current-user highlight section: this component only receives winnerEntryId.
+        return (
+          <div
+            key={entry.id}
+            className={`group relative grid grid-cols-[1fr_auto_auto] items-center gap-2 overflow-hidden rounded-2xl border px-2.5 py-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)] backdrop-blur-md transition ${
+              isWinner
+                ? "border-amber-300/45 bg-amber-400/[0.105] shadow-[0_0_24px_rgba(250,204,21,0.12)]"
+                : isPending
+                  ? "border-cyan-300/30 bg-cyan-400/[0.075]"
+                  : "border-white/[0.065] bg-black/[0.18] hover:border-white/15 hover:bg-white/[0.055]"
+            }`}
+          >
+            {/* Player row */}
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-white/[0.035] via-transparent to-black/10 opacity-80" />
 
-        <div className="rounded-full border border-[rgba(250,204,21,0.28)] bg-[rgba(250,204,21,0.1)] px-3 py-1 text-xs font-black uppercase tracking-[0.16em] text-[var(--gold)]">
-          Pool {formatCoins(totalEntryAmount)}
-        </div>
-      </div>
+            {/* Avatar/name section */}
+            <div className="relative flex min-w-0 items-center gap-2">
+              <span
+                className={`h-3 w-3 shrink-0 rounded-full ring-2 ring-black/30 shadow-[0_0_12px_rgba(255,255,255,0.12)] ${
+                  isPending ? "animate-pulse" : ""
+                }`}
+                style={{ backgroundColor: getWheelSliceColor(index) }}
+                aria-hidden="true"
+              />
 
-      {topEntry ? (
-        <div className="mt-4 rounded-md border border-[rgba(250,204,21,0.22)] bg-[rgba(250,204,21,0.07)] px-3 py-2">
-          <div className="flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-xs font-bold uppercase tracking-[0.16em] text-text-dim">
-                Current Top Entry
-              </p>
-              <p className="mt-1 truncate text-sm font-black text-text-primary">
-                {playerName(topEntry, 0)}
+              <div className="min-w-0">
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <p className="truncate text-xs font-black text-white drop-shadow-[0_1px_6px_rgba(0,0,0,0.65)]">
+                    {isWinner ? "👑 " : ""}
+                    {displayName}
+                  </p>
+
+                  {isPending ? (
+                    <span className="shrink-0 rounded-full border border-cyan-200/20 bg-cyan-400/15 px-1.5 py-0.5 text-[9px] font-black uppercase text-cyan-100">
+                      Pending
+                    </span>
+                  ) : null}
+
+                  {isWinner ? (
+                    <span className="shrink-0 rounded-full border border-amber-100/40 bg-amber-300/90 px-1.5 py-0.5 text-[9px] font-black uppercase text-amber-950">
+                      Winner
+                    </span>
+                  ) : null}
+                </div>
+
+                <p className="mt-0.5 font-mono text-[10px] font-bold text-slate-400">
+                  #{index + 1}
+                </p>
+              </div>
+            </div>
+
+            {/* Amount section */}
+            <div className="relative shrink-0 text-right">
+              <p className="font-mono text-xs font-black text-amber-300 drop-shadow-[0_1px_6px_rgba(0,0,0,0.7)]">
+                🪙 {formatCoins(entry.amount)}
               </p>
             </div>
-            <p className="font-mono text-sm font-black text-[var(--gold)]">
-              {formatCoins(topEntry.amount)}
-            </p>
+
+            {/* Chance badge section */}
+            <div
+              className={`relative shrink-0 rounded-full border px-2 py-1 text-[10px] font-black shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] ${
+                isWinner
+                  ? "border-amber-100/35 bg-amber-300/90 text-amber-950"
+                  : "border-emerald-100/25 bg-emerald-400/85 text-emerald-950"
+              }`}
+            >
+              {shortChance(chance)}%
+            </div>
           </div>
-        </div>
-      ) : null}
-
-      <div className="mt-3 max-h-[330px] space-y-2 overflow-y-auto pr-1">
-        {sortedEntries.length === 0 ? (
-          <div className="rounded-md border border-dashed border-[var(--border)] bg-white/[0.03] p-5 text-center">
-            <p className="font-display text-lg font-black text-text-primary">
-              No entries yet
-            </p>
-            <p className="mt-1 text-sm text-text-secondary">
-              Be the first player to enter this round.
-            </p>
-          </div>
-        ) : (
-          sortedEntries.map((entry, index) => {
-            const isWinner = winnerEntryId === entry.id;
-            const isPending = Boolean(entry.pending);
-            const chance = getEntryChance(entry.amount, totalEntryAmount);
-            const displayName = playerName(entry, index);
-            const hasTicketRange =
-              entry.ticketStart !== null && entry.ticketEnd !== null;
-
-            return (
-              <div
-                key={entry.id}
-                className={`group rounded-md border p-3 transition ${
-                  isWinner
-                    ? "border-[var(--gold)] bg-[rgba(250,204,21,0.13)] shadow-[0_0_24px_rgba(250,204,21,0.12)]"
-                    : isPending
-                      ? "border-[rgba(45,212,191,0.4)] bg-[rgba(45,212,191,0.1)]"
-                      : "border-[var(--border)] bg-white/[0.04] hover:border-[rgba(250,204,21,0.28)] hover:bg-white/[0.06]"
-                }`}
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span
-                      className="h-3.5 w-3.5 shrink-0 rounded-full ring-2 ring-black/20"
-                      style={{ backgroundColor: getWheelSliceColor(index) }}
-                      aria-hidden="true"
-                    />
-
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <p className="truncate font-black text-text-primary">
-                          {displayName}
-                        </p>
-
-                        {isWinner ? (
-                          <span className="rounded-full border border-[rgba(250,204,21,0.35)] bg-[rgba(250,204,21,0.12)] px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-[var(--gold)]">
-                            Winner
-                          </span>
-                        ) : null}
-
-                        {isPending ? (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-[rgba(45,212,191,0.35)] bg-[rgba(45,212,191,0.12)] px-2 py-0.5 text-[10px] font-black uppercase tracking-[0.14em] text-teal">
-                            <span className="h-1.5 w-1.5 rounded-full bg-teal animate-pulse" />
-                            Pending
-                          </span>
-                        ) : null}
-                      </div>
-
-                      {hasTicketRange ? (
-                        <p className="mt-1 font-mono text-xs text-text-secondary">
-                          Tickets{" "}
-                          {ticketRangeLabel(entry.ticketStart, entry.ticketEnd)}
-                        </p>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="shrink-0 text-right">
-                    <p className="font-mono text-sm font-black text-text-primary">
-                      {formatCoins(entry.amount)}
-                    </p>
-                    <p className="mt-1 font-mono text-xs text-text-dim">
-                      {chance.toFixed(chance >= 10 ? 1 : 2)}%
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-[var(--bg-raised)]">
-                  <div
-                    className="h-full rounded-full bg-[var(--gold)] transition-[width] duration-300"
-                    style={{ width: `${chance}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      <div className="mt-4 grid grid-cols-2 gap-2">
-        <div className="rounded-md border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2">
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-text-dim">
-            Total Pool
-          </p>
-          <p className="mt-1 font-mono text-sm font-black text-[var(--gold)]">
-            {formatCoins(totalEntryAmount)} coins
-          </p>
-        </div>
-
-        <div className="rounded-md border border-[var(--border)] bg-[var(--bg-raised)] px-3 py-2">
-          <p className="text-xs font-bold uppercase tracking-[0.16em] text-text-dim">
-            Players
-          </p>
-          <p className="mt-1 font-mono text-sm font-black text-text-primary">
-            {entries.length}
-          </p>
-        </div>
-      </div>
-    </section>
+        );
+      })}
+    </div>
   );
 }

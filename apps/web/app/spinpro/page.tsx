@@ -51,6 +51,7 @@ function ModeCard({
 }) {
   const Icon = mode === "fixed" ? Equal : BadgeDollarSign;
 
+  // Mode cards: safe visual styling zone.
   return (
     <button
       type="button"
@@ -115,6 +116,7 @@ function CategoryBattleRow({
   const amountLabel = getBattleAmountLabel(category);
   const artworkOffset = ["-left-7", "-left-10", "-left-12"][index % 3];
 
+  // Category/tier cards: safe visual styling zone; routing stays on category slug.
   return (
     <Link
       href={`/spinpro/${category.slug}`}
@@ -164,9 +166,11 @@ function CategoryBattleRow({
 }
 
 export default function SpinBattleRoomsPage() {
+  // Category fetch: this page only needs category metadata.
   const { categories, loading, error } = useCategories();
   const [selectedMode, setSelectedMode] = useState<PlayerMode | null>(null);
 
+  // Category/tier grouping: keep baseline filtering and sorting behavior unchanged.
   const sortedCategories = useMemo(() => {
     const baseline = sortPlayerCategories(
       categories.filter(isBaselinePlayerCategory),
@@ -188,6 +192,7 @@ export default function SpinBattleRoomsPage() {
   return (
     <GameShell backHref="/">
       <div className="mx-auto w-full max-w-6xl px-4 py-6 md:px-8 md:py-10">
+        {/* Safe visual section: page hero. */}
         <section>
           <div className="relative overflow-hidden rounded-lg border border-blue-300/15 bg-[radial-gradient(circle_at_28%_18%,rgba(37,99,235,0.36),transparent_34%),linear-gradient(145deg,#07142c_0%,#050816_48%,#02030a_100%)] p-5 shadow-[0_24px_62px_rgba(0,0,0,0.44)] md:p-7">
             <div className="absolute right-0 top-0 h-full w-1/2 opacity-35">
@@ -216,12 +221,14 @@ export default function SpinBattleRoomsPage() {
           </div>
         </section>
 
+        {/* Loading/empty/error states: category fetch error. */}
         {error ? (
           <div className="mt-5 rounded-xl border border-red-400/35 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200">
             {error}
           </div>
         ) : null}
 
+        {/* Mode cards */}
         <section className="mt-6">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
@@ -260,6 +267,7 @@ export default function SpinBattleRoomsPage() {
         </section>
 
         {selectedMode ? (
+          /* Category/tier cards */
           <section className="mx-auto mt-7 w-full max-w-xl">
             <div className="flex items-end justify-between gap-3">
               <div>

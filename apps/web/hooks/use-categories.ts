@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { apiClient, type CategoryListItem } from "../lib/api-client";
+import { toastGameError } from "../lib/error-toast";
 
 export function useCategories() {
   const [categories, setCategories] = useState<CategoryListItem[]>([]);
@@ -23,11 +24,7 @@ export function useCategories() {
         }
       } catch (caught) {
         if (!cancelled) {
-          setError(
-            caught instanceof Error
-              ? caught.message
-              : "Could not load categories.",
-          );
+          setError(toastGameError(caught, "Could not load categories."));
         }
       } finally {
         if (!cancelled) {

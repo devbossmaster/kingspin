@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { DM_Mono, Inter, Syne } from "next/font/google";
+import { GameToaster } from "../components/system/game-toaster";
 import "./globals.css";
 
 const inter = Inter({
@@ -36,6 +37,7 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${inter.variable} ${syne.variable} ${dmMono.variable}`}>
         {children}
+        <GameToaster />
       </body>
     </html>
   );

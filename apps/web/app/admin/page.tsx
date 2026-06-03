@@ -54,28 +54,12 @@ function nestedRecord(value: unknown, key: string) {
   return asRecord(asRecord(value)[key]);
 }
 
-function nestedArray(value: unknown, key: string) {
-  return asArray(asRecord(value)[key]);
-}
-
 function getRoomId(room: unknown) {
   return text(asRecord(room).id, "");
 }
 
 function getRoundRoomId(round: unknown) {
   return text(asRecord(round).roomId, "");
-}
-
-function getRoomCode(room: unknown) {
-  return text(asRecord(room).code);
-}
-
-function getRoomName(room: unknown) {
-  return text(asRecord(room).name);
-}
-
-function getRoomMode(room: unknown) {
-  return text(asRecord(room).gameMode);
 }
 
 function getRoundStatus(round: unknown) {
@@ -129,7 +113,13 @@ function Section({
   );
 }
 
-function Pill({ children, tone }: { children: React.ReactNode; tone?: string }) {
+function Pill({
+  children,
+  tone,
+}: {
+  children: React.ReactNode;
+  tone?: string;
+}) {
   return (
     <span
       className={`inline-flex rounded-full border px-2.5 py-1 text-[11px] font-black uppercase tracking-[0.12em] ${
@@ -276,7 +266,11 @@ export default function AdminPage() {
     void loadAdmin();
   }, []);
 
-  async function runAction(label: string, key: string, action: () => Promise<unknown>) {
+  async function runAction(
+    label: string,
+    key: string,
+    action: () => Promise<unknown>,
+  ) {
     setError(null);
     setNotice(null);
     setActionState({ key, label });
@@ -305,7 +299,9 @@ export default function AdminPage() {
 
   const roomForPanel = selectedRoom() ?? rooms[0] ?? null;
   const roomForPanelId = roomForPanel ? getRoomId(roomForPanel) : "";
-  const visibleRounds = selectedRoomId ? selectedRoomRounds() : rounds.slice(0, 8);
+  const visibleRounds = selectedRoomId
+    ? selectedRoomRounds()
+    : rounds.slice(0, 8);
 
   return (
     <GameShell backHref="/spinpro">
@@ -409,7 +405,9 @@ export default function AdminPage() {
               >
                 <div className="grid gap-3">
                   {rooms.length === 0 ? (
-                    <p className="text-sm text-text-secondary">No rooms found.</p>
+                    <p className="text-sm text-text-secondary">
+                      No rooms found.
+                    </p>
                   ) : (
                     rooms.map((roomItem) => {
                       const room = asRecord(roomItem);
@@ -451,8 +449,13 @@ export default function AdminPage() {
                           <div className="mt-3 grid gap-2 text-xs text-text-secondary sm:grid-cols-4">
                             <span>ID: {id}</span>
                             <span>Max players: {text(room.maxPlayers)}</span>
-                            <span>Duration: {text(room.roundDurationMs)}ms</span>
-                            <span>Rounds: {text(nestedRecord(room, "_count").rounds, "0")}</span>
+                            <span>
+                              Duration: {text(room.roundDurationMs)}ms
+                            </span>
+                            <span>
+                              Rounds:{" "}
+                              {text(nestedRecord(room, "_count").rounds, "0")}
+                            </span>
                           </div>
                         </button>
                       );
@@ -619,8 +622,16 @@ export default function AdminPage() {
                           <div className="mt-3 grid gap-2 text-xs text-text-secondary sm:grid-cols-2">
                             <span>Opened: {text(roundRecord.openedAt)}</span>
                             <span>Locks: {text(roundRecord.locksAt)}</span>
-                            <span>Pool: {formatCoins(String(roundRecord.totalEntryAmount ?? 0))}</span>
-                            <span>Entries: {text(nestedRecord(round, "_count").entries, "0")}</span>
+                            <span>
+                              Pool:{" "}
+                              {formatCoins(
+                                String(roundRecord.totalEntryAmount ?? 0),
+                              )}
+                            </span>
+                            <span>
+                              Entries:{" "}
+                              {text(nestedRecord(round, "_count").entries, "0")}
+                            </span>
                           </div>
 
                           <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
@@ -751,4 +762,3 @@ export default function AdminPage() {
     </GameShell>
   );
 }
-

@@ -1,3 +1,4 @@
+import process from "node:process";
 import { io } from "socket.io-client";
 
 const API_URL = process.env.API_URL ?? "http://localhost:4000";
@@ -6,7 +7,9 @@ const ROOM_ID = process.env.ROOM_ID;
 if (!ROOM_ID) {
   console.error("Missing ROOM_ID.");
   console.error("Example:");
-  console.error("$env:ROOM_ID='your-room-id'; pnpm --filter web exec node scripts/socket-smoke.mjs");
+  console.error(
+    "$env:ROOM_ID='your-room-id'; pnpm --filter web exec node scripts/socket-smoke.mjs",
+  );
   process.exit(1);
 }
 
@@ -50,5 +53,7 @@ for (const eventName of events) {
 }
 
 setTimeout(() => {
-  console.log("Still listening. Trigger a round start/cancel or place an entry. Press Ctrl+C to stop.");
+  console.log(
+    "Still listening. Trigger a round start/cancel or place an entry. Press Ctrl+C to stop.",
+  );
 }, 3000);

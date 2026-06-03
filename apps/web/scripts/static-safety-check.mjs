@@ -44,11 +44,18 @@ function collectFiles(dir) {
 
 const sourceFiles = sourceDirs.flatMap(collectFiles);
 const sourceByFile = new Map(
-  sourceFiles.map((file) => [relative(webRoot, file), readFileSync(file, "utf8")]),
+  sourceFiles.map((file) => [
+    relative(webRoot, file),
+    readFileSync(file, "utf8"),
+  ]),
 );
 const allSource = [...sourceByFile.values()].join("\n");
 
-for (const forbidden of ["/dev/players", "/entries/dev-place", "entries/dev-place"]) {
+for (const forbidden of [
+  "/dev/players",
+  "/entries/dev-place",
+  "entries/dev-place",
+]) {
   if (allSource.includes(forbidden)) {
     fail(`Forbidden public dev route reference found: ${forbidden}`);
   }
@@ -80,9 +87,17 @@ if (!placeEntryMatch) {
     fail("apiClient.placeEntry does not preserve idempotencyKey.");
   }
 
-  for (const forbidden of ["userId", "walletId", "playerKey", "role", "balance"]) {
+  for (const forbidden of [
+    "userId",
+    "walletId",
+    "playerKey",
+    "role",
+    "balance",
+  ]) {
     if (placeEntrySource.includes(forbidden)) {
-      fail(`apiClient.placeEntry includes forbidden identity/state field: ${forbidden}`);
+      fail(
+        `apiClient.placeEntry includes forbidden identity/state field: ${forbidden}`,
+      );
     }
   }
 }
@@ -95,8 +110,8 @@ if (!apiClient.includes('"/categories"')) {
   fail("apiClient.getCategories must use /categories.");
 }
 
-if (!apiClient.includes("`/rooms?${params.toString()}`")) {
-  fail("apiClient.getRoomsByCategory must use /rooms?categorySlug=.");
+if (!apiClient.includes("`/rooms/live?${params.toString()}`")) {
+  fail("apiClient.getRoomsByCategory must use /rooms/live?categorySlug=.");
 }
 
 if (!apiClient.includes("`/rooms/${roomId}/live-state`")) {
@@ -104,7 +119,9 @@ if (!apiClient.includes("`/rooms/${roomId}/live-state`")) {
 }
 
 if (!apiClient.includes("`/rooms/${roomId}/rounds/latest-result`")) {
-  fail("apiClient.getLatestRoundResult must use /rooms/:roomId/rounds/latest-result.");
+  fail(
+    "apiClient.getLatestRoundResult must use /rooms/:roomId/rounds/latest-result.",
+  );
 }
 
 for (const page of [

@@ -24,6 +24,8 @@
     "RATE_LIMIT_MAX",
     "SENTRY_DSN",
     "LOG_LEVEL",
+    "API_URL",
+    "ROOM_ID",
     "NEXT_PUBLIC_API_URL",
     "NEXT_PUBLIC_SOCKET_URL",
     "NEXT_PUBLIC_WEB_URL"

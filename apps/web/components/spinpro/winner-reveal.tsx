@@ -13,6 +13,12 @@ type WinnerRevealProps = {
   onClose: () => void;
 };
 
+type ResultOutcome =
+  | "winner"
+  | "skipped-empty"
+  | "refunded-single"
+  | "cancelled";
+
 function CheckLine({
   label,
   value,
@@ -65,6 +71,68 @@ function ResultStat({
   );
 }
 
+function getNoWinnerOutcome(result: LatestRoundResult | null): ResultOutcome {
+  if (!result) return "cancelled";
+  if (result.entries.length === 0) return "skipped-empty";
+  if (result.entries.length === 1) return "refunded-single";
+
+  return "cancelled";
+}
+
+function getOutcomeCopy(outcome: ResultOutcome, roundNumber?: number | null) {
+  const roundLabel = `Round #${roundNumber ?? "-"} Completed`;
+
+  switch (outcome) {
+    case "winner":
+      return {
+        dialogTitle: "Winner revealed",
+        eyebrow: "Winner Revealed",
+        title: roundLabel,
+        panelLabel: "Winner",
+        summary:
+          "The wheel reveal is complete and the backend ledger has finalized the round result.",
+        primaryValue: null,
+        actionLabel: "Continue to next round",
+      };
+
+    case "skipped-empty":
+      return {
+        dialogTitle: "Round skipped",
+        eyebrow: "Round Skipped",
+        title: roundLabel,
+        panelLabel: "Outcome",
+        summary:
+          "No players joined this round, so the backend skipped it and opened the next round.",
+        primaryValue: "No entries",
+        actionLabel: "Continue",
+      };
+
+    case "refunded-single":
+      return {
+        dialogTitle: "Entry refunded",
+        eyebrow: "Entry Refunded",
+        title: roundLabel,
+        panelLabel: "Outcome",
+        summary:
+          "Only one player joined this round, so the backend refunded the entry and opened the next round.",
+        primaryValue: "Refunded",
+        actionLabel: "Continue",
+      };
+
+    case "cancelled":
+      return {
+        dialogTitle: "Round cancelled",
+        eyebrow: "Round Cancelled",
+        title: roundLabel,
+        panelLabel: "Outcome",
+        summary:
+          "The backend ended this round without a winner and kept the room moving to the next round.",
+        primaryValue: "No winner",
+        actionLabel: "Continue",
+      };
+  }
+}
+
 export function WinnerReveal({ isOpen, result, onClose }: WinnerRevealProps) {
   const prefersReducedMotion = useReducedMotion();
   const [copied, setCopied] = useState(false);
@@ -73,6 +141,13 @@ export function WinnerReveal({ isOpen, result, onClose }: WinnerRevealProps) {
   const round = result?.round;
   const fairness = result?.fairness;
   const seedReveal = result?.serverSeedReveal;
+
+  // Winner state and no-winner states derive directly from the backend result.
+  const hasWinner = Boolean(winnerEntry);
+  const outcome: ResultOutcome = hasWinner
+    ? "winner"
+    : getNoWinnerOutcome(result);
+  const outcomeCopy = getOutcomeCopy(outcome, round?.roundNumber);
 
   const winnerName = useMemo(() => {
     if (!winnerEntry) return "Result loading...";
@@ -84,11 +159,18 @@ export function WinnerReveal({ isOpen, result, onClose }: WinnerRevealProps) {
     );
   }, [winnerEntry]);
 
+  // Fairness/proof section: display backend-provided checks only.
   const allFairnessPassed =
     Boolean(fairness?.seedHashMatches) &&
     Boolean(fairness?.winningTicketMatches) &&
     Boolean(fairness?.winnerTicketInsideRange) &&
     Boolean(fairness?.rangesCoverTotal);
+  const fairnessBadgeLabel =
+    hasWinner && allFairnessPassed
+      ? "Verified"
+      : !hasWinner && fairness
+        ? "Logged"
+        : "Checking";
 
   async function copySeedReveal() {
     if (!seedReveal || !navigator.clipboard) return;
@@ -98,6 +180,7 @@ export function WinnerReveal({ isOpen, result, onClose }: WinnerRevealProps) {
     window.setTimeout(() => setCopied(false), 1500);
   }
 
+  // Fairness/proof section: copy only result fields already exposed by backend.
   async function copyRoundProof() {
     if (!result || !navigator.clipboard) return;
 
@@ -116,8 +199,9 @@ export function WinnerReveal({ isOpen, result, onClose }: WinnerRevealProps) {
     window.setTimeout(() => setCopied(false), 1500);
   }
 
+  // Modal wrapper
   return (
-    <Dialog open={isOpen} title="Winner revealed" onClose={onClose}>
+    <Dialog open={isOpen} title={outcomeCopy.dialogTitle} onClose={onClose}>
       <motion.div
         initial={
           prefersReducedMotion ? false : { opacity: 0, y: 18, scale: 0.98 }
@@ -137,56 +221,91 @@ export function WinnerReveal({ isOpen, result, onClose }: WinnerRevealProps) {
         <div className="pointer-events-none absolute right-0 top-0 h-40 w-40 rounded-full bg-[rgba(250,204,21,0.12)] blur-3xl" />
 
         <div className="relative">
+          {/* Winner state and skipped/refund/cancelled state header. */}
           <p className="text-sm font-black uppercase tracking-[0.25em] text-gold">
-            Winner Revealed
+            {outcomeCopy.eyebrow}
           </p>
 
           <h2 className="mt-2 font-display text-3xl font-black">
-            Round #{round?.roundNumber ?? "-"} Completed
+            {outcomeCopy.title}
           </h2>
 
           <p className="mt-2 text-sm text-text-secondary">
-            The wheel reveal is complete and the backend ledger has finalized
-            the round result.
+            {outcomeCopy.summary}
           </p>
 
+          {/* Winner state / skipped-refund-cancelled states panel. */}
           <div className="mt-5 overflow-hidden rounded-xl border border-[rgba(250,204,21,0.32)] bg-[var(--gold)] text-[var(--bg-void)] shadow-[0_18px_60px_rgba(250,204,21,0.16)]">
             <div className="border-b border-black/10 bg-black/10 px-5 py-3">
               <p className="text-xs font-black uppercase tracking-[0.22em] opacity-70">
-                Winner
+                {outcomeCopy.panelLabel}
               </p>
               <p className="mt-1 break-all font-display text-2xl font-black">
-                {winnerName}
+                {hasWinner ? winnerName : outcomeCopy.primaryValue}
               </p>
             </div>
 
             <div className="grid gap-3 p-5 sm:grid-cols-2">
-              <ResultStat
-                label="Entry"
-                value={formatCoins(winnerEntry?.amount)}
-                highlight
-              />
-              <ResultStat
-                label="Payout"
-                value={formatCoins(round?.payoutAmount)}
-                highlight
-              />
-              <ResultStat
-                label="Winning Ticket"
-                value={round?.winningTicket ?? "-"}
-                highlight
-              />
-              <ResultStat
-                label="Ticket Range"
-                value={ticketRangeLabel(
-                  winnerEntry?.ticketStart,
-                  winnerEntry?.ticketEnd,
-                )}
-                highlight
-              />
+              {hasWinner ? (
+                <>
+                  <ResultStat
+                    label="Entry"
+                    value={formatCoins(winnerEntry?.amount)}
+                    highlight
+                  />
+                  <ResultStat
+                    label="Payout"
+                    value={formatCoins(round?.payoutAmount)}
+                    highlight
+                  />
+                  <ResultStat
+                    label="Winning Ticket"
+                    value={round?.winningTicket ?? "-"}
+                    highlight
+                  />
+                  <ResultStat
+                    label="Ticket Range"
+                    value={ticketRangeLabel(
+                      winnerEntry?.ticketStart,
+                      winnerEntry?.ticketEnd,
+                    )}
+                    highlight
+                  />
+                </>
+              ) : (
+                <>
+                  <ResultStat
+                    label="Entries"
+                    value={result?.entries.length ?? 0}
+                    highlight
+                  />
+                  <ResultStat
+                    label={
+                      outcome === "refunded-single" ? "Returned" : "Payout"
+                    }
+                    value={
+                      outcome === "refunded-single"
+                        ? formatCoins(round?.totalEntryAmount)
+                        : formatCoins(round?.payoutAmount)
+                    }
+                    highlight
+                  />
+                  <ResultStat
+                    label="Total Pool"
+                    value={formatCoins(round?.totalEntryAmount)}
+                    highlight
+                  />
+                  <ResultStat
+                    label="Winning Ticket"
+                    value={round?.winningTicket ?? "-"}
+                    highlight
+                  />
+                </>
+              )}
             </div>
           </div>
 
+          {/* Fairness/proof section */}
           <div className="mt-5 rounded-xl border border-[var(--border)] bg-white/[0.03] p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -206,7 +325,7 @@ export function WinnerReveal({ isOpen, result, onClose }: WinnerRevealProps) {
                     : "border-[rgba(148,163,184,0.28)] bg-white/[0.05] text-text-secondary"
                 }`}
               >
-                {allFairnessPassed ? "Verified" : "Checking"}
+                {fairnessBadgeLabel}
               </div>
             </div>
 
@@ -230,6 +349,7 @@ export function WinnerReveal({ isOpen, result, onClose }: WinnerRevealProps) {
             </div>
           </div>
 
+          {/* Fairness/proof section: server seed shows only after backend exposes it. */}
           <div className="mt-5 rounded-xl border border-[var(--border)] bg-white/[0.05] p-4 text-xs text-text-secondary">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -267,8 +387,9 @@ export function WinnerReveal({ isOpen, result, onClose }: WinnerRevealProps) {
             </p>
           </div>
 
+          {/* Close/next action */}
           <Button onClick={onClose} className="mt-5 w-full">
-            Continue to next round
+            {outcomeCopy.actionLabel}
           </Button>
         </div>
       </motion.div>

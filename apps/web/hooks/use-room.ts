@@ -11,6 +11,7 @@ import type {
   WalletSnapshot,
 } from "@kingspin/contracts";
 import { apiClient, type PlaceEntryResponse } from "../lib/api-client";
+import { toastGameError } from "../lib/error-toast";
 import { deriveChipOptions } from "../lib/format";
 import { getPublicRoundPhase } from "../lib/room-summary";
 import { getGameSocket } from "../lib/socket-client";
@@ -269,6 +270,21 @@ export function useRoom(roomId: string) {
     }
   }, [roomId]);
 
+  const refreshWallet = useCallback(async () => {
+    const result = await fetchWallet();
+
+    if (result) {
+      setWalletError(null);
+      setFastWallet(null);
+      return result;
+    }
+
+    setWalletError(
+      "Wallet is taking a moment to sync. Please try again shortly.",
+    );
+    return null;
+  }, [fetchWallet]);
+
   const scheduleCompletedRoundEffects = useCallback(
     (round: RoundSnapshot, delayMs = 900) => {
       clearResultTimer();
@@ -295,7 +311,13 @@ export function useRoom(roomId: string) {
         Math.max(delayMs, 1200),
       );
     },
-    [clearResultTimer, clearWalletTimer, fetchLatestResult, showWinner],
+    [
+      clearResultTimer,
+      clearWalletTimer,
+      fetchLatestResult,
+      refreshWallet,
+      showWinner,
+    ],
   );
 
   const handleRoundSnapshotSideEffects = useCallback(
@@ -324,7 +346,7 @@ export function useRoom(roomId: string) {
         scheduleCompletedRoundEffects(round);
       }
     },
-    [clearWalletTimer, scheduleCompletedRoundEffects],
+    [clearWalletTimer, refreshWallet, scheduleCompletedRoundEffects],
   );
 
   const refresh = useCallback(async () => {
@@ -336,26 +358,9 @@ export function useRoom(roomId: string) {
       const appliedState = applyState(nextState);
       handleRoundSnapshotSideEffects(appliedState);
     } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : "Failed to load room.",
-      );
+      setError(toastGameError(caught, "Failed to load room."));
     }
   }, [applyState, handleRoundSnapshotSideEffects, roomId]);
-
-  const refreshWallet = useCallback(async () => {
-    const result = await fetchWallet();
-
-    if (result) {
-      setWalletError(null);
-      setFastWallet(null);
-      return result;
-    }
-
-    setWalletError(
-      "Wallet unavailable until the API auth bridge validates this session.",
-    );
-    return null;
-  }, [fetchWallet]);
 
   const applyEntryPlacementResult = useCallback(
     (result: PlaceEntryResponse) => {
@@ -675,19 +680,43 @@ export function useRoom(roomId: string) {
     setConnectionStatus,
   ]);
 
-  useEffect(() => {
-    const round = state?.currentRound;
+  const deadlineRoundId = state?.currentRound?.id;
+  const deadlineRoundNumber = state?.currentRound?.roundNumber;
+  const deadlineRoundStatus = state?.currentRound?.status;
+  const deadlineRoundPhase = state?.currentRound?.phase;
+  const deadlineRoundLocksAt = state?.currentRound?.locksAt;
 
+  const deadlineRound = useMemo(() => {
+    if (!deadlineRoundId || typeof deadlineRoundNumber !== "number") {
+      return null;
+    }
+
+    return {
+      id: deadlineRoundId,
+      roundNumber: deadlineRoundNumber,
+      status: deadlineRoundStatus,
+      phase: deadlineRoundPhase,
+      locksAt: deadlineRoundLocksAt,
+    };
+  }, [
+    deadlineRoundId,
+    deadlineRoundNumber,
+    deadlineRoundStatus,
+    deadlineRoundPhase,
+    deadlineRoundLocksAt,
+  ]);
+
+  useEffect(() => {
     if (
       !roomId ||
-      !round ||
-      getPublicRoundPhase(round) !== "ENTRY_OPEN" ||
-      !round.locksAt
+      !deadlineRound ||
+      getPublicRoundPhase(deadlineRound) !== "ENTRY_OPEN" ||
+      !deadlineRound.locksAt
     ) {
       return;
     }
 
-    const locksAtMs = new Date(round.locksAt).getTime();
+    const locksAtMs = new Date(deadlineRound.locksAt).getTime();
 
     if (!Number.isFinite(locksAtMs)) {
       return;
@@ -706,8 +735,8 @@ export function useRoom(roomId: string) {
 
       devLog("deadline socket sync requested", {
         roomId,
-        roundId: round.id,
-        roundNumber: round.roundNumber,
+        roundId: deadlineRound.id,
+        roundNumber: deadlineRound.roundNumber,
         attempt: attempts,
       });
 
@@ -735,20 +764,13 @@ export function useRoom(roomId: string) {
         window.clearTimeout(retryTimer);
       }
     };
-  }, [
-    roomId,
-    state?.currentRound?.id,
-    state?.currentRound?.roundNumber,
-    state?.currentRound?.status,
-    state?.currentRound?.phase,
-    state?.currentRound?.locksAt,
-  ]);
+  }, [deadlineRound, roomId]);
   const placeEntry = useCallback(
     async (amount: number) => {
       if (!roomId || placingEntryRef.current) return;
 
       if (!visibleWallet) {
-        setError("Sign in required.");
+        setError(toastGameError("Please sign in to enter."));
         return;
       }
 
@@ -787,14 +809,7 @@ export function useRoom(roomId: string) {
       } catch (caught) {
         removeOptimisticEntry(idempotencyKey);
         setFastWallet(null);
-        const message =
-          caught instanceof Error ? caught.message : "Failed to place entry.";
-        const lockedMessage =
-          message.includes("no longer OPEN") || message.includes("OPEN round")
-            ? "Round already moved on. Try the new round."
-            : message;
-
-        setError(lockedMessage);
+        setError(toastGameError(caught, "Failed to place entry."));
 
         if (!getGameSocket().connected) {
           void refreshWallet();

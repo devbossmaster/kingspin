@@ -145,6 +145,7 @@ function HomeSidebar({
   onSignOut: () => void;
 }) {
   return (
+    // Navigation links and wallet/profile strip: safe visual styling zone.
     <aside
       className={`sticky top-20 hidden h-[calc(100vh-6rem)] shrink-0 flex-col rounded-[14px] border border-[#1b2646] bg-[linear-gradient(180deg,#07112b_0%,#050716_36%,#03040d_100%)] p-3 shadow-[0_22px_54px_rgba(0,0,0,0.52)] transition-[width] duration-300 md:flex ${
         expanded ? "w-[19.25rem]" : "w-20"
@@ -234,6 +235,7 @@ function HomeSidebar({
 
         <div className="my-2 border-t border-white/10" />
 
+        {/* Auth/session conditions: preserve wallet/profile/admin/sign-in branches. */}
         {isPending ? (
           <div className="rounded-[10px] bg-white/[0.06] px-4 py-3 text-sm font-black text-white/45">
             {expanded ? "Loading..." : "..."}
@@ -327,6 +329,7 @@ function HomeSidebar({
 }
 
 export default function SpinBattleHomePage() {
+  // Data fetching/auth state: dashboard cards use session, categories, and auth store only.
   const { data: session, isPending, refetch } = useSession();
   const { categories } = useCategories();
   const user = useAuthStore((store) => store.user);
@@ -345,6 +348,8 @@ export default function SpinBattleHomePage() {
   const carouselSlides = [...PROMO_BANNERS, PROMO_BANNERS[0]];
   const balanceLabel = wallet ? formatCoins(wallet.balanceSnapshot) : "0";
   const onlinePlayersLabel = formatOnlinePlayers(onlinePlayers);
+
+  // Live feed/socket behavior: category slugs determine summary subscriptions.
   const categorySlugKey = useMemo(
     () =>
       categories
@@ -353,6 +358,8 @@ export default function SpinBattleHomePage() {
         .join("|"),
     [categories],
   );
+
+  // Navigation links: preserve auth and email-verification route behavior.
   const gameHref = !session?.user
     ? `/sign-in?callbackURL=${encodeURIComponent("/spinpro")}`
     : session.user.emailVerified === false
@@ -368,6 +375,7 @@ export default function SpinBattleHomePage() {
     return () => window.clearInterval(bannerTimer);
   }, []);
 
+  // Data fetching: winner feed uses the backend feed endpoint, not fake data.
   const refreshWinnerFeed = useCallback(
     async (showLoading = false) => {
       if (showLoading) {
@@ -390,6 +398,7 @@ export default function SpinBattleHomePage() {
     [winnerScope],
   );
 
+  // Data fetching: online player count uses the backend presence endpoint.
   const refreshOnlinePlayers = useCallback(async () => {
     try {
       const presence = await apiClient.getSpinBattleOnline();
@@ -400,6 +409,7 @@ export default function SpinBattleHomePage() {
     }
   }, []);
 
+  // Carousel/feed: periodically refresh the active winner feed tab.
   useEffect(() => {
     void refreshWinnerFeed(true);
 
@@ -410,6 +420,7 @@ export default function SpinBattleHomePage() {
     return () => window.clearInterval(intervalId);
   }, [refreshWinnerFeed]);
 
+  // Live feed/socket behavior: presence is refreshed from API and socket updates.
   useEffect(() => {
     void refreshOnlinePlayers();
 
@@ -420,6 +431,7 @@ export default function SpinBattleHomePage() {
     return () => window.clearInterval(intervalId);
   }, [refreshOnlinePlayers]);
 
+  // Live feed/socket behavior: keep online player count synced by socket.
   useEffect(() => {
     const socket = getGameSocket();
     const updateOnlinePlayers = (payload: { onlinePlayers: number }) => {
@@ -437,6 +449,7 @@ export default function SpinBattleHomePage() {
     };
   }, []);
 
+  // Live feed/socket behavior: lightweight category subscriptions refresh winners only.
   useEffect(() => {
     if (!categorySlugKey) {
       return;
@@ -506,7 +519,7 @@ export default function SpinBattleHomePage() {
 
         <main className="min-w-0 flex-1">
           <div className="mx-auto flex w-full max-w-md flex-col pb-8 md:max-w-[960px]">
-            {/* ── 1. Promotional Banner ── */}
+            {/* Hero / carousel: safe visual styling zone. */}
             <div
               id="promotions"
               className="relative mb-6 overflow-hidden rounded-2xl bg-black shadow-[0_18px_40px_rgba(0,0,0,0.36)] md:rounded-[18px]"
@@ -552,7 +565,7 @@ export default function SpinBattleHomePage() {
               </div>
             </div>
 
-            {/* ── 2. Games Section Header ── */}
+            {/* Game cards header: safe visual styling zone. */}
             <div id="games" className="mb-3 flex items-center justify-between">
               <h2 className="font-display text-lg font-bold text-white">
                 Play spin battle games
@@ -562,7 +575,7 @@ export default function SpinBattleHomePage() {
               </span>
             </div>
 
-            {/* ── 3. Game Cards Grid ── */}
+            {/* Game cards: safe visual styling zone; links use gameHref above. */}
             <div className="grid grid-cols-[minmax(0,11.5rem)] gap-3 sm:grid-cols-[minmax(0,14rem)]">
               {GAMES.map((game) => (
                 <Link
@@ -592,7 +605,7 @@ export default function SpinBattleHomePage() {
               ))}
             </div>
 
-            {/* ── 4. Winners Table ── */}
+            {/* Winner/live tabs and feed: safe visual styling zone. */}
             <section id="live-stats" className="mt-8">
               <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
@@ -646,6 +659,7 @@ export default function SpinBattleHomePage() {
 
                 <div className="flex flex-col gap-1.5">
                   {winnerFeed.map((winner) => {
+                    // Navigation links: winner rows link to the summary's room route.
                     const roomHref = `/spinpro/${winner.categorySlug}/${winner.roomId}`;
                     const isTopWinner =
                       winner.rank <= 3 && winnerScope !== "latest";
@@ -755,7 +769,7 @@ export default function SpinBattleHomePage() {
               </div>
             </section>
 
-            {/* ── 5. FAB ── */}
+            {/* Safe visual section: floating action button. */}
             <button
               type="button"
               aria-label="Add"

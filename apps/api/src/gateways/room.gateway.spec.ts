@@ -165,12 +165,12 @@ function buildRoomsService() {
   };
 }
 
-function buildClient() {
+function buildClient(socketId = 'socket-1') {
   const roomEmitter = {
     emit: jest.fn(),
   };
   const client = {
-    id: 'socket-1',
+    id: socketId,
     join: jest.fn().mockResolvedValue(undefined),
     leave: jest.fn().mockResolvedValue(undefined),
     emit: jest.fn(),
@@ -192,6 +192,9 @@ describe('RoomGateway', () => {
       publicGameService as any,
       buildRoomsService() as any,
     );
+    gateway.server = {
+      emit: jest.fn(),
+    } as any;
     const { client, roomEmitter } = buildClient();
 
     const ack = await gateway.handleJoin(client as any, { roomId: 'room-1' });
@@ -220,11 +223,51 @@ describe('RoomGateway', () => {
         socketId: 'socket-1',
       }),
     );
+    expect(gateway.server.emit).toHaveBeenCalledWith(
+      SOCKET_EVENTS.SPIN_BATTLE_ONLINE,
+      expect.objectContaining({
+        onlinePlayers: 1,
+        activeRooms: 1,
+      }),
+    );
     expect(publicGameService.getRoomLiveState).toHaveBeenCalledWith('room-1');
     expect(ack).toEqual(
       expect.objectContaining({
         ok: true,
         roomId: 'room-1',
+      }),
+    );
+  });
+
+  it('deduplicates online player presence by socket across joined rooms', async () => {
+    jest.useFakeTimers().setSystemTime(now);
+    const gateway = new RoomGateway(
+      buildPublicGameService() as any,
+      buildRoomsService() as any,
+    );
+    gateway.server = {
+      emit: jest.fn(),
+    } as any;
+    const first = buildClient('socket-1');
+    const second = buildClient('socket-2');
+
+    await gateway.handleJoin(first.client as any, { roomId: 'room-1' });
+    await gateway.handleJoin(first.client as any, { roomId: 'room-2' });
+    await gateway.handleJoin(second.client as any, { roomId: 'room-2' });
+
+    expect(gateway.getSpinBattleOnlinePresence()).toEqual(
+      expect.objectContaining({
+        onlinePlayers: 2,
+        activeRooms: 2,
+      }),
+    );
+
+    await gateway.handleLeave(first.client as any, { roomId: 'room-1' });
+
+    expect(gateway.getSpinBattleOnlinePresence()).toEqual(
+      expect.objectContaining({
+        onlinePlayers: 2,
+        activeRooms: 1,
       }),
     );
   });

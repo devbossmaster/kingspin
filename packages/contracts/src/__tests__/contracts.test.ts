@@ -8,6 +8,7 @@ import {
   SocketMachineEventSchema,
   SocketPresenceEventSchema,
   SocketRoundStateEventSchema,
+  SocketSpinBattleOnlineEventSchema,
 } from "../index";
 
 describe("contracts", () => {
@@ -77,7 +78,7 @@ describe("contracts", () => {
         gameMode: "FLEXIBLE_PROPORTIONAL",
         fixedEntryAmount: null,
         isPermanent: true,
-        maxPlayers: 24,
+        maxPlayers: 15,
         roundDurationMs: 45000,
         activatedAt: "2026-05-25T07:29:17.735Z",
       },
@@ -87,7 +88,7 @@ describe("contracts", () => {
         slug: "jemaw-1",
         minEntryAmount: "1000",
         maxEntryAmount: "5000",
-        maxPlayers: 24,
+        maxPlayers: 15,
         roundDurationMs: 45000,
       },
       currentRound: {
@@ -193,7 +194,7 @@ describe("contracts", () => {
           gameMode: "FLEXIBLE_PROPORTIONAL",
           fixedEntryAmount: null,
           isPermanent: true,
-          maxPlayers: 24,
+          maxPlayers: 15,
           roundDurationMs: 45000,
           activatedAt: "2026-05-25T07:29:17.735Z",
         },
@@ -203,7 +204,7 @@ describe("contracts", () => {
           slug: "jemaw-1",
           minEntryAmount: "1000",
           maxEntryAmount: "5000",
-          maxPlayers: 24,
+          maxPlayers: 15,
           roundDurationMs: 45000,
         },
         currentRound: null,
@@ -229,6 +230,14 @@ describe("contracts", () => {
         roomId: "room-1",
         socketId: "socket-1",
         joinedAt: "2026-05-26T11:23:08.262Z",
+      }).success,
+    ).toBe(true);
+
+    expect(
+      SocketSpinBattleOnlineEventSchema.safeParse({
+        onlinePlayers: 2,
+        activeRooms: 1,
+        generatedAt: "2026-05-26T11:23:08.262Z",
       }).success,
     ).toBe(true);
   });

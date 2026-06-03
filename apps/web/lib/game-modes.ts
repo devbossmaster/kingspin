@@ -18,6 +18,29 @@ const FIXED_SLUG_SET = new Set<string>(FIXED_CATEGORY_SLUGS);
 
 export type PlayerMode = "pro" | "fixed";
 
+const CATEGORY_DISPLAY_NAMES: Record<string, string> = {
+  "pro-10-100": "Jemaw 1",
+  "pro-100-200": "Jemaw 2",
+  "pro-200-350": "Jemaw 3",
+  "fixed-10": "Jemaw 1",
+  "fixed-20": "Jemaw 2",
+  "fixed-50": "Jemaw 3",
+};
+
+function formatArenaCode(index: number) {
+  return `A${String(index + 1).padStart(2, "0")}`;
+}
+
+function normalizeArenaCode(value: string | null | undefined) {
+  const match = value?.trim().match(/^A\s*0*(\d+)$/i);
+
+  if (!match) {
+    return null;
+  }
+
+  return `A${Number(match[1]).toString().padStart(2, "0")}`;
+}
+
 export function getCategoryMode(category: Pick<CategoryListItem, "slug">) {
   return FIXED_SLUG_SET.has(category.slug) ? "fixed" : "pro";
 }
@@ -27,21 +50,52 @@ export function getRoomMode(room: Pick<RoomListItem, "gameMode">) {
 }
 
 export function getModeTitle(mode: PlayerMode) {
-  return mode === "fixed" ? "Fixed Wheel" : "Pro Wheel";
+  return mode === "fixed" ? "Fixed Battle" : "Flexible Battle";
 }
 
 export function getModeTag(mode: PlayerMode) {
-  return mode === "fixed" ? "Equal chance" : "Flexible proportional";
+  return mode === "fixed" ? "Fixed" : "Flexible";
 }
 
-export function getCategoryAmountLabel(category: CategoryListItem) {
-  if (getCategoryMode(category) === "fixed") {
-    return `${formatCoins(category.minEntryAmount)} coins`;
+export function getCategoryDisplayName(
+  category: Pick<CategoryListItem, "slug" | "name">,
+) {
+  return CATEGORY_DISPLAY_NAMES[category.slug] ?? category.name;
+}
+
+export function getCategoryRingLabel(
+  category: Pick<
+    CategoryListItem,
+    "slug" | "minEntryAmount" | "maxEntryAmount"
+  >,
+) {
+  if (
+    getCategoryMode(category) === "fixed" ||
+    Number(category.minEntryAmount) === Number(category.maxEntryAmount)
+  ) {
+    return formatCoins(category.minEntryAmount);
   }
 
   return `${formatCoins(category.minEntryAmount)}-${formatCoins(
     category.maxEntryAmount,
-  )} coins`;
+  )}`;
+}
+
+export function getCategoryAmountLabel(category: CategoryListItem) {
+  return `${getCategoryRingLabel(category)} coins`;
+}
+
+export function getRoomDisplayName(
+  room: Pick<RoomListItem, "code" | "name">,
+  index?: number,
+) {
+  if (typeof index === "number") {
+    return formatArenaCode(index);
+  }
+
+  return (
+    normalizeArenaCode(room.name) ?? normalizeArenaCode(room.code) ?? "A01"
+  );
 }
 
 export function buildPlayHref(targetHref: string, isSignedIn: boolean) {

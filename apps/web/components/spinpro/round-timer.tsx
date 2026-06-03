@@ -88,9 +88,9 @@ function phaseCopy(phase: PhaseKey) {
     case "LOCKED":
       return {
         eyebrow: "Round Phase",
-        title: "Entries locked",
-        subtitle: "No more entries. Ticket ranges are being finalized.",
-        badge: "Locked",
+        title: "Round in progress",
+        subtitle: "Entries are closed. Ticket ranges are being finalized.",
+        badge: "Randomizing",
         tone: "border-[rgba(250,204,21,0.35)] bg-[rgba(250,204,21,0.08)]",
         badgeTone:
           "border-[rgba(250,204,21,0.32)] bg-[rgba(250,204,21,0.1)] text-[var(--gold)]",
@@ -113,7 +113,7 @@ function phaseCopy(phase: PhaseKey) {
       return {
         eyebrow: "Live Reveal",
         title: "Wheel spinning",
-        subtitle: "The server result is locked. The wheel reveal is running.",
+        subtitle: "The server result is ready. The wheel reveal is running.",
         badge: "Spinning",
         tone: "border-[rgba(232,121,249,0.35)] bg-[rgba(232,121,249,0.08)]",
         badgeTone:
@@ -180,7 +180,7 @@ function phaseShortLabel(phase: string) {
     case "OPEN":
       return "Open";
     case "LOCKED":
-      return "Lock";
+      return "Random";
     case "DRAWING":
       return "Draw";
     case "SPINNING":
@@ -245,9 +245,7 @@ export function RoundTimer({
             <p className="mt-1 font-display text-xl font-black text-text-primary">
               {copy.title}
             </p>
-            <p className="mt-1 text-sm text-text-secondary">
-              {copy.subtitle}
-            </p>
+            <p className="mt-1 text-sm text-text-secondary">{copy.subtitle}</p>
           </div>
 
           <div

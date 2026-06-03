@@ -1,14 +1,18 @@
 import type {
   CategorySnapshot,
+  CreateDepositInput,
+  CreateWithdrawalInput,
   CurrentUser,
+  DepositSnapshot,
   EntryWithPlayerSnapshot,
   LatestRoundResult,
+  LedgerTransactionSnapshot,
   MeWallet,
   PlaceEntryInput,
   RoomLiveSummary,
-  RoomSnapshot,
   RoomLiveState,
   WalletSnapshot,
+  WithdrawalSnapshot,
 } from "@kingspin/contracts";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -22,11 +26,61 @@ export type RoomListItem = RoomLiveSummary;
 
 export type AdminRoomCommand = "activate" | "pause" | "close" | "archive";
 
+export type WinnerFeedScope = "latest" | "week" | "month";
+
+export type WinnerFeedItem = {
+  rank: number;
+  roundId: string;
+  roomId: string;
+  roomCode: string;
+  roomName: string | null;
+  roomMaxPlayers: number;
+  roomGameMode: string;
+  categorySlug: string;
+  categoryName: string;
+  roundNumber: number;
+  completedAt: string | null;
+  totalEntryAmount: string;
+  payoutAmount: string;
+  winnerUserId: string;
+  winnerEntryId: string;
+  winnerEntryAmount: string;
+  winnerUsername: string | null;
+  playerCount: number;
+  entryCount: number;
+};
+
+export type WinnerFeedResponse = {
+  scope: WinnerFeedScope;
+  limit: number;
+  generatedAt: string;
+  winners: WinnerFeedItem[];
+};
+
+export type SpinBattleOnlineResponse = {
+  onlinePlayers: number;
+  activeRooms: number;
+  generatedAt: string;
+};
+
 export type PlaceEntryResponse = {
   entry: Omit<EntryWithPlayerSnapshot, "player">;
   player: EntryWithPlayerSnapshot["player"];
   wallet: WalletSnapshot;
   currentRound: RoomLiveState["currentRound"];
+  reused: boolean;
+};
+
+export type CreateDepositResponse = {
+  deposit: DepositSnapshot;
+  checkoutUrl?: string | null;
+  reused: boolean;
+};
+
+export type CreateWithdrawalResponse = {
+  withdrawal: WithdrawalSnapshot;
+  wallet?: WalletSnapshot;
+  transaction?: LedgerTransactionSnapshot;
   reused: boolean;
 };
 
@@ -97,12 +151,75 @@ export const apiClient = {
     );
   },
 
+  getWinnerFeed(scope: WinnerFeedScope, limit = 30) {
+    const params = new URLSearchParams({
+      scope,
+      limit: String(Math.min(30, Math.max(1, Math.floor(limit)))),
+    });
+
+    return requestJson<WinnerFeedResponse>(
+      `/rooms/winners?${params.toString()}`,
+    );
+  },
+
+  getSpinBattleOnline() {
+    return requestJson<SpinBattleOnlineResponse>("/rooms/online");
+  },
+
   getMe() {
     return requestJsonDeduped<CurrentUser>("me", "/me");
   },
 
+  updateMe(input: { fullName?: string; phoneNumber?: string }) {
+    return requestJson<CurrentUser>("/me", {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    });
+  },
+
   getMeWallet() {
     return requestJsonDeduped<MeWallet>("me-wallet", "/me/wallet");
+  },
+
+  getMeTransactions(take = 50) {
+    const params = new URLSearchParams({
+      take: String(Math.min(100, Math.max(1, Math.floor(take)))),
+    });
+
+    return requestJson<LedgerTransactionSnapshot[]>(
+      `/me/transactions?${params.toString()}`,
+    );
+  },
+
+  createDeposit(input: CreateDepositInput) {
+    return requestJson<CreateDepositResponse>("/payments/deposits", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  listDeposits() {
+    return requestJson<DepositSnapshot[]>("/payments/deposits");
+  },
+
+  requestWithdrawal(input: CreateWithdrawalInput) {
+    return requestJson<CreateWithdrawalResponse>("/payments/withdrawals", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  listWithdrawals() {
+    return requestJson<WithdrawalSnapshot[]>("/payments/withdrawals");
+  },
+
+  cancelWithdrawal(id: string) {
+    return requestJson<CreateWithdrawalResponse>(
+      `/payments/withdrawals/${id}/cancel`,
+      {
+        method: "PATCH",
+      },
+    );
   },
 
   getRoomLiveState(roomId: string) {

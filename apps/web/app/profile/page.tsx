@@ -77,6 +77,10 @@ export default function ProfilePage() {
                 value={user?.fullName ?? session?.user.name ?? "-"}
               />
               <ProfileRow
+                label="Phone number"
+                value={user?.phoneNumber ?? "-"}
+              />
+              <ProfileRow
                 label="Email verified"
                 value={String(
                   user?.emailVerified ?? session?.user.emailVerified ?? false,

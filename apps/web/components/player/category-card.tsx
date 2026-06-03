@@ -4,6 +4,7 @@ import type { CategoryListItem, RoomListItem } from "../../lib/api-client";
 import {
   buildPlayHref,
   getCategoryAmountLabel,
+  getCategoryDisplayName,
   getCategoryMode,
   getModeTag,
   getModeTitle,
@@ -57,7 +58,7 @@ export function CategoryCard({
             {getModeTag(mode)}
           </StatusPill>
           <h3 className="mt-3 font-display text-xl font-black">
-            {category.name}
+            {getCategoryDisplayName(category)}
           </h3>
           <p className="mt-1 text-sm font-semibold text-text-secondary">
             {getModeTitle(mode)}

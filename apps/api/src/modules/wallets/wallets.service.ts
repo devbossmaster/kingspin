@@ -1129,6 +1129,38 @@ export class WalletsService {
     }
   }
 
+  async listMainWalletTransactionsForUserId(userId: string, take = 50) {
+    const wallet = await this.ensureMainWalletForUserId(userId);
+    const safeTake = Math.max(1, Math.min(Math.floor(take), 100));
+    const transactions = await this.prisma.ledgerTransaction.findMany({
+      where: {
+        entries: {
+          some: {
+            walletAccountId: wallet.id,
+          },
+        },
+      },
+      include: {
+        entries: {
+          where: {
+            walletAccountId: wallet.id,
+          },
+          orderBy: {
+            createdAt: 'asc',
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: safeTake,
+    });
+
+    return transactions.map((transaction) =>
+      this.toLedgerTransactionSnapshot(transaction),
+    );
+  }
+
   private async ensureMainWalletForUserIdInTransaction(
     tx: Prisma.TransactionClient,
     userId: string,
@@ -1175,6 +1207,7 @@ export class WalletsService {
 
     const email = `dev+${safePlayerKey}@kingspin.local`;
     const username = `dev_${safePlayerKey}`;
+    const phoneNumber = this.buildDevPhoneNumber(safePlayerKey);
 
     return this.prisma.user.upsert({
       where: { email },
@@ -1187,9 +1220,20 @@ export class WalletsService {
         email,
         username,
         fullName: `Dev Player ${safePlayerKey}`,
+        phoneNumber,
         emailVerified: true,
       },
     });
+  }
+
+  private buildDevPhoneNumber(value: string) {
+    let hash = 0;
+
+    for (const character of value) {
+      hash = (hash * 31 + character.charCodeAt(0)) % 1_000_000_000;
+    }
+
+    return `+251${String(hash).padStart(9, '0')}`;
   }
 
   private parsePositiveAmount(rawAmount: unknown): bigint {

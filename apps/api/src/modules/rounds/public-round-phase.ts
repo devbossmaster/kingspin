@@ -90,8 +90,7 @@ export function buildPublicRoundPhaseView(
 
     return {
       phase: 'ENTRY_OPEN',
-      phaseLabel:
-        msUntilPhaseEnd <= 0 ? 'LOCKING...' : PUBLIC_PHASE_LABELS.ENTRY_OPEN,
+      phaseLabel: PUBLIC_PHASE_LABELS.ENTRY_OPEN,
       msUntilPhaseEnd,
       msUntilNextRound: null,
       resultReason: null,

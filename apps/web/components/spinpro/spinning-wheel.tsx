@@ -373,9 +373,22 @@ export function SpinningWheel({
         </div>
 
         <div
-          className={`rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.16em] ${statusCopy.badge}`}
+          className={`rounded-md border px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.12em] md:rounded-full md:px-3 md:text-xs md:tracking-[0.16em] ${statusCopy.badge}`}
         >
-          {phase === "WAITING" ? "PREPARING" : statusCopy.label}
+          <span className="md:hidden">
+            {phase === "ENTRY_OPEN"
+              ? "Open"
+              : phase === "RANDOMIZING"
+                ? "Random"
+                : phase === "SPINNING"
+                  ? "Spin"
+                  : phase === "RESULT"
+                    ? "Result"
+                    : "Prep"}
+          </span>
+          <span className="hidden md:inline">
+            {phase === "WAITING" ? "PREPARING" : statusCopy.label}
+          </span>
         </div>
       </div>
 
@@ -398,10 +411,9 @@ export function SpinningWheel({
                 )} coins`
               : "Prize wheel waiting for entries"
           }
-          className="relative z-10 drop-shadow-2xl"
+          className="relative z-10 aspect-square w-full max-w-[480px] drop-shadow-2xl"
           style={{
-            width: "clamp(320px, 80vw, 480px)",
-            height: "clamp(320px, 80vw, 480px)",
+            height: "auto",
           }}
         >
           <defs>
@@ -411,7 +423,13 @@ export function SpinningWheel({
               <stop offset="100%" stopColor="rgba(8,12,20,1)" />
             </radialGradient>
 
-            <filter id="wheelSoftGlow" x="-20%" y="-20%" width="140%" height="140%">
+            <filter
+              id="wheelSoftGlow"
+              x="-20%"
+              y="-20%"
+              width="140%"
+              height="140%"
+            >
               <feGaussianBlur stdDeviation="3" result="blur" />
               <feMerge>
                 <feMergeNode in="blur" />
@@ -600,7 +618,7 @@ export function SpinningWheel({
         {isSuspensePhase ? (
           <div className="pointer-events-none absolute bottom-3 z-20 rounded-full bg-black/45 px-4 py-2 text-center text-xs font-semibold text-text-secondary backdrop-blur">
             {phase === "SPINNING"
-              ? "Server result locked · wheel reveal running"
+              ? "Server result ready · wheel reveal running"
               : "Randomizing round"}
           </div>
         ) : null}

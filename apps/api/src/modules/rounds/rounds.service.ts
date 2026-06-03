@@ -151,6 +151,29 @@ type LatestRoundResultRow = {
   entryPlayerFullName: string | null;
 };
 
+type WinnerFeedScope = 'latest' | 'week' | 'month';
+
+type WinnerFeedRow = {
+  roundId: string;
+  roomId: string;
+  roomCode: string;
+  roomName: string | null;
+  roomMaxPlayers: number;
+  roomGameMode: string;
+  categorySlug: string;
+  categoryName: string;
+  roundNumber: number;
+  completedAt: Date | null;
+  totalEntryAmount: bigint;
+  payoutAmount: bigint;
+  winnerUserId: string;
+  winnerEntryId: string;
+  winnerEntryAmount: bigint | null;
+  winnerUsername: string | null;
+  playerCount: bigint | number | null;
+  entryCount: bigint | number | null;
+};
+
 type LatestRoundResultRound = RoundSnapshotSource & {
   serverSeedReveal: string | null;
 };
@@ -1400,7 +1423,9 @@ export class RoundsService {
           }
 
           if (!round.locksAt || round.locksAt.getTime() > Date.now()) {
-            throw new BadRequestException('Round is not an expired OPEN round.');
+            throw new BadRequestException(
+              'Round is not an expired OPEN round.',
+            );
           }
         }
 
@@ -1805,6 +1830,100 @@ export class RoundsService {
     return this.measureLatestResultPart(roomId, 'serialization', () =>
       this.serializeLatestRoundResultRows(rows),
     );
+  }
+
+  async getPublicWinnerFeed(scope: WinnerFeedScope, limit = 30) {
+    const safeLimit = Math.max(1, Math.min(30, Math.floor(limit)));
+    const since =
+      scope === 'week'
+        ? new Date(Date.now() - 7 * 24 * 60 * 60 * 1_000)
+        : scope === 'month'
+          ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1_000)
+          : null;
+    const rows = await this.queryPublicWinnerFeedRows(scope, safeLimit, since);
+
+    return {
+      scope,
+      limit: safeLimit,
+      generatedAt: new Date().toISOString(),
+      winners: rows.map((row, index) => ({
+        rank: index + 1,
+        roundId: row.roundId,
+        roomId: row.roomId,
+        roomCode: row.roomCode,
+        roomName: row.roomName,
+        roomMaxPlayers: row.roomMaxPlayers,
+        roomGameMode: row.roomGameMode,
+        categorySlug: row.categorySlug,
+        categoryName: row.categoryName,
+        roundNumber: row.roundNumber,
+        completedAt: row.completedAt?.toISOString() ?? null,
+        totalEntryAmount: row.totalEntryAmount.toString(),
+        payoutAmount: row.payoutAmount.toString(),
+        winnerUserId: row.winnerUserId,
+        winnerEntryId: row.winnerEntryId,
+        winnerEntryAmount: (row.winnerEntryAmount ?? 0n).toString(),
+        winnerUsername: row.winnerUsername,
+        playerCount: Number(row.playerCount ?? 0),
+        entryCount: Number(row.entryCount ?? 0),
+      })),
+    };
+  }
+
+  private queryPublicWinnerFeedRows(
+    scope: WinnerFeedScope,
+    limit: number,
+    since: Date | null,
+  ) {
+    const sinceFilter = since
+      ? Prisma.sql`AND ro."completedAt" >= ${since}`
+      : Prisma.empty;
+    const orderBy =
+      scope === 'latest'
+        ? Prisma.sql`ro."completedAt" DESC NULLS LAST, ro."roundNumber" DESC`
+        : Prisma.sql`ro."payoutAmount" DESC, ro."completedAt" DESC NULLS LAST`;
+
+    return this.prisma.$queryRaw<WinnerFeedRow[]>(Prisma.sql`
+      WITH entry_stats AS (
+        SELECT
+          e."roundId",
+          COUNT(*) AS "entryCount",
+          COUNT(DISTINCT e."userId") AS "playerCount"
+        FROM entries e
+        GROUP BY e."roundId"
+      )
+      SELECT
+        ro.id AS "roundId",
+        ro."roomId" AS "roomId",
+        r.code AS "roomCode",
+        r.name AS "roomName",
+        r."maxPlayers" AS "roomMaxPlayers",
+        r."gameMode"::text AS "roomGameMode",
+        c.slug AS "categorySlug",
+        c.name AS "categoryName",
+        ro."roundNumber" AS "roundNumber",
+        ro."completedAt" AS "completedAt",
+        ro."totalEntryAmount" AS "totalEntryAmount",
+        ro."payoutAmount" AS "payoutAmount",
+        ro."winnerUserId" AS "winnerUserId",
+        ro."winnerEntryId" AS "winnerEntryId",
+        e.amount AS "winnerEntryAmount",
+        u.username AS "winnerUsername",
+        COALESCE(stats."playerCount", 0) AS "playerCount",
+        COALESCE(stats."entryCount", 0) AS "entryCount"
+      FROM rounds ro
+      INNER JOIN rooms r ON r.id = ro."roomId"
+      INNER JOIN categories c ON c.id = r."categoryId"
+      LEFT JOIN entries e ON e.id = ro."winnerEntryId"
+      LEFT JOIN users u ON u.id = ro."winnerUserId"
+      LEFT JOIN entry_stats stats ON stats."roundId" = ro.id
+      WHERE ro.status = CAST(${RoundStatus.COMPLETED} AS "RoundStatus")
+        AND ro."winnerUserId" IS NOT NULL
+        AND ro."winnerEntryId" IS NOT NULL
+        ${sinceFilter}
+      ORDER BY ${orderBy}
+      LIMIT ${limit}
+    `);
   }
 
   private async queryLatestRoundResultRows(roomId: string) {

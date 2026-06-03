@@ -200,10 +200,7 @@ export class RoomsService {
     this.liveSummaryCacheByCategory.delete(categorySlug.trim());
   }
 
-  patchLiveRoomSummaryCacheWithOpenRound(
-    roomId: string,
-    round: RoundSnapshot,
-  ) {
+  patchLiveRoomSummaryCacheWithOpenRound(roomId: string, round: RoundSnapshot) {
     if (!roomId || !round || round.status !== RoundStatus.OPEN) {
       return false;
     }
@@ -242,24 +239,28 @@ export class RoomsService {
     return patched;
   }
 
-  private refreshLiveRoomSummariesForCategoryInBackground(categorySlug: string) {
+  private refreshLiveRoomSummariesForCategoryInBackground(
+    categorySlug: string,
+  ) {
     if (this.inFlightLiveSummaryByCategory.has(categorySlug)) {
       return;
     }
 
-    const request = this.buildLiveRoomSummariesForCategory(categorySlug).finally(
-      () => {
-        if (this.inFlightLiveSummaryByCategory.get(categorySlug) === request) {
-          this.inFlightLiveSummaryByCategory.delete(categorySlug);
-        }
-      },
-    );
+    const request = this.buildLiveRoomSummariesForCategory(
+      categorySlug,
+    ).finally(() => {
+      if (this.inFlightLiveSummaryByCategory.get(categorySlug) === request) {
+        this.inFlightLiveSummaryByCategory.delete(categorySlug);
+      }
+    });
 
     this.inFlightLiveSummaryByCategory.set(categorySlug, request);
 
     void request.catch((error: unknown) => {
       const message =
-        error instanceof Error ? error.message : 'Unknown summary refresh error';
+        error instanceof Error
+          ? error.message
+          : 'Unknown summary refresh error';
 
       this.logger.warn(
         `Background live summary refresh failed for ${categorySlug}: ${message}`,
@@ -301,9 +302,7 @@ export class RoomsService {
       const elapsedMs = Number.isFinite(previousServerNowMs)
         ? Math.max(0, serverNowMs - previousServerNowMs)
         : 0;
-      const currentRound = room.currentRound
-        ? { ...room.currentRound }
-        : null;
+      const currentRound = room.currentRound ? { ...room.currentRound } : null;
 
       if (currentRound) {
         if (currentRound.status === RoundStatus.OPEN) {
@@ -316,8 +315,7 @@ export class RoomsService {
 
           currentRound.msUntilLock = msUntilLock;
           currentRound.msUntilPhaseEnd = msUntilLock;
-          currentRound.phaseLabel =
-            msUntilLock <= 0 ? 'LOCKING...' : currentRound.phaseLabel;
+          currentRound.phaseLabel = 'ENTRY OPEN';
         } else {
           currentRound.msUntilLock = 0;
           currentRound.msUntilPhaseEnd = Math.max(

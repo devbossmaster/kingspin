@@ -15,6 +15,7 @@ export const SOCKET_EVENTS = {
   ROUND_SETTLED: "round:settled",
   ROOM_PLAYER_JOINED: "room:player-joined",
   ROOM_PLAYER_LEFT: "room:player-left",
+  SPIN_BATTLE_ONLINE: "spin-battle:online",
 } as const;
 
 export const SocketRoomJoinPayloadSchema = z.object({
@@ -87,6 +88,12 @@ export const SocketPresenceEventSchema = z.object({
   leftAt: IsoDateStringSchema.optional(),
 });
 
+export const SocketSpinBattleOnlineEventSchema = z.object({
+  onlinePlayers: z.number().int().nonnegative(),
+  activeRooms: z.number().int().nonnegative(),
+  generatedAt: IsoDateStringSchema,
+});
+
 export const ServerToClientEventsSchema = z.object({
   "round:state": SocketRoundStateEventSchema,
   "category:state": SocketCategoryStateEventSchema,
@@ -96,20 +103,34 @@ export const ServerToClientEventsSchema = z.object({
   "round:settled": SocketMachineEventSchema,
   "room:player-joined": SocketPresenceEventSchema,
   "room:player-left": SocketPresenceEventSchema,
+  "spin-battle:online": SocketSpinBattleOnlineEventSchema,
 });
 
 export type SocketRoomJoinPayload = z.infer<typeof SocketRoomJoinPayloadSchema>;
-export type SocketRoomLeavePayload = z.infer<typeof SocketRoomLeavePayloadSchema>;
-export type SocketCategoryJoinPayload = z.infer<typeof SocketCategoryJoinPayloadSchema>;
-export type SocketCategoryLeavePayload = z.infer<typeof SocketCategoryLeavePayloadSchema>;
+export type SocketRoomLeavePayload = z.infer<
+  typeof SocketRoomLeavePayloadSchema
+>;
+export type SocketCategoryJoinPayload = z.infer<
+  typeof SocketCategoryJoinPayloadSchema
+>;
+export type SocketCategoryLeavePayload = z.infer<
+  typeof SocketCategoryLeavePayloadSchema
+>;
 export type SocketRoomJoinAck = z.infer<typeof SocketRoomJoinAckSchema>;
 export type SocketRoomLeaveAck = z.infer<typeof SocketRoomLeaveAckSchema>;
 export type SocketCategoryJoinAck = z.infer<typeof SocketCategoryJoinAckSchema>;
-export type SocketCategoryLeaveAck = z.infer<typeof SocketCategoryLeaveAckSchema>;
+export type SocketCategoryLeaveAck = z.infer<
+  typeof SocketCategoryLeaveAckSchema
+>;
 export type SocketRoundStateEvent = z.infer<typeof SocketRoundStateEventSchema>;
-export type SocketCategoryStateEvent = z.infer<typeof SocketCategoryStateEventSchema>;
+export type SocketCategoryStateEvent = z.infer<
+  typeof SocketCategoryStateEventSchema
+>;
 export type SocketMachineEvent = z.infer<typeof SocketMachineEventSchema>;
 export type SocketPresenceEvent = z.infer<typeof SocketPresenceEventSchema>;
+export type SocketSpinBattleOnlineEvent = z.infer<
+  typeof SocketSpinBattleOnlineEventSchema
+>;
 
 export type ServerToClientEvents = {
   "round:state": (payload: SocketRoundStateEvent) => void;
@@ -120,6 +141,7 @@ export type ServerToClientEvents = {
   "round:settled": (payload: SocketMachineEvent) => void;
   "room:player-joined": (payload: SocketPresenceEvent) => void;
   "room:player-left": (payload: SocketPresenceEvent) => void;
+  "spin-battle:online": (payload: SocketSpinBattleOnlineEvent) => void;
 };
 
 export type ClientToServerEvents = {

@@ -22,8 +22,9 @@ const dmMono = DM_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SpinPro",
-  description: "Server-authoritative spinning rooms with wallet-backed entries.",
+  title: "Spin Battle",
+  description:
+    "Spin Battle rooms with wallet-backed entries and live betting activity.",
 };
 
 export default function RootLayout({
@@ -39,4 +40,3 @@ export default function RootLayout({
     </html>
   );
 }
-

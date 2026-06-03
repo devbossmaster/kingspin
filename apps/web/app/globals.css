@@ -2,11 +2,15 @@
 
 :root {
   color-scheme: dark;
-  --bg-void: #080c14;
+  --bg-app: #02050d;
+  --bg-void: #030712;
   --bg-surface: #101624;
   --bg-card: #151c2a;
   --bg-raised: #1c2434;
+  --bg-sheet: #111827;
+  --bg-bottom-sheet: rgba(9, 13, 23, 0.96);
   --gold: #f6c547;
+  --coin-gold: #f6c547;
   --gold-dim: #c9962a;
   --teal: #2dd4bf;
   --magenta: #e879f9;
@@ -17,24 +21,36 @@
   --text-dim: #445070;
   --border: rgba(246, 197, 71, 0.15);
   --border-glow: rgba(246, 197, 71, 0.4);
-  --r-sm: 4px;
-  --r-md: 6px;
+  --selected-border: rgba(246, 197, 71, 0.58);
+  --selected-glow:
+    0 0 0 1px rgba(246, 197, 71, 0.36), 0 14px 34px rgba(246, 197, 71, 0.18);
+  --r-sm: 6px;
+  --r-md: 8px;
   --r-lg: 8px;
   --r-xl: 12px;
+  --r-sheet: 18px;
   --glow-gold: 0 0 26px rgba(246, 197, 71, 0.28);
   --glow-teal: 0 0 24px rgba(45, 212, 191, 0.22);
+  --bottom-nav-height: 84px;
+  --safe-bottom-padding: calc(
+    var(--bottom-nav-height) + env(safe-area-inset-bottom)
+  );
   --font-body: var(--font-inter), system-ui, sans-serif;
-  --font-heading: var(--font-syne), var(--font-inter), system-ui, sans-serif;
+  --font-heading: var(--font-inter), system-ui, sans-serif;
   --font-numeric:
     var(--font-dm-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 @theme inline {
+  --color-bg-app: var(--bg-app);
   --color-bg-void: var(--bg-void);
   --color-bg-surface: var(--bg-surface);
   --color-bg-card: var(--bg-card);
   --color-bg-raised: var(--bg-raised);
+  --color-bg-sheet: var(--bg-sheet);
+  --color-bg-bottom-sheet: var(--bg-bottom-sheet);
   --color-gold: var(--gold);
+  --color-coin-gold: var(--coin-gold);
   --color-gold-dim: var(--gold-dim);
   --color-teal: var(--teal);
   --color-magenta: var(--magenta);
@@ -61,7 +77,12 @@ body {
 
 body {
   margin: 0;
-  background: linear-gradient(135deg, #080c14 0%, #111827 45%, #1a1230 100%);
+  background:
+    radial-gradient(circle at 28% 18%, rgba(37, 99, 235, 0.42), transparent 28%),
+    radial-gradient(circle at 82% 32%, rgba(59, 130, 246, 0.24), transparent 30%),
+    radial-gradient(circle at 64% 88%, rgba(14, 165, 233, 0.18), transparent 28%),
+    linear-gradient(145deg, #07142c 0%, #050816 42%, #02030a 100%);
+  background-attachment: fixed;
   color: var(--text-primary);
   overflow-x: hidden;
   font-family: var(--font-body);
@@ -92,4 +113,8 @@ select {
   border: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-card) 88%, transparent);
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
+}
+
+.pb-safe-bottom-nav {
+  padding-bottom: var(--safe-bottom-padding);
 }

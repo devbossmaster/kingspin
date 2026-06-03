@@ -62,10 +62,10 @@ function getPhaseCopy(status: string | null | undefined) {
     case "LOCKED":
       return {
         icon: "◆",
-        eyebrow: "Locked",
-        title: "Entries locked",
-        message: "No more entries. Final ticket ranges are being assigned.",
-        detail: "The server is freezing the entry list before the draw.",
+        eyebrow: "Randomizing",
+        title: "Round in progress",
+        message: "Entries are closed. Final ticket ranges are being assigned.",
+        detail: "The server is preparing the draw.",
         tone: "border-[rgba(250,204,21,0.35)] bg-[rgba(250,204,21,0.08)]",
         iconTone:
           "bg-[rgba(250,204,21,0.14)] text-[var(--gold)] border-[rgba(250,204,21,0.32)]",
@@ -92,7 +92,7 @@ function getPhaseCopy(status: string | null | undefined) {
         icon: "↻",
         eyebrow: "Live Reveal",
         title: "Wheel spinning",
-        message: "The winner is locked. The wheel reveal is running now.",
+        message: "The server result is ready. The wheel reveal is running now.",
         detail: "The wheel uses the server-provided spin angle.",
         tone: "border-[rgba(232,121,249,0.35)] bg-[rgba(232,121,249,0.08)]",
         iconTone:
@@ -166,7 +166,7 @@ function phaseLabel(phase: string) {
     case "OPEN":
       return "Open";
     case "LOCKED":
-      return "Locked";
+      return "Random";
     case "DRAWING":
       return "Draw";
     case "SPINNING":
@@ -237,7 +237,7 @@ export function RoundPhaseBanner({
           <div
             className={`rounded-full border px-3 py-1 text-xs font-black uppercase tracking-[0.16em] ${copy.badgeTone}`}
           >
-            {phase === "WAITING" ? "NO ROUND" : phase}
+            {phase === "WAITING" ? "NO ROUND" : phaseLabel(phase)}
           </div>
 
           <div className="rounded-md border border-[var(--border)] bg-black/20 px-3 py-2 font-mono text-xs text-text-secondary">

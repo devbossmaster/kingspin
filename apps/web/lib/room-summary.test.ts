@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getDisplayRoundPhaseLabel } from "./room-summary";
 
 describe("room-summary", () => {
-  it("shows LOCKING... for OPEN rounds whose countdown reached zero", () => {
+  it("keeps ENTRY OPEN for OPEN rounds while server catch-up starts the next round", () => {
     expect(
       getDisplayRoundPhaseLabel(
         {
@@ -13,7 +13,7 @@ describe("room-summary", () => {
         },
         0,
       ),
-    ).toBe("LOCKING...");
+    ).toBe("ENTRY OPEN");
   });
 
   it("keeps ENTRY OPEN for OPEN rounds with time remaining", () => {

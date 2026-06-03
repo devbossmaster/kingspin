@@ -32,67 +32,67 @@ async function main() {
   const categories: BaselineRoomSeed[] = [
     {
       slug: "pro-10-100",
-      name: "Pro 10–100",
+      name: "Jemaw 1",
       minEntryAmount: 10n,
       maxEntryAmount: 100n,
       sortOrder: 10,
       roomCode: "PRO-A",
-      roomName: "Pro Wheel A",
+      roomName: "A01",
       gameMode: GameMode.FLEXIBLE_PROPORTIONAL,
       fixedEntryAmount: null,
     },
     {
       slug: "pro-100-200",
-      name: "Pro 100–200",
+      name: "Jemaw 2",
       minEntryAmount: 100n,
       maxEntryAmount: 200n,
       sortOrder: 20,
       roomCode: "PRO-B",
-      roomName: "Pro Wheel B",
+      roomName: "A01",
       gameMode: GameMode.FLEXIBLE_PROPORTIONAL,
       fixedEntryAmount: null,
     },
     {
       slug: "pro-200-350",
-      name: "Pro 200–350",
+      name: "Jemaw 3",
       minEntryAmount: 200n,
       maxEntryAmount: 350n,
       sortOrder: 30,
       roomCode: "PRO-C",
-      roomName: "Pro Wheel C",
+      roomName: "A01",
       gameMode: GameMode.FLEXIBLE_PROPORTIONAL,
       fixedEntryAmount: null,
     },
     {
       slug: "fixed-10",
-      name: "Fixed 10",
+      name: "Jemaw 1",
       minEntryAmount: 10n,
       maxEntryAmount: 10n,
       sortOrder: 110,
       roomCode: "FIX-10",
-      roomName: "Fixed Wheel 10",
+      roomName: "A01",
       gameMode: GameMode.FIXED_EQUAL_CHANCE,
       fixedEntryAmount: 10n,
     },
     {
       slug: "fixed-20",
-      name: "Fixed 20",
+      name: "Jemaw 2",
       minEntryAmount: 20n,
       maxEntryAmount: 20n,
       sortOrder: 120,
       roomCode: "FIX-20",
-      roomName: "Fixed Wheel 20",
+      roomName: "A01",
       gameMode: GameMode.FIXED_EQUAL_CHANCE,
       fixedEntryAmount: 20n,
     },
     {
       slug: "fixed-50",
-      name: "Fixed 50",
+      name: "Jemaw 3",
       minEntryAmount: 50n,
       maxEntryAmount: 50n,
       sortOrder: 130,
       roomCode: "FIX-50",
-      roomName: "Fixed Wheel 50",
+      roomName: "A01",
       gameMode: GameMode.FIXED_EQUAL_CHANCE,
       fixedEntryAmount: 50n,
     },
@@ -108,14 +108,14 @@ async function main() {
         name: categoryData.name,
         minEntryAmount: categoryData.minEntryAmount,
         maxEntryAmount: categoryData.maxEntryAmount,
-        maxPlayers: 24,
+        maxPlayers: 15,
         roundDurationMs: 45_000,
         sortOrder: categoryData.sortOrder,
         isActive: true,
       },
       create: {
         ...categoryData,
-        maxPlayers: 24,
+        maxPlayers: 15,
         roundDurationMs: 45_000,
         isActive: true,
       },
@@ -158,8 +158,8 @@ async function main() {
     await ensureCurrentRound(room.id, room.roundDurationMs);
   }
 
-  console.log("Seeded KingSpin Pro and Fixed categories.");
-  console.log("Seeded one ACTIVE permanent room per Pro/Fixed category.");
+  console.log("Seeded Spin Battle Jemaw categories.");
+  console.log("Seeded one ACTIVE permanent A01 room per category.");
   console.log("Ensured an active round exists for each seeded permanent room.");
 }
 

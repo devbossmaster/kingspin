@@ -1,11 +1,14 @@
 "use client";
 
 import { createAuthClient } from "better-auth/react";
-import { inferAdditionalFields } from "better-auth/client/plugins";
+import {
+  inferAdditionalFields,
+  usernameClient,
+} from "better-auth/client/plugins";
 import type { auth } from "./auth";
 
 export const authClient = createAuthClient({
-  plugins: [inferAdditionalFields<typeof auth>()],
+  plugins: [inferAdditionalFields<typeof auth>(), usernameClient()],
 });
 
 export const {
@@ -17,6 +20,12 @@ export const {
   sendVerificationEmail,
   requestPasswordReset,
   resetPassword,
+  changeEmail,
+  changePassword,
+  updateUser,
+  listSessions,
+  revokeSessions,
+  revokeOtherSessions,
 } = authClient;
 
 export const forgotPassword = requestPasswordReset;

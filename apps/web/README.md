@@ -1,6 +1,6 @@
-# SpinPro Web
+# Spin Battle Web
 
-Next.js 16 App Router frontend for SpinPro player auth, lobby, live rooms, and wallet-aware entry actions.
+Next.js 16 App Router frontend for Spin Battle player auth, lobby, live rooms, and wallet-aware entry actions.
 
 ## Environment
 

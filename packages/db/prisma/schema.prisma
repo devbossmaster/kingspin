@@ -162,28 +162,30 @@ enum WorkerJobStatus {
 }
 
 model User {
-  id            String    @id @default(cuid())
-  email         String    @unique
-  username      String    @unique
-  fullName      String
-  emailVerified Boolean   @default(false)
-  role          Role      @default(PLAYER)
-  image         String?
-  bannedAt      DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id              String    @id @default(cuid())
+  email           String    @unique
+  username        String    @unique
+  displayUsername String?
+  fullName        String
+  phoneNumber     String    @unique
+  emailVerified   Boolean   @default(false)
+  role            Role      @default(PLAYER)
+  image           String?
+  bannedAt        DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  walletAccounts WalletAccount[]
-  entries        Entry[]
-  deposits       Deposit[]
-  withdrawals    Withdrawal[]   @relation("WithdrawalUser")
-  reviewedWithdrawals Withdrawal[] @relation("WithdrawalReviewedByAdmin")
-  riskEvents     RiskEvent[]    @relation("RiskEventUser")
-  reviewedRiskEvents RiskEvent[] @relation("RiskEventReviewedByAdmin")
-  sessions       Session[]
-  accounts       Account[]
-  createdRooms   Room[]          @relation("RoomCreatedByAdmin")
-  adminAuditLogs AdminAuditLog[] @relation("AdminAuditActor")
+  walletAccounts      WalletAccount[]
+  entries             Entry[]
+  deposits            Deposit[]
+  withdrawals         Withdrawal[]    @relation("WithdrawalUser")
+  reviewedWithdrawals Withdrawal[]    @relation("WithdrawalReviewedByAdmin")
+  riskEvents          RiskEvent[]     @relation("RiskEventUser")
+  reviewedRiskEvents  RiskEvent[]     @relation("RiskEventReviewedByAdmin")
+  sessions            Session[]
+  accounts            Account[]
+  createdRooms        Room[]          @relation("RoomCreatedByAdmin")
+  adminAuditLogs      AdminAuditLog[] @relation("AdminAuditActor")
 
   @@map("users")
 }
@@ -244,7 +246,7 @@ model Category {
   slug            String   @unique
   minEntryAmount  BigInt
   maxEntryAmount  BigInt
-  maxPlayers      Int      @default(24)
+  maxPlayers      Int      @default(15)
   roundDurationMs Int      @default(45000)
   isActive        Boolean  @default(true)
   sortOrder       Int      @default(0)
@@ -266,7 +268,7 @@ model Room {
   gameMode         GameMode   @default(FLEXIBLE_PROPORTIONAL)
   fixedEntryAmount BigInt?
   isPermanent      Boolean    @default(false)
-  maxPlayers       Int        @default(24)
+  maxPlayers       Int        @default(15)
   roundDurationMs  Int        @default(45000)
   createdByAdminId String?
   activatedAt      DateTime?

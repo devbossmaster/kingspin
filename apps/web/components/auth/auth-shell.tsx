@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { CircleDollarSign, Sparkles } from "lucide-react";
+import Image from "next/image";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -21,57 +21,50 @@ export function AuthShell({
   footer,
 }: AuthShellProps) {
   return (
-    <main className="min-h-screen bg-[linear-gradient(135deg,#080C14_0%,#111827_48%,#241337_100%)] px-4 py-8 text-text-primary">
-      <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-5xl items-center justify-center">
-        <motion.section
-          initial={{ opacity: 0, y: 18 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.35, ease: "easeOut" }}
-          className="grid w-full overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-card)] shadow-[0_28px_80px_rgba(0,0,0,0.42)] md:grid-cols-[0.9fr_1fr]"
-        >
-          <div className="relative overflow-hidden border-b border-[var(--border)] bg-[var(--bg-raised)]/80 p-6 md:border-b-0 md:border-r md:p-8">
-            <div className="pointer-events-none absolute inset-0 opacity-35 [background-image:linear-gradient(rgba(255,255,255,0.06)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.045)_1px,transparent_1px)] [background-size:36px_36px]" />
-            <div className="relative">
-              <Link
-                href="/"
-                className="inline-flex items-center gap-2 rounded-md border border-[var(--border-glow)] px-3 py-2 text-sm font-bold text-gold transition hover:border-[var(--gold)]"
-              >
-                <Sparkles className="h-4 w-4" aria-hidden="true" />
-                KingSpin
-              </Link>
-              <p className="mt-8 text-xs font-black uppercase tracking-[0.18em] text-teal">
-                {eyebrow}
-              </p>
-              <h1 className="mt-3 font-display text-3xl font-black tracking-normal text-text-primary md:text-4xl">
-                {title}
-              </h1>
-              <p className="mt-4 max-w-sm text-sm leading-6 text-text-secondary">
-                {subtitle}
-              </p>
+    <main className="relative min-h-screen overflow-hidden bg-[#030713] px-4 py-6 font-sans text-white">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_28%_18%,rgba(37,99,235,0.42),transparent_28%),radial-gradient(circle_at_82%_32%,rgba(59,130,246,0.24),transparent_30%),radial-gradient(circle_at_64%_88%,rgba(14,165,233,0.18),transparent_28%),linear-gradient(145deg,#07142c_0%,#050816_42%,#02030a_100%)]" />
+      <div className="pointer-events-none absolute inset-0 opacity-70">
+        <div className="absolute -left-28 top-[28%] h-px w-[145%] -rotate-[17deg] bg-[linear-gradient(90deg,transparent,rgba(59,130,246,0.85),rgba(14,165,233,0.55),transparent)]" />
+        <div className="absolute -left-24 top-[36%] h-1 w-[135%] -rotate-[17deg] rounded-full bg-[linear-gradient(90deg,transparent,rgba(29,78,216,0.8),rgba(147,197,253,0.52),transparent)] blur-[1px]" />
+        <div className="absolute -left-20 top-[46%] h-px w-[125%] -rotate-[17deg] bg-[linear-gradient(90deg,transparent,rgba(56,189,248,0.58),rgba(37,99,235,0.72),transparent)]" />
+      </div>
 
-              <div className="mt-8 flex justify-center">
-                <div className="relative h-44 w-44">
-                  <div className="absolute inset-0 rounded-full border-[8px] border-[#21162d] bg-[conic-gradient(from_15deg,#a3e635_0_16%,#f6c547_16%_32%,#7c3aed_32%_48%,#2dd4bf_48%_64%,#f6c547_64%_82%,#e879f9_82%_100%)] shadow-[0_0_36px_rgba(246,197,71,0.25)]" />
-                  <div className="absolute left-1/2 top-1/2 flex h-16 w-16 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-[rgba(246,197,71,0.55)] bg-[var(--bg-void)]">
-                    <CircleDollarSign
-                      className="h-8 w-8 text-gold"
-                      aria-hidden="true"
-                    />
-                  </div>
-                  <div className="absolute left-1/2 top-0 h-0 w-0 -translate-x-1/2 border-x-[12px] border-t-[26px] border-x-transparent border-t-gold" />
-                </div>
-              </div>
-            </div>
-          </div>
+      <motion.section
+        initial={{ opacity: 0, y: 18 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.35, ease: "easeOut" }}
+        className="relative mx-auto flex min-h-[calc(100vh-3rem)] w-full max-w-[520px] flex-col items-center justify-center"
+      >
+        <Link href="/" className="mb-8 inline-flex justify-center">
+          <Image
+            src="/logo.png"
+            alt="Spin Battle"
+            width={260}
+            height={120}
+            priority
+            className="h-auto w-[190px] object-contain drop-shadow-[0_18px_42px_rgba(37,99,235,0.42)] sm:w-[230px]"
+          />
+        </Link>
 
-          <div className="p-6 md:p-8">
-            {children}
-            <div className="mt-6 border-t border-[var(--border)] pt-5 text-sm text-text-secondary">
+        <div className="w-full rounded-[22px] border border-blue-300/[0.12] bg-[#050917]/80 p-5 shadow-[0_24px_70px_rgba(0,0,0,0.52)] backdrop-blur-xl sm:p-7">
+          <div className="mb-6 text-center">
+            <p className="text-[11px] font-black uppercase tracking-[0.22em] text-blue-200/70">
+              {eyebrow}
+            </p>
+            <h1 className="mt-2 text-2xl font-black uppercase tracking-normal text-white sm:text-3xl">
+              {title}
+            </h1>
+            <p className="mx-auto mt-2 max-w-sm text-xs font-semibold leading-5 text-slate-400">
+              {subtitle}
+            </p>
+            <div className="mt-3 text-xs font-semibold text-slate-400 [&_a]:!text-sky-300 hover:[&_a]:!text-white">
               {footer}
             </div>
           </div>
-        </motion.section>
-      </div>
+
+          {children}
+        </div>
+      </motion.section>
     </main>
   );
 }
@@ -85,14 +78,14 @@ export function FormMessage({
 }) {
   const className =
     tone === "error"
-      ? "border-[rgba(248,113,113,0.42)] bg-[rgba(248,113,113,0.12)] text-red-hot"
+      ? "border-red-400/35 bg-red-500/10 text-red-200"
       : tone === "success"
-        ? "border-[rgba(74,222,128,0.38)] bg-[rgba(74,222,128,0.12)] text-green-go"
-        : "border-[rgba(45,212,191,0.38)] bg-[rgba(45,212,191,0.12)] text-teal";
+        ? "border-emerald-300/35 bg-emerald-400/10 text-emerald-100"
+        : "border-sky-300/35 bg-sky-400/10 text-sky-100";
 
   return (
     <div
-      className={`rounded-md border px-3 py-2 text-sm ${className}`}
+      className={`rounded-2xl border px-4 py-3 text-sm font-semibold ${className}`}
       aria-live="polite"
     >
       {children}
@@ -101,7 +94,7 @@ export function FormMessage({
 }
 
 export const authInputClass =
-  "mt-2 w-full rounded-md border border-[var(--border)] bg-[var(--bg-surface)] px-3 py-3 text-sm text-text-primary outline-none transition placeholder:text-text-dim focus:border-[var(--gold)] focus-visible:ring-2 focus-visible:ring-[rgba(246,197,71,0.35)]";
+  "mt-2 w-full rounded-2xl border border-blue-300/15 bg-[#081326]/90 px-4 py-4 text-sm font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_14px_30px_rgba(0,0,0,0.22)] outline-none transition placeholder:text-slate-500 focus:border-sky-300/75 focus:bg-[#0b1934] focus:ring-4 focus:ring-blue-500/20";
 
 export const authButtonClass =
-  "inline-flex w-full items-center justify-center rounded-md border border-[var(--gold)] bg-[var(--gold)] px-4 py-3 text-sm font-black text-[var(--bg-void)] shadow-[var(--glow-gold)] transition hover:bg-[#FFD76A] disabled:cursor-not-allowed disabled:border-slate-700 disabled:bg-slate-800 disabled:text-slate-500";
+  "inline-flex w-full items-center justify-center rounded-full border border-blue-300/20 bg-[linear-gradient(90deg,#020617_0%,#0f2a66_34%,#2563eb_72%,#38bdf8_100%)] px-5 py-4 text-base font-black uppercase tracking-[0.08em] text-white shadow-[0_18px_36px_rgba(37,99,235,0.28)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55";

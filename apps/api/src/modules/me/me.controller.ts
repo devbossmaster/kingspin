@@ -1,16 +1,35 @@
 import {
+  BadRequestException,
+  Body,
   Controller,
   Get,
   NotFoundException,
+  Patch,
+  Query,
   UseGuards,
-} from "@nestjs/common";
-import { AuthGuard } from "../auth-bridge/auth.guard";
-import { CurrentUser } from "../auth-bridge/current-user.decorator";
-import type { AuthBridgeUser } from "../auth-bridge/auth.types";
-import { PrismaService } from "../../prisma/prisma.service";
-import { WalletsService } from "../wallets/wallets.service";
+} from '@nestjs/common';
+import { z } from 'zod';
+import { AuthGuard } from '../auth-bridge/auth.guard';
+import { CurrentUser } from '../auth-bridge/current-user.decorator';
+import type { AuthBridgeUser } from '../auth-bridge/auth.types';
+import { PrismaService } from '../../prisma/prisma.service';
+import { WalletsService } from '../wallets/wallets.service';
 
-@Controller("me")
+const UpdateCurrentUserSchema = z
+  .object({
+    fullName: z.string().trim().min(1).max(120).optional(),
+    phoneNumber: z
+      .string()
+      .trim()
+      .regex(/^\+251[1-9]\d{8}$/, 'Enter a valid Ethiopian phone number.')
+      .optional(),
+  })
+  .strict()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: 'At least one profile field is required.',
+  });
+
+@Controller('me')
 @UseGuards(AuthGuard)
 export class MeController {
   constructor(
@@ -25,7 +44,50 @@ export class MeController {
     return this.toCurrentUserSnapshot(user);
   }
 
-  @Get("wallet")
+  @Patch()
+  async updateMe(
+    @CurrentUser() currentUser: AuthBridgeUser,
+    @Body() body: unknown,
+  ) {
+    const parsed = UpdateCurrentUserSchema.safeParse(body);
+
+    if (!parsed.success) {
+      throw new BadRequestException(
+        parsed.error.issues[0]?.message ?? 'Invalid profile update.',
+      );
+    }
+
+    const user = await this.prisma.user
+      .update({
+        where: { id: currentUser.id },
+        data: parsed.data,
+        select: {
+          id: true,
+          username: true,
+          email: true,
+          fullName: true,
+          phoneNumber: true,
+          role: true,
+          emailVerified: true,
+        },
+      })
+      .catch((caught: unknown) => {
+        if (
+          caught &&
+          typeof caught === 'object' &&
+          'code' in caught &&
+          caught.code === 'P2002'
+        ) {
+          throw new BadRequestException('Phone number is already in use.');
+        }
+
+        throw caught;
+      });
+
+    return this.toCurrentUserSnapshot(user);
+  }
+
+  @Get('wallet')
   async wallet(@CurrentUser() currentUser: AuthBridgeUser) {
     /**
      * Performance fix:
@@ -54,6 +116,19 @@ export class MeController {
     };
   }
 
+  @Get('transactions')
+  transactions(
+    @CurrentUser() currentUser: AuthBridgeUser,
+    @Query('take') take?: string,
+  ) {
+    const parsedTake = Number(take);
+
+    return this.walletsService.listMainWalletTransactionsForUserId(
+      currentUser.id,
+      Number.isFinite(parsedTake) ? parsedTake : 50,
+    );
+  }
+
   private async getCurrentUser(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -62,13 +137,14 @@ export class MeController {
         username: true,
         email: true,
         fullName: true,
+        phoneNumber: true,
         role: true,
         emailVerified: true,
       },
     });
 
     if (!user) {
-      throw new NotFoundException("Current user not found.");
+      throw new NotFoundException('Current user not found.');
     }
 
     return user;
@@ -79,6 +155,7 @@ export class MeController {
     username: string;
     email: string;
     fullName: string;
+    phoneNumber: string;
     role: string;
     emailVerified: boolean;
   }) {
@@ -87,6 +164,7 @@ export class MeController {
       username: user.username,
       email: user.email,
       fullName: user.fullName,
+      phoneNumber: user.phoneNumber,
       role: user.role,
       emailVerified: user.emailVerified,
     };

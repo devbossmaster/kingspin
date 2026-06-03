@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { RoomListItem } from "../../lib/api-client";
+import { getRoomDisplayName } from "../../lib/game-modes";
 import { Badge } from "../ui/badge";
 
 export function RoomCard({
@@ -16,9 +17,9 @@ export function RoomCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="font-mono text-xs text-teal">{room.code}</p>
+          <p className="font-mono text-xs text-teal">Arena</p>
           <h3 className="mt-1 font-display text-lg font-black">
-            {room.name ?? "SpinPro Room"}
+            {getRoomDisplayName(room)}
           </h3>
         </div>
         <div className="flex flex-col items-end gap-2">

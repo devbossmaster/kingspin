@@ -13,13 +13,13 @@ import { signIn } from "../../../lib/auth-client";
 
 function getSafeCallbackUrl() {
   if (typeof window === "undefined") {
-    return "/spinpro";
+    return "/";
   }
 
   const params = new URLSearchParams(window.location.search);
   const callbackUrl = params.get("callbackURL") ?? params.get("redirect");
 
-  return callbackUrl?.startsWith("/") ? callbackUrl : "/spinpro";
+  return callbackUrl?.startsWith("/") ? callbackUrl : "/";
 }
 
 export default function SignInPage() {
@@ -27,7 +27,7 @@ export default function SignInPage() {
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const callbackURL =
-    typeof window === "undefined" ? "/spinpro" : getSafeCallbackUrl();
+    typeof window === "undefined" ? "/" : getSafeCallbackUrl();
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -35,16 +35,22 @@ export default function SignInPage() {
     setIsSubmitting(true);
 
     const formData = new FormData(event.currentTarget);
-    const email = String(formData.get("email") ?? "");
+    const login = String(formData.get("login") ?? "").trim();
     const password = String(formData.get("password") ?? "");
     const callbackURL = getSafeCallbackUrl();
-
-    const result = await signIn.email({
-      email,
-      password,
-      rememberMe: true,
-      callbackURL,
-    });
+    const result = login.includes("@")
+      ? await signIn.email({
+          email: login,
+          password,
+          rememberMe: true,
+          callbackURL,
+        })
+      : await signIn.username({
+          username: login,
+          password,
+          rememberMe: true,
+          callbackURL,
+        });
 
     setIsSubmitting(false);
 
@@ -59,38 +65,31 @@ export default function SignInPage() {
 
   return (
     <AuthShell
-      eyebrow="Player session"
-      title="Sign in"
-      subtitle="Enter rooms, sync your wallet, and return to the spin you selected."
+      eyebrow="Welcome back!"
+      title="Sign in to your account"
+      subtitle="Sign in to your Spin Battle account, sync your wallet, and return to your selected room."
       footer={
         <>
-          New here?{" "}
+          Don&apos;t have an account?{" "}
           <Link
-            className="font-bold text-yellow-200 hover:text-yellow-100"
+            className="font-black"
             href={`/sign-up?callbackURL=${encodeURIComponent(callbackURL)}`}
           >
-            Create an account
-          </Link>
-          <span className="mx-2 text-slate-600">|</span>
-          <Link
-            className="font-bold text-teal-200 hover:text-teal-100"
-            href="/forgot-password"
-          >
-            Forgot password
+            Register now
           </Link>
         </>
       }
     >
-      <form onSubmit={handleSubmit} className="space-y-5">
+      <form onSubmit={handleSubmit} className="space-y-4">
         {error ? <FormMessage tone="error">{error}</FormMessage> : null}
 
         <label className="block text-sm font-semibold text-slate-200">
-          Email
+          Username or email
           <input
             className={authInputClass}
-            name="email"
-            type="email"
-            autoComplete="email"
+            name="login"
+            autoComplete="username"
+            placeholder="Enter username or email"
             required
           />
         </label>
@@ -102,9 +101,18 @@ export default function SignInPage() {
             name="password"
             type="password"
             autoComplete="current-password"
+            placeholder="Enter your password"
             required
           />
         </label>
+        <div className="-mt-2 flex justify-end">
+          <Link
+            href="/forgot-password"
+            className="text-xs font-bold text-sky-300 transition hover:text-white"
+          >
+            Forgot password?
+          </Link>
+        </div>
 
         <button
           className={authButtonClass}

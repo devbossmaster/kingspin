@@ -48,7 +48,9 @@ export default function ResetPasswordPage() {
     const confirmPassword = String(formData.get("confirmPassword") ?? "");
 
     if (!getPasswordStrength(passwordValue).isValid) {
-      setError("Password must include uppercase, number, and special character.");
+      setError(
+        "Password must include uppercase, number, and special character.",
+      );
       return;
     }
 
@@ -79,11 +81,14 @@ export default function ResetPasswordPage() {
     <AuthShell
       eyebrow="Secure reset"
       title="Reset password"
-      subtitle="Set a new password for your SpinPro account."
+      subtitle="Set a new password for your Spin Battle account."
       footer={
         <>
           Back to{" "}
-          <Link className="font-bold text-yellow-200 hover:text-yellow-100" href="/sign-in">
+          <Link
+            className="font-bold text-yellow-200 hover:text-yellow-100"
+            href="/sign-in"
+          >
             sign in
           </Link>
         </>
@@ -120,7 +125,11 @@ export default function ResetPasswordPage() {
           />
         </label>
 
-        <button className={authButtonClass} type="submit" disabled={isSubmitting}>
+        <button
+          className={authButtonClass}
+          type="submit"
+          disabled={isSubmitting}
+        >
           {isSubmitting ? "Updating..." : "Update password"}
         </button>
       </form>

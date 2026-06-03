@@ -27,6 +27,7 @@ export const CurrentUserSchema = z
     username: z.string(),
     email: z.string().email().optional(),
     fullName: z.string().nullable().optional(),
+    phoneNumber: z.string().optional(),
     role: z.string().optional(),
     emailVerified: z.boolean().optional(),
   })
@@ -48,8 +49,22 @@ export const LedgerEntrySnapshotSchema = z.object({
   createdAt: IsoDateStringSchema,
 });
 
+export const LedgerTransactionSnapshotSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  referenceType: z.string().nullable(),
+  referenceId: z.string().nullable(),
+  idempotencyKey: z.string(),
+  metadata: z.unknown().nullable().optional(),
+  createdAt: IsoDateStringSchema,
+  entries: z.array(LedgerEntrySnapshotSchema),
+});
+
 export type DevCreditWalletInput = z.infer<typeof DevCreditWalletSchema>;
 export type CurrentUser = z.infer<typeof CurrentUserSchema>;
 export type MeWallet = z.infer<typeof MeWalletSchema>;
 export type WalletSnapshot = z.infer<typeof WalletSnapshotSchema>;
 export type LedgerEntrySnapshot = z.infer<typeof LedgerEntrySnapshotSchema>;
+export type LedgerTransactionSnapshot = z.infer<
+  typeof LedgerTransactionSnapshotSchema
+>;

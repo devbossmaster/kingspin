@@ -3,6 +3,7 @@ import { parseWebEnv } from "@kingspin/env";
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { nextCookies } from "better-auth/next-js";
+import { username } from "better-auth/plugins";
 import { Resend } from "resend";
 
 const env = parseWebEnv(process.env);
@@ -38,7 +39,7 @@ function getEmailFrom() {
   return (
     env.RESEND_FROM_EMAIL ??
     env.EMAIL_FROM ??
-    "SpinPro <onboarding@resend.dev>"
+    "Spin Battle <onboarding@resend.dev>"
   );
 }
 
@@ -96,7 +97,7 @@ function authLinkEmailTemplate(args: {
 }
 
 export const auth = betterAuth({
-  appName: "SpinPro",
+  appName: "Spin Battle",
   baseURL: getWebUrl(),
   secret: env.BETTER_AUTH_SECRET,
   trustedOrigins: getTrustedOrigins(),
@@ -115,8 +116,27 @@ export const auth = betterAuth({
     fields: {
       name: "fullName",
     },
+    changeEmail: {
+      enabled: true,
+      sendChangeEmailConfirmation: async ({ user, newEmail, url }) => {
+        const email = authLinkEmailTemplate({
+          eyebrow: "Spin Battle email change",
+          title: "Confirm your new email",
+          body: `Confirm changing your Spin Battle email from ${user.email} to ${newEmail}.`,
+          href: url,
+          action: "Confirm email change",
+        });
+
+        queueAuthEmail({
+          to: newEmail,
+          subject: "Confirm your Spin Battle email change",
+          html: email.html,
+          text: email.text,
+        });
+      },
+    },
     additionalFields: {
-      username: {
+      phoneNumber: {
         type: "string",
         required: true,
       },
@@ -137,16 +157,16 @@ export const auth = betterAuth({
     revokeSessionsOnPasswordReset: true,
     sendResetPassword: async ({ user, url }) => {
       const email = authLinkEmailTemplate({
-        eyebrow: "SpinPro account",
+        eyebrow: "Spin Battle account",
         title: "Reset your password",
-        body: "Use this secure link to set a new SpinPro password.",
+        body: "Use this secure link to set a new Spin Battle password.",
         href: url,
         action: "Reset password",
       });
 
       queueAuthEmail({
         to: user.email,
-        subject: "Reset your SpinPro password",
+        subject: "Reset your Spin Battle password",
         html: email.html,
         text: email.text,
       });
@@ -158,20 +178,27 @@ export const auth = betterAuth({
     autoSignInAfterVerification: false,
     sendVerificationEmail: async ({ user, url }) => {
       const email = authLinkEmailTemplate({
-        eyebrow: "SpinPro verification",
+        eyebrow: "Spin Battle verification",
         title: "Verify your email",
-        body: "Confirm this email address before entering SpinPro rooms.",
+        body: "Confirm this email address before entering Spin Battle rooms.",
         href: url,
         action: "Verify email",
       });
 
       queueAuthEmail({
         to: user.email,
-        subject: "Verify your SpinPro email",
+        subject: "Verify your Spin Battle email",
         html: email.html,
         text: email.text,
       });
     },
   },
-  plugins: [nextCookies()],
+  plugins: [
+    username({
+      minUsernameLength: 3,
+      maxUsernameLength: 30,
+      usernameValidator: (value) => /^[a-zA-Z0-9_.]+$/.test(value),
+    }),
+    nextCookies(),
+  ],
 });

@@ -791,7 +791,7 @@ export function useRoom(roomId: string) {
           caught instanceof Error ? caught.message : "Failed to place entry.";
         const lockedMessage =
           message.includes("no longer OPEN") || message.includes("OPEN round")
-            ? "Round locked. Entry was not accepted."
+            ? "Round already moved on. Try the new round."
             : message;
 
         setError(lockedMessage);

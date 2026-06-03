@@ -80,11 +80,17 @@ export default function VerifyEmailPage() {
       footer={
         <>
           {verified ? (
-            <Link className="font-bold text-yellow-200 hover:text-yellow-100" href="/spinpro">
-              Continue to SpinPro
+            <Link
+              className="font-bold text-yellow-200 hover:text-yellow-100"
+              href="/spinpro"
+            >
+              Continue to Spin Battle
             </Link>
           ) : (
-            <Link className="font-bold text-yellow-200 hover:text-yellow-100" href="/sign-in">
+            <Link
+              className="font-bold text-yellow-200 hover:text-yellow-100"
+              href="/sign-in"
+            >
               Sign in
             </Link>
           )}
@@ -94,7 +100,9 @@ export default function VerifyEmailPage() {
       <form onSubmit={handleSubmit} className="space-y-5">
         {error ? <FormMessage tone="error">{error}</FormMessage> : null}
         {success ? <FormMessage tone="success">{success}</FormMessage> : null}
-        {isPending ? <FormMessage tone="info">Checking session...</FormMessage> : null}
+        {isPending ? (
+          <FormMessage tone="info">Checking session...</FormMessage>
+        ) : null}
 
         <label className="block text-sm font-semibold text-slate-200">
           Email

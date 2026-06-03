@@ -16,11 +16,11 @@ export function PromoHero({
         <div className="relative z-10 min-w-0 max-w-2xl">
           <div className="inline-flex items-center gap-2 rounded-md border border-[rgba(163,230,53,0.35)] bg-[rgba(163,230,53,0.1)] px-3 py-2 text-xs font-black uppercase tracking-[0.16em] text-lime-300">
             <Crown className="h-4 w-4" aria-hidden="true" />
-            KingSpin presents SpinPro
+            Spin Battle live rooms
           </div>
 
           <h1 className="mt-6 font-display text-5xl font-black leading-[1.02] tracking-normal text-white md:text-7xl">
-            SpinPro
+            Spin Battle
           </h1>
           <p className="mt-5 max-w-xl text-base leading-7 text-text-secondary md:text-lg">
             Pick Pro for flexible ticket ranges or Fixed for equal-chance rooms.

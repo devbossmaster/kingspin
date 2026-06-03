@@ -48,7 +48,7 @@ export function ConnectionPill() {
 
   return (
     <div
-      className={`fixed bottom-4 left-4 z-40 inline-flex items-center gap-2 rounded-md border px-3 py-2 text-xs font-bold shadow-xl backdrop-blur ${copy.tone}`}
+      className={`fixed bottom-[calc(var(--safe-bottom-padding)+0.5rem)] left-4 z-40 inline-flex items-center gap-2 rounded-md border px-3 py-2 text-xs font-bold shadow-xl backdrop-blur md:bottom-4 ${copy.tone}`}
       role="status"
       aria-live="polite"
     >

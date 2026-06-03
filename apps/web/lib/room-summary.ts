@@ -82,20 +82,8 @@ export function getRoundPhaseLabel(
 
 export function getDisplayRoundPhaseLabel(
   roundOrStatus?: RoundPhaseSource | string | null,
-  msUntilLock?: number | null,
+  _msUntilLock?: number | null,
 ) {
-  if (getPublicRoundPhase(roundOrStatus) === "ENTRY_OPEN") {
-    const sourceMs =
-      roundOrStatus && typeof roundOrStatus !== "string"
-        ? (roundOrStatus.msUntilLock ?? roundOrStatus.msUntilPhaseEnd)
-        : null;
-    const openMs = msUntilLock ?? sourceMs;
-
-    if (typeof openMs === "number" && Number.isFinite(openMs) && openMs <= 0) {
-      return "LOCKING...";
-    }
-  }
-
   return getRoundPhaseLabel(roundOrStatus);
 }
 

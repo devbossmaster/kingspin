@@ -34,29 +34,36 @@ export function getPasswordStrength(password: string): PasswordStrength {
 
 export function PasswordStrengthMeter({ password }: { password: string }) {
   const strength = getPasswordStrength(password);
+  const hasPassword = password.length > 0;
+  const tone =
+    strength.score <= 1
+      ? {
+          text: "text-red-400",
+        }
+      : strength.score === 2
+        ? {
+            text: "text-yellow-300",
+          }
+        : strength.score === 3
+          ? {
+              text: "text-sky-300",
+            }
+          : {
+              text: "text-green-400",
+            };
 
   return (
-    <div className="space-y-2" aria-live="polite">
-      <div className="grid grid-cols-4 gap-1">
-        {[1, 2, 3, 4].map((step) => (
-          <div
-            key={step}
-            className={clsx(
-              "h-2 rounded-full bg-white/10 transition-colors",
-              step <= strength.score &&
-                (strength.score <= 1
-                  ? "bg-red-400"
-                  : strength.score === 2
-                    ? "bg-amber-300"
-                    : strength.score === 3
-                      ? "bg-teal-300"
-                      : "bg-emerald-300"),
-            )}
-          />
-        ))}
-      </div>
-      <p className="text-xs font-semibold text-slate-300">
-        Password strength: {strength.label}
+    <div aria-live="polite">
+      <p
+        className={clsx(
+          "text-xs font-bold",
+          hasPassword ? tone.text : "text-slate-400",
+        )}
+      >
+        Password strength:{" "}
+        <span className="font-black">
+          {hasPassword ? strength.label : "Enter a password"}
+        </span>
       </p>
     </div>
   );

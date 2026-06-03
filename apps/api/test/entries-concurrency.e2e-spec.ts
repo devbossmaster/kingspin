@@ -167,7 +167,9 @@ async function logDatabaseDiagnostics(label: string) {
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.warn(`[entry-stress-db] label=${label} settings unavailable: ${message}`);
+    console.warn(
+      `[entry-stress-db] label=${label} settings unavailable: ${message}`,
+    );
   }
 
   try {
@@ -241,7 +243,7 @@ async function createFixture(options?: {
       slug: `${runId}-category`,
       minEntryAmount: BigInt(amount),
       maxEntryAmount: options?.maxEntryAmount ?? 1_000_000n,
-      maxPlayers: Math.max(users, 24),
+      maxPlayers: Math.max(users, 15),
       roundDurationMs: 45_000,
       isActive: true,
     },
@@ -255,7 +257,7 @@ async function createFixture(options?: {
       name: `${runId} room`,
       status: RoomStatus.ACTIVE,
       isPermanent: false,
-      maxPlayers: Math.max(users, 24),
+      maxPlayers: Math.max(users, 15),
       roundDurationMs: 45_000,
       activatedAt: now,
     },
@@ -281,6 +283,7 @@ async function createFixture(options?: {
       email: `${userId}@kingspin.local`,
       username: `${runId}_user_${index}`.replace(/-/g, '_'),
       fullName: `Stress User ${index}`,
+      phoneNumber: `+2519${String(index).padStart(8, '0')}`,
       emailVerified: true,
     })),
   });
@@ -657,7 +660,9 @@ describe('EntriesService concurrency stress', () => {
       );
 
       expect(invariants.entries).toHaveLength(fixture.userIds.length);
-      expect(invariants.ledgerTransactions).toHaveLength(fixture.userIds.length);
+      expect(invariants.ledgerTransactions).toHaveLength(
+        fixture.userIds.length,
+      );
       expect(invariants.debitEntries).toHaveLength(fixture.userIds.length);
 
       for (const wallet of invariants.wallets) {
@@ -673,7 +678,9 @@ describe('EntriesService concurrency stress', () => {
       }
 
       const expectedTotal = BigInt(fixture.userIds.length * fixture.amount);
-      const locked = await roundsService.lockCurrentRoundForRoom(fixture.roomId);
+      const locked = await roundsService.lockCurrentRoundForRoom(
+        fixture.roomId,
+      );
 
       expect(locked.currentRound.totalEntryAmount).toBe(
         expectedTotal.toString(),
@@ -868,7 +875,8 @@ describe('EntriesService concurrency stress', () => {
 
     const results = await Promise.all([...attempts, lock.then(() => null)]);
     const entryResults = results.filter(
-      (result): result is MeasuredResult<unknown> => result !== null,
+      (result): result is Exclude<(typeof results)[number], null> =>
+        result !== null,
     );
 
     summarize('round-lock-race', entryResults);

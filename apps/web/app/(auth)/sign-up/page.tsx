@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
+import { z } from "zod";
 import {
   AuthShell,
   FormMessage,
@@ -26,6 +27,32 @@ function getSafeCallbackUrl() {
   return callbackUrl?.startsWith("/") ? callbackUrl : "/spinpro";
 }
 
+const phoneCountryCodeSchema = z.literal("+251");
+
+const ethiopianLocalPhoneSchema = z
+  .string()
+  .trim()
+  .transform((value) => value.replace(/[\s-]/g, ""))
+  .transform((value) => (value.startsWith("0") ? value.slice(1) : value))
+  .pipe(
+    z
+      .string()
+      .regex(
+        /^[1-9]\d{8}$/,
+        "Enter a valid Ethiopian phone number with 9 digits after +251.",
+      ),
+  );
+
+const ethiopianPhoneSchema = z
+  .object({
+    countryCode: phoneCountryCodeSchema,
+    localNumber: ethiopianLocalPhoneSchema,
+  })
+  .transform(({ countryCode, localNumber }) => `${countryCode}${localNumber}`);
+
+const phoneFieldClass =
+  "mt-2 rounded-2xl border border-blue-300/15 bg-[#081326]/90 px-4 py-4 text-sm font-semibold text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_14px_30px_rgba(0,0,0,0.22)] outline-none transition placeholder:text-slate-500 focus:border-sky-300/75 focus:bg-[#0b1934] focus:ring-4 focus:ring-blue-500/20";
+
 export default function SignUpPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +68,10 @@ export default function SignUpPage() {
     const formData = new FormData(event.currentTarget);
     const username = String(formData.get("username") ?? "").trim();
     const fullName = String(formData.get("fullName") ?? "").trim();
+    const phoneResult = ethiopianPhoneSchema.safeParse({
+      countryCode: String(formData.get("phoneCountryCode") ?? ""),
+      localNumber: String(formData.get("phoneLocalNumber") ?? ""),
+    });
     const email = String(formData.get("email") ?? "").trim();
     const passwordValue = String(formData.get("password") ?? "");
     const confirmPassword = String(formData.get("confirmPassword") ?? "");
@@ -48,6 +79,18 @@ export default function SignUpPage() {
 
     if (username.length < 3) {
       setError("Username must be at least 3 characters.");
+      return;
+    }
+
+    if (!/^[a-zA-Z0-9_.]+$/.test(username)) {
+      setError(
+        "Username can only include letters, numbers, dots, and underscores.",
+      );
+      return;
+    }
+
+    if (!phoneResult.success) {
+      setError(phoneResult.error.issues[0]?.message ?? "Invalid phone number.");
       return;
     }
 
@@ -70,6 +113,7 @@ export default function SignUpPage() {
       password: passwordValue,
       name: fullName,
       username,
+      phoneNumber: phoneResult.data,
       callbackURL,
     });
 
@@ -80,20 +124,20 @@ export default function SignUpPage() {
       return;
     }
 
-    setSuccess("Check your email to verify your SpinPro account.");
+    setSuccess("Check your email to verify your Spin Battle account.");
     router.push(`/verify-email?email=${encodeURIComponent(email)}`);
   }
 
   return (
     <AuthShell
       eyebrow="Create player"
-      title="Register"
-      subtitle="Create your player profile with email and password. Wallet and entry actions stay protected by your session."
+      title="Create your account"
+      subtitle="Register your Spin Battle player profile before you enter live rooms."
       footer={
         <>
           Already have an account?{" "}
           <Link
-            className="font-bold text-yellow-200 hover:text-yellow-100"
+            className="font-black"
             href={`/sign-in?callbackURL=${encodeURIComponent(getSafeCallbackUrl())}`}
           >
             Sign in
@@ -101,7 +145,7 @@ export default function SignUpPage() {
         </>
       }
     >
-      <form onSubmit={handleSubmit} className="space-y-5">
+      <form onSubmit={handleSubmit} className="space-y-4">
         {error ? <FormMessage tone="error">{error}</FormMessage> : null}
         {success ? <FormMessage tone="success">{success}</FormMessage> : null}
 
@@ -111,6 +155,7 @@ export default function SignUpPage() {
             className={authInputClass}
             name="username"
             autoComplete="username"
+            placeholder="Choose a username"
             minLength={3}
             required
           />
@@ -122,8 +167,35 @@ export default function SignUpPage() {
             className={authInputClass}
             name="fullName"
             autoComplete="name"
+            placeholder="Your full name"
             required
           />
+        </label>
+
+        <label className="block text-sm font-semibold text-slate-200">
+          Phone number
+          <div className="grid grid-cols-[116px_minmax(0,1fr)] gap-2">
+            <select
+              className={`${phoneFieldClass} cursor-pointer appearance-none`}
+              name="phoneCountryCode"
+              defaultValue="+251"
+              aria-label="Country code"
+              required
+            >
+              <option value="+251">+251 ET</option>
+            </select>
+            <input
+              className={phoneFieldClass}
+              name="phoneLocalNumber"
+              type="tel"
+              autoComplete="tel-national"
+              inputMode="numeric"
+              placeholder="912345678"
+              pattern="0?[1-9][0-9]{8}"
+              maxLength={10}
+              required
+            />
+          </div>
         </label>
 
         <label className="block text-sm font-semibold text-slate-200">
@@ -133,6 +205,7 @@ export default function SignUpPage() {
             name="email"
             type="email"
             autoComplete="email"
+            placeholder="Enter your email"
             required
           />
         </label>
@@ -144,6 +217,7 @@ export default function SignUpPage() {
             name="password"
             type="password"
             autoComplete="new-password"
+            placeholder="Create a password"
             minLength={8}
             value={password}
             onChange={(event) => setPassword(event.target.value)}
@@ -160,6 +234,7 @@ export default function SignUpPage() {
             name="confirmPassword"
             type="password"
             autoComplete="new-password"
+            placeholder="Confirm your password"
             required
           />
         </label>

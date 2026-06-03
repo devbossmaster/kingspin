@@ -5,11 +5,12 @@ import type {
   LatestRoundResult,
   LiveRoundSnapshot,
 } from "@kingspin/contracts";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { ArrowRight, Eye, ShieldCheck } from "lucide-react";
 import { ConnectionPill } from "../../../../components/layout/connection-pill";
 import { NavBar } from "../../../../components/layout/nav-bar";
-import { BottomNav } from "../../../../components/player/bottom-nav";
 import { EntryPanel } from "../../../../components/spinpro/entry-panel";
 import { FairnessStrip } from "../../../../components/spinpro/fairness-strip";
 import { PlayersList } from "../../../../components/spinpro/players-list";
@@ -21,8 +22,11 @@ import { useCountdown } from "../../../../hooks/use-countdown";
 import { useRoom } from "../../../../hooks/use-room";
 import { useSession } from "../../../../lib/auth-client";
 import { formatCoins, formatMs, truncateId } from "../../../../lib/format";
+import {
+  getCategoryDisplayName,
+  getRoomDisplayName,
+} from "../../../../lib/game-modes";
 import { getPublicRoundPhase } from "../../../../lib/room-summary";
-import { useAuthStore } from "../../../../stores/auth-store";
 import { useRoomStore } from "../../../../stores/room-store";
 
 const PLAYER_PHASES = [
@@ -396,7 +400,7 @@ function RoundResultPanel({
             {isCompleted ? "Winner Revealed" : "Finalizing Payout"}
           </p>
           <h2 className="mt-1 font-display text-xl font-black text-text-primary">
-            {isCompleted ? "Result is final" : "Result locked"}
+            {isCompleted ? "Result is final" : "Result confirming"}
           </h2>
           <p className="mt-1 text-sm text-text-secondary">
             {isCompleted
@@ -458,13 +462,68 @@ function HeaderStat({ label, value }: { label: string; value: string }) {
   );
 }
 
+function GuestWatchPanel({
+  roomHref,
+  isChecking,
+}: {
+  roomHref: string;
+  isChecking: boolean;
+}) {
+  return (
+    <section className="arcadia-surface relative overflow-hidden rounded-lg p-5">
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-sky-300/70 to-transparent" />
+
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-black uppercase tracking-[0.22em] text-sky-300">
+            Watch mode
+          </p>
+          <h2 className="mt-2 font-display text-2xl font-black text-white">
+            Live preview
+          </h2>
+          <p className="mt-2 text-sm leading-6 text-text-secondary">
+            You can watch the wheel, players, pool, and result flow. Entry opens
+            after sign in and email verification.
+          </p>
+        </div>
+        <span className="hidden h-11 w-11 shrink-0 items-center justify-center rounded-md border border-sky-300/30 bg-sky-400/10 text-sky-200 sm:inline-flex">
+          <Eye className="h-5 w-5" aria-hidden="true" />
+        </span>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <div className="rounded-md border border-white/10 bg-white/[0.04] px-3 py-2">
+          <ShieldCheck className="h-4 w-4 text-lime-300" aria-hidden="true" />
+          <p className="mt-2 text-xs font-bold uppercase tracking-[0.14em] text-text-dim">
+            Entry
+          </p>
+          <p className="mt-1 text-sm font-black text-white">Verified</p>
+        </div>
+        <div className="rounded-md border border-white/10 bg-white/[0.04] px-3 py-2">
+          <Eye className="h-4 w-4 text-sky-300" aria-hidden="true" />
+          <p className="mt-2 text-xs font-bold uppercase tracking-[0.14em] text-text-dim">
+            Watching
+          </p>
+          <p className="mt-1 text-sm font-black text-white">Open</p>
+        </div>
+      </div>
+
+      <Link
+        href={`/sign-in?callbackURL=${encodeURIComponent(roomHref)}`}
+        className="mt-4 inline-flex min-h-10 w-full items-center justify-center rounded-md border border-sky-300/50 bg-[linear-gradient(180deg,rgba(15,23,42,0.96),rgba(14,165,233,0.22))] px-4 py-2 text-sm font-black text-white shadow-[0_0_22px_rgba(14,165,233,0.2)] transition hover:border-sky-200"
+      >
+        {isChecking ? "Checking session" : "Sign in to enter"}
+        <ArrowRight className="ml-2 h-4 w-4" aria-hidden="true" />
+      </Link>
+    </section>
+  );
+}
+
 export default function LiveRoomPage() {
   const params = useParams<{ categorySlug: string; roomId: string }>();
   const roomId = params.roomId;
   const roomHref = `/spinpro/${params.categorySlug}/${roomId}`;
   const { data: session, isPending } = useSession();
-  const authUser = useAuthStore((store) => store.user);
-
   const {
     state,
     latestResult,
@@ -488,11 +547,11 @@ export default function LiveRoomPage() {
 
   if (!state) {
     return (
-      <main className="min-h-screen pb-24 text-text-primary md:pb-0">
+      <main className="pb-safe-bottom-nav min-h-screen text-text-primary md:pb-0">
         <NavBar backHref={`/spinpro/${params.categorySlug}`} />
         <ConnectionPill />
 
-        <div className="mx-auto max-w-5xl px-4 py-8 md:px-8">
+        <div className="mx-0 max-w-[24rem] px-4 py-8 md:mx-auto md:max-w-5xl md:px-8">
           <section className="arcadia-surface relative overflow-hidden rounded-lg p-6">
             <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(250,204,21,0.65)] to-transparent" />
 
@@ -513,7 +572,6 @@ export default function LiveRoomPage() {
             ) : null}
           </section>
         </div>
-        <BottomNav role={authUser?.role} />
       </main>
     );
   }
@@ -539,11 +597,11 @@ export default function LiveRoomPage() {
     : null;
 
   return (
-    <main className="min-h-screen pb-24 text-text-primary md:pb-0">
+    <main className="pb-safe-bottom-nav min-h-screen text-text-primary md:pb-0">
       <NavBar backHref={`/spinpro/${params.categorySlug}`} />
       <ConnectionPill />
 
-      <div className="mx-auto grid max-w-7xl gap-4 px-4 py-5 md:px-8 lg:grid-cols-[1.45fr_0.9fr]">
+      <div className="mx-0 grid max-w-[24rem] gap-4 px-4 py-5 md:mx-auto md:max-w-7xl md:px-8 lg:grid-cols-[1.45fr_0.9fr]">
         <section className="space-y-4">
           <section className="arcadia-surface relative overflow-hidden rounded-lg p-5">
             <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[rgba(250,204,21,0.75)] to-transparent" />
@@ -551,15 +609,15 @@ export default function LiveRoomPage() {
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="min-w-0">
                 <p className="text-xs font-black uppercase tracking-[0.22em] text-[var(--gold)]">
-                  {state.category.name}
+                  {getCategoryDisplayName(state.category)}
                 </p>
                 <h1 className="mt-1 truncate font-display text-3xl font-black md:text-4xl">
-                  {state.room.name ?? "SpinPro Room"}
+                  {getRoomDisplayName(state.room)}
                 </h1>
 
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
                   <span className="rounded-md border border-[var(--border)] bg-white/[0.04] px-2 py-1 font-mono">
-                    {state.room.code}
+                    Room {getRoomDisplayName(state.room)}
                   </span>
                   <span className="rounded-md border border-[var(--border)] bg-white/[0.04] px-2 py-1 font-mono">
                     Socket {connectionStatus}
@@ -581,8 +639,10 @@ export default function LiveRoomPage() {
               />
               <HeaderStat label="Pool" value={formatCoins(totalEntryAmount)} />
               <HeaderStat
-                label="My Entry"
-                value={formatCoins(myEntry?.amount)}
+                label="Your Entry"
+                value={
+                  session?.user ? formatCoins(myEntry?.amount) : "Watching"
+                }
               />
             </div>
           </section>
@@ -636,14 +696,18 @@ export default function LiveRoomPage() {
         </section>
 
         <aside className="space-y-4">
-          <WalletHUD
-            user={user}
-            wallet={wallet}
-            fallbackName={session?.user.name}
-            loadingLabel={isPending ? "Checking session" : "Sign in required"}
-            error={session?.user ? walletError : null}
-            onRefresh={() => void refreshWallet()}
-          />
+          {session?.user ? (
+            <WalletHUD
+              user={user}
+              wallet={wallet}
+              fallbackName={session.user.name}
+              loadingLabel={isPending ? "Checking session" : "Sign in required"}
+              error={walletError}
+              onRefresh={() => void refreshWallet()}
+            />
+          ) : (
+            <GuestWatchPanel roomHref={roomHref} isChecking={isPending} />
+          )}
 
           <EntryPanel
             status={roundStatus}
@@ -712,7 +776,6 @@ export default function LiveRoomPage() {
         result={latestResult}
         onClose={dismissWinner}
       />
-      <BottomNav role={user?.role ?? authUser?.role} />
     </main>
   );
 }

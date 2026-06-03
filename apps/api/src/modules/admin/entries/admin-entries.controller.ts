@@ -6,18 +6,18 @@ import {
   Param,
   Post,
   UseGuards,
-} from "@nestjs/common";
+} from '@nestjs/common';
 import {
   DevPlaceEntrySchema,
   type DevPlaceEntryInput,
-} from "@kingspin/contracts";
-import { RoomGateway } from "../../../gateways/room.gateway";
-import { AdminDevGuard } from "../../../guards/admin-dev.guard";
-import { ZodValidationPipe } from "../../../pipes/zod-validation.pipe";
-import { PrismaService } from "../../../prisma/prisma.service";
-import { EntriesService } from "../../entries/entries.service";
+} from '@kingspin/contracts';
+import { RoomGateway } from '../../../gateways/room.gateway';
+import { AdminDevGuard } from '../../../guards/admin-dev.guard';
+import { ZodValidationPipe } from '../../../pipes/zod-validation.pipe';
+import { PrismaService } from '../../../prisma/prisma.service';
+import { EntriesService } from '../../entries/entries.service';
 
-@Controller("admin/rooms/:roomId/entries")
+@Controller('admin/rooms/:roomId/entries')
 @UseGuards(AdminDevGuard)
 export class AdminEntriesController {
   constructor(
@@ -26,9 +26,9 @@ export class AdminEntriesController {
     private readonly prisma: PrismaService,
   ) {}
 
-  @Post("dev-place")
+  @Post('dev-place')
   async devPlaceEntry(
-    @Param("roomId") roomId: string,
+    @Param('roomId') roomId: string,
     @Body(new ZodValidationPipe(DevPlaceEntrySchema))
     body: DevPlaceEntryInput,
   ) {
@@ -42,7 +42,7 @@ export class AdminEntriesController {
 
     await this.roomGateway.broadcastRoundState(
       roomId,
-      result.reused ? "ENTRY_REUSED" : "ENTRY_PLACED",
+      result.reused ? 'ENTRY_REUSED' : 'ENTRY_PLACED',
     );
 
     return result;
@@ -55,23 +55,26 @@ export class AdminEntriesController {
       });
 
       if (!user) {
-        throw new NotFoundException("User not found.");
+        throw new NotFoundException('User not found.');
       }
 
       return user;
     }
 
     if (!body.playerKey) {
-      throw new BadRequestException("playerKey is required when userId is absent.");
+      throw new BadRequestException(
+        'playerKey is required when userId is absent.',
+      );
     }
 
     const safePlayerKey = body.playerKey
       .toLowerCase()
-      .replace(/[^a-z0-9_-]/g, "-")
+      .replace(/[^a-z0-9_-]/g, '-')
       .slice(0, 32);
 
     const email = `dev+${safePlayerKey}@kingspin.local`;
     const username = `dev_${safePlayerKey}`;
+    const phoneNumber = this.buildDevPhoneNumber(safePlayerKey);
 
     return this.prisma.user.upsert({
       where: { email },
@@ -84,8 +87,19 @@ export class AdminEntriesController {
         email,
         username,
         fullName: `Dev Player ${safePlayerKey}`,
+        phoneNumber,
         emailVerified: true,
       },
     });
+  }
+
+  private buildDevPhoneNumber(value: string) {
+    let hash = 0;
+
+    for (const character of value) {
+      hash = (hash * 31 + character.charCodeAt(0)) % 1_000_000_000;
+    }
+
+    return `+251${String(hash).padStart(9, '0')}`;
   }
 }

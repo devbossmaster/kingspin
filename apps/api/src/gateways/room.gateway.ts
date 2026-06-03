@@ -24,6 +24,7 @@ import {
   SocketCategoryStateEventSchema,
   SocketMachineEventSchema,
   SocketPresenceEventSchema,
+  SocketSpinBattleOnlineEventSchema,
   SocketRoomJoinAckSchema,
   SocketRoomJoinPayloadSchema,
   SocketRoomLeaveAckSchema,
@@ -190,8 +191,9 @@ export class RoomGateway
     this.logger.log(`Socket connected: ${client.id}`);
   }
 
-  handleDisconnect(client: GameSocket) {
-    void this.clearSocketPresence(client.id);
+  async handleDisconnect(client: GameSocket) {
+    await this.clearSocketPresence(client.id);
+    this.emitSpinBattleOnlinePresence();
     this.logger.log(`Socket disconnected: ${client.id}`);
   }
 
@@ -233,6 +235,7 @@ export class RoomGateway
     });
 
     client.to(roomId).emit(SOCKET_EVENTS.ROOM_PLAYER_JOINED, presence);
+    this.emitSpinBattleOnlinePresence();
 
     return SocketRoomJoinAckSchema.parse({
       ok: true,
@@ -265,6 +268,7 @@ export class RoomGateway
     });
 
     client.to(roomId).emit(SOCKET_EVENTS.ROOM_PLAYER_LEFT, presence);
+    this.emitSpinBattleOnlinePresence();
 
     return SocketRoomLeaveAckSchema.parse({
       ok: true,
@@ -284,7 +288,9 @@ export class RoomGateway
       throw new WsException('Invalid category:join payload.');
     }
 
-    const categorySlug = this.parseCategorySlug(parsedPayload.data.categorySlug);
+    const categorySlug = this.parseCategorySlug(
+      parsedPayload.data.categorySlug,
+    );
     const channel = this.getCategoryChannel(categorySlug);
 
     await client.join(channel);
@@ -292,7 +298,8 @@ export class RoomGateway
       `category joined categorySlug=${categorySlug} socketId=${client.id} reason=JOINED_CATEGORY`,
     );
 
-    const rooms = await this.roomsService.findActiveByCategorySlug(categorySlug);
+    const rooms =
+      await this.roomsService.findActiveByCategorySlug(categorySlug);
     const emittedAt = new Date().toISOString();
     const categoryState = SocketCategoryStateEventSchema.parse({
       categorySlug,
@@ -321,7 +328,9 @@ export class RoomGateway
       throw new WsException('Invalid category:leave payload.');
     }
 
-    const categorySlug = this.parseCategorySlug(parsedPayload.data.categorySlug);
+    const categorySlug = this.parseCategorySlug(
+      parsedPayload.data.categorySlug,
+    );
     const channel = this.getCategoryChannel(categorySlug);
 
     await client.leave(channel);
@@ -361,6 +370,8 @@ export class RoomGateway
   }
 
   async broadcastMachineResult(roomId: string, result: unknown) {
+    await Promise.resolve();
+
     const payload = this.toSocketSafePayload(result);
 
     /**
@@ -391,16 +402,14 @@ export class RoomGateway
         },
       );
     } else {
-      void this.broadcastRoundState(roomId, action).catch(
-        (error: unknown) => {
-          const message =
-            error instanceof Error ? error.message : 'Unknown round state error';
+      void this.broadcastRoundState(roomId, action).catch((error: unknown) => {
+        const message =
+          error instanceof Error ? error.message : 'Unknown round state error';
 
-          this.logger.warn(
-            `Failed to broadcast room state for ${roomId} after machine result: ${message}`,
-          );
-        },
-      );
+        this.logger.warn(
+          `Failed to broadcast room state for ${roomId} after machine result: ${message}`,
+        );
+      });
     }
 
     if (action === 'STARTED_OPEN_ROUND') {
@@ -517,7 +526,8 @@ export class RoomGateway
     try {
       const [publisher, subscriber] = await Promise.all([
         this.redisService?.createDedicatedClient('socket.io:publisher') ?? null,
-        this.redisService?.createDedicatedClient('socket.io:subscriber') ?? null,
+        this.redisService?.createDedicatedClient('socket.io:subscriber') ??
+          null,
       ]);
 
       if (!publisher || !subscriber) {
@@ -641,7 +651,10 @@ export class RoomGateway
         );
 
         if (!lock) {
-          this.metrics?.increment('socketCoalescedBroadcastCount', pending.count);
+          this.metrics?.increment(
+            'socketCoalescedBroadcastCount',
+            pending.count,
+          );
           this.logger.log(
             `Skipped duplicate Redis-coalesced room broadcast for ${roomId}; pending=${pending.count}.`,
           );
@@ -675,14 +688,18 @@ export class RoomGateway
         this.pendingOpenRoundSummaryPatchesByRoom.delete(roomId);
 
         if (!useCachedSummary) {
-          this.roomsService.invalidateLiveRoomSummariesForCategory(categorySlug);
+          this.roomsService.invalidateLiveRoomSummariesForCategory(
+            categorySlug,
+          );
         }
 
-        void this.scheduleCategoryStateBroadcast(categorySlug, [
-          ...pending.reasons,
-        ].join('+'), {
-          useCachedSummary,
-        }).catch((error: unknown) => {
+        void this.scheduleCategoryStateBroadcast(
+          categorySlug,
+          [...pending.reasons].join('+'),
+          {
+            useCachedSummary,
+          },
+        ).catch((error: unknown) => {
           this.logBroadcastFailed(
             this.getCategoryChannel(categorySlug),
             [...pending.reasons].join('+') || 'UNKNOWN',
@@ -820,9 +837,8 @@ export class RoomGateway
         return;
       }
 
-      const rooms = await this.roomsService.findActiveByCategorySlug(
-        categorySlug,
-      );
+      const rooms =
+        await this.roomsService.findActiveByCategorySlug(categorySlug);
       const reasons = [...pending.reasons];
       const payload = SocketCategoryStateEventSchema.parse({
         categorySlug,
@@ -841,7 +857,11 @@ export class RoomGateway
       pending.resolve();
     } catch (error) {
       const reason = [...pending.reasons].join('+') || 'UNKNOWN';
-      this.logBroadcastFailed(this.getCategoryChannel(categorySlug), reason, error);
+      this.logBroadcastFailed(
+        this.getCategoryChannel(categorySlug),
+        reason,
+        error,
+      );
       pending.reject(error);
       throw error;
     } finally {
@@ -851,7 +871,9 @@ export class RoomGateway
         Date.now() - startedAt,
         {
           pendingCount: pending.count,
-          observers: this.hasChannelObservers(this.getCategoryChannel(categorySlug)),
+          observers: this.hasChannelObservers(
+            this.getCategoryChannel(categorySlug),
+          ),
         },
       );
     }
@@ -884,11 +906,15 @@ export class RoomGateway
       return;
     }
 
-    await Promise.allSettled(
-      [...targetRooms].map((targetRoomId) =>
-        this.redisService?.del(this.getPresenceKey(targetRoomId, socketId)),
-      ),
-    );
+    const redisService = this.redisService;
+
+    if (redisService?.isAvailable()) {
+      await Promise.allSettled(
+        [...targetRooms].map((targetRoomId) =>
+          redisService.del(this.getPresenceKey(targetRoomId, socketId)),
+        ),
+      );
+    }
 
     if (roomId) {
       rooms?.delete(roomId);
@@ -929,9 +955,9 @@ export class RoomGateway
     return `room-presence:${roomId}:${socketId}`;
   }
 
-  private toSocketSafePayload(payload: unknown) {
+  private toSocketSafePayload(payload: unknown): unknown {
     return JSON.parse(
-      JSON.stringify(payload, (_key, value) => {
+      JSON.stringify(payload, (_key: string, value: unknown) => {
         if (typeof value === 'bigint') {
           return value.toString();
         }
@@ -942,7 +968,7 @@ export class RoomGateway
 
         return value;
       }),
-    );
+    ) as unknown;
   }
 
   private queueOpenRoundSummaryPatch(roomId: string, payload: unknown) {
@@ -959,11 +985,9 @@ export class RoomGateway
     this.pendingOpenRoundSummaryPatchesByRoom.set(roomId, currentRound);
   }
 
-  private async broadcastOpenRoundSummaryPatch(
-    roomId: string,
-    reason: string,
-  ) {
-    const categorySlug = await this.roomsService.findCategorySlugForRoom(roomId);
+  private async broadcastOpenRoundSummaryPatch(roomId: string, reason: string) {
+    const categorySlug =
+      await this.roomsService.findCategorySlugForRoom(roomId);
     const openRoundPatch =
       this.pendingOpenRoundSummaryPatchesByRoom.get(roomId) ?? null;
 
@@ -988,6 +1012,40 @@ export class RoomGateway
     await this.scheduleCategoryStateBroadcast(categorySlug, reason, {
       useCachedSummary,
     });
+  }
+
+  getSpinBattleOnlinePresence() {
+    const activeRooms = new Set<string>();
+    let onlinePlayers = 0;
+
+    for (const rooms of this.socketRoomsById.values()) {
+      if (rooms.size === 0) {
+        continue;
+      }
+
+      onlinePlayers += 1;
+
+      for (const roomId of rooms) {
+        activeRooms.add(roomId);
+      }
+    }
+
+    return SocketSpinBattleOnlineEventSchema.parse({
+      onlinePlayers,
+      activeRooms: activeRooms.size,
+      generatedAt: new Date().toISOString(),
+    });
+  }
+
+  private emitSpinBattleOnlinePresence() {
+    if (!this.server?.emit) {
+      return;
+    }
+
+    this.server.emit(
+      SOCKET_EVENTS.SPIN_BATTLE_ONLINE,
+      this.getSpinBattleOnlinePresence(),
+    );
   }
 
   private isOpenRoundStartAction(action: string) {
@@ -1104,5 +1162,3 @@ export class RoomGateway
     );
   }
 }
-
-

@@ -3,7 +3,7 @@
 import { useMemo } from "react";
 import type { EntryWithPlayerSnapshot } from "@kingspin/contracts";
 import { formatCoins } from "../../lib/format";
-import { getWheelSliceColor } from "./spinning-wheel";
+import { getEntrySliceColor } from "./spinning-wheel";
 
 type PlayersListProps = {
   entries: (EntryWithPlayerSnapshot & { pending?: boolean })[];
@@ -96,7 +96,7 @@ export function PlayersList({
                 className={`h-3 w-3 shrink-0 rounded-full ring-2 ring-black/30 shadow-[0_0_12px_rgba(255,255,255,0.12)] ${
                   isPending ? "animate-pulse" : ""
                 }`}
-                style={{ backgroundColor: getWheelSliceColor(index) }}
+                style={{ backgroundColor: getEntrySliceColor(entry, index) }}
                 aria-hidden="true"
               />
 

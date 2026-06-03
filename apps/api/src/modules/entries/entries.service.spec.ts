@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { GameMode, RoundStatus } from '@kingspin/db';
 import { EntriesService } from './entries.service';
 
@@ -60,18 +60,25 @@ function buildPlacementRow(overrides?: Record<string, unknown>) {
 }
 
 function buildService(args?: {
+  fraudService?: Record<string, unknown>;
   preflight?: Record<string, unknown>;
   placementRows?: Record<string, unknown>[];
 }) {
   const prisma: {
     $queryRaw: jest.Mock;
     $transaction: jest.Mock;
+    round: {
+      findFirst: jest.Mock;
+    };
   } = {
     $queryRaw: jest
       .fn()
       .mockResolvedValueOnce([buildPlacementRow(args?.placementRows?.[0])])
       .mockResolvedValueOnce([buildPlacementRow(args?.placementRows?.[1])]),
     $transaction: jest.fn(),
+    round: {
+      findFirst: jest.fn().mockResolvedValue({ id: 'round-1' }),
+    },
   };
 
   prisma.$transaction.mockImplementation(
@@ -102,7 +109,11 @@ function buildService(args?: {
   };
 
   return {
-    service: new EntriesService(prisma as any, roundsService as any),
+    service: new EntriesService(
+      prisma as any,
+      roundsService as any,
+      args?.fraudService as any,
+    ),
     prisma,
     roundsService,
   };
@@ -130,6 +141,53 @@ describe('EntriesService hot path', () => {
       String(prisma.$queryRaw.mock.calls[0]?.[0] ?? '');
     expect(hotPathSql).toContain('pg_advisory_xact_lock_shared');
     expect(hotPathSql).not.toContain('UPDATE rounds r');
+  });
+
+  it('blocks a fraud-denied entry before placement SQL runs', async () => {
+    const fraudService = {
+      evaluateEntryAttempt: jest.fn().mockResolvedValue({
+        decision: 'BLOCK',
+        findings: [
+          {
+            check: 'RAPID_ENTRY_ATTEMPTS',
+            severity: 'HIGH',
+            message:
+              'Too many entry attempts for this round in a short window.',
+          },
+        ],
+        plannedChecks: [],
+        evaluatedAt: now.toISOString(),
+      }),
+    };
+    const { service, prisma } = buildService({ fraudService });
+
+    await expect(
+      service.placeEntryForUser({
+        roomId: 'room-1',
+        userId: 'user-1',
+        amount: 1_000,
+        idempotencyKey: 'entry-key-1',
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(prisma.round.findFirst).toHaveBeenCalledWith({
+      where: {
+        roomId: 'room-1',
+        status: RoundStatus.OPEN,
+        OR: [{ locksAt: null }, { locksAt: { gt: expect.any(Date) } }],
+      },
+      orderBy: { roundNumber: 'desc' },
+      select: { id: true },
+    });
+    expect(fraudService.evaluateEntryAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'user-1',
+        roomId: 'room-1',
+        roundId: 'round-1',
+        amount: 1_000n,
+      }),
+    );
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
   });
 
   it('top-up increments the existing entry and round total by the request amount', async () => {

@@ -37,6 +37,8 @@ import { RoundStatus } from '@kingspin/db';
 import { createAdapter } from '@socket.io/redis-adapter';
 import type { Server, Socket } from 'socket.io';
 import { getApiEnv } from '../config/api-env';
+import type { AuthBridgeUser } from '../modules/auth-bridge/auth.types';
+import { AuthBridgeService } from '../modules/auth-bridge/auth-bridge.service';
 import { PublicGameService } from '../modules/public-game/public-game.service';
 import { RealtimeMetricsService } from '../modules/redis/realtime-metrics.service';
 import { RoomsService } from '../modules/rooms/rooms.service';
@@ -47,7 +49,15 @@ import {
 } from '../modules/redis/redis.service';
 
 type GameServer = Server<ClientToServerEvents, ServerToClientEvents>;
-type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
+type GameSocketData = {
+  userId?: string;
+};
+type GameSocket = Socket<
+  ClientToServerEvents,
+  ServerToClientEvents,
+  Record<string, never>,
+  GameSocketData
+>;
 type RedisAdapterClient = RedisDedicatedClient;
 type PendingRoomBroadcast = {
   timer: ReturnType<typeof setTimeout>;
@@ -140,6 +150,7 @@ export class RoomGateway
   constructor(
     private readonly publicGameService: PublicGameService,
     private readonly roomsService: RoomsService,
+    private readonly authBridgeService: AuthBridgeService,
     @Optional() private readonly redisService?: RedisService,
     @Optional() private readonly metrics?: RealtimeMetricsService,
   ) {}
@@ -149,8 +160,6 @@ export class RoomGateway
 
     await this.configureRedisAdapter(server);
 
-    // TODO(auth): validate the Better Auth session/JWT from the socket
-    // handshake before allowing authenticated room actions.
     this.logger.log('Socket.IO /game namespace initialized.');
     this.startPresenceHeartbeat();
 
@@ -187,8 +196,23 @@ export class RoomGateway
     ]);
   }
 
-  handleConnection(client: GameSocket) {
-    this.logger.log(`Socket connected: ${client.id}`);
+  async handleConnection(client: GameSocket) {
+    try {
+      const user = await this.authenticateSocket(client);
+
+      if (!user) {
+        client.disconnect(true);
+        return;
+      }
+
+      this.logger.log(`Socket connected: ${client.id}`);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown socket auth error';
+
+      this.logger.warn(`Socket auth failed for ${client.id}: ${message}`);
+      client.disconnect(true);
+    }
   }
 
   async handleDisconnect(client: GameSocket) {
@@ -202,6 +226,8 @@ export class RoomGateway
     @ConnectedSocket() client: GameSocket,
     @MessageBody() payload: unknown,
   ) {
+    await this.requireAuthenticatedSocket(client);
+
     const parsedPayload = SocketRoomJoinPayloadSchema.safeParse(payload);
 
     if (!parsedPayload.success) {
@@ -282,6 +308,8 @@ export class RoomGateway
     @ConnectedSocket() client: GameSocket,
     @MessageBody() payload: unknown,
   ) {
+    await this.requireAuthenticatedSocket(client);
+
     const parsedPayload = SocketCategoryJoinPayloadSchema.safeParse(payload);
 
     if (!parsedPayload.success) {
@@ -587,6 +615,35 @@ export class RoomGateway
 
   private async getRoomStateSnapshot(roomId: string) {
     return this.publicGameService.getRoomLiveState(roomId);
+  }
+
+  private async requireAuthenticatedSocket(client: GameSocket) {
+    const user = await this.authenticateSocket(client);
+
+    if (!user) {
+      throw new WsException('Authentication required.');
+    }
+
+    return user;
+  }
+
+  private async authenticateSocket(
+    client: GameSocket,
+  ): Promise<AuthBridgeUser | null> {
+    if (client.data.userId) {
+      return { id: client.data.userId };
+    }
+
+    const user = await this.authBridgeService.validateRequest({
+      headers: client.handshake.headers,
+    });
+
+    if (!user?.id) {
+      return null;
+    }
+
+    client.data.userId = user.id;
+    return user;
   }
 
   private scheduleRoomStateBroadcast(roomId: string, reason: string) {

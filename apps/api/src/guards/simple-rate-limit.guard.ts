@@ -23,6 +23,7 @@ type SimpleRateLimitOptions = {
   defaultWindowMs: number;
   defaultMaxRequests: number;
   isProduction: boolean;
+  trustProxyHeaders: boolean;
 };
 
 @Injectable()
@@ -161,13 +162,47 @@ export class SimpleRateLimitGuard implements CanActivate {
     headers?: Record<string, string | string[] | undefined>;
     socket?: { remoteAddress?: string };
   }) {
-    const forwardedFor = request.headers?.['x-forwarded-for'];
+    if (this.options.trustProxyHeaders) {
+      /**
+       * Only enable TRUST_PROXY_HEADERS when the API is behind a trusted
+       * reverse proxy such as Nginx, Coolify, or Cloudflare that overwrites
+       * client-supplied forwarding headers.
+       */
+      const forwardedIp = this.getForwardedForClientIp(
+        request.headers?.['x-forwarded-for'],
+      );
 
-    if (typeof forwardedFor === 'string' && forwardedFor.trim().length > 0) {
-      return forwardedFor.split(',')[0].trim();
+      if (forwardedIp) {
+        return forwardedIp;
+      }
     }
 
-    return request.ip ?? request.socket?.remoteAddress ?? 'unknown';
+    return (
+      this.normalizeClientKey(request.ip) ??
+      this.normalizeClientKey(request.socket?.remoteAddress) ??
+      'unknown-client'
+    );
+  }
+
+  private getForwardedForClientIp(value: string | string[] | undefined) {
+    const forwardedFor = Array.isArray(value) ? value[0] : value;
+
+    if (!forwardedFor) {
+      return null;
+    }
+
+    const firstIp = forwardedFor
+      .split(',')
+      .map((part) => part.trim())
+      .find((part) => part.length > 0);
+
+    return this.normalizeClientKey(firstIp);
+  }
+
+  private normalizeClientKey(value: string | undefined) {
+    const normalized = value?.trim();
+
+    return normalized && normalized.length > 0 ? normalized : null;
   }
 
   private normalizePath(path: string) {

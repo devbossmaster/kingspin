@@ -158,6 +158,7 @@ const ApiEnvBaseSchema = z
     LOG_LEVEL: LogLevelSchema.default("info"),
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
     RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
+    TRUST_PROXY_HEADERS: BooleanStringSchema.default(false),
   })
   .passthrough()
   .transform((env) => ({
@@ -203,7 +204,8 @@ export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
         context.addIssue({
           code: "custom",
           path: [key],
-          message: "Local Resend placeholders are only allowed when APP_ENV=local.",
+          message:
+            "Local Resend placeholders are only allowed when APP_ENV=local.",
         });
       }
     }
@@ -214,9 +216,13 @@ export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
   }
 
   requireDeployedUrl(context, "WEB_URL", env.WEB_URL, ["https:"], env.APP_ENV);
-  requireDeployedUrl(context, "API_CORS_ORIGIN", env.API_CORS_ORIGIN, [
-    "https:",
-  ], env.APP_ENV);
+  requireDeployedUrl(
+    context,
+    "API_CORS_ORIGIN",
+    env.API_CORS_ORIGIN,
+    ["https:"],
+    env.APP_ENV,
+  );
   requireDeployedUrl(
     context,
     "BETTER_AUTH_URL",
@@ -330,7 +336,8 @@ export const WebEnvSchema = WebEnvBaseSchema.superRefine((env, context) => {
         context.addIssue({
           code: "custom",
           path: [key],
-          message: "Local Resend placeholders are only allowed when APP_ENV=local.",
+          message:
+            "Local Resend placeholders are only allowed when APP_ENV=local.",
         });
       }
     }

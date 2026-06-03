@@ -29,4 +29,18 @@ describe('API environment validation', () => {
       }),
     ).toThrow(EnvValidationError);
   });
+
+  it('parses and validates the trusted proxy header flag', () => {
+    expect(
+      parseApiEnv({
+        TRUST_PROXY_HEADERS: 'true',
+      }).TRUST_PROXY_HEADERS,
+    ).toBe(true);
+
+    expect(() =>
+      parseApiEnv({
+        TRUST_PROXY_HEADERS: 'definitely',
+      }),
+    ).toThrow(EnvValidationError);
+  });
 });

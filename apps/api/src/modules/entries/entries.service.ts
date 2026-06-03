@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import {
   GameMode,
   LedgerTransactionType,
@@ -13,6 +19,7 @@ import {
 } from '@kingspin/db';
 import { createHash, randomUUID } from 'node:crypto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { FraudService } from '../fraud/fraud.service';
 import { RoundsService } from '../rounds/rounds.service';
 import { WalletsService } from '../wallets/wallets.service';
 
@@ -144,6 +151,7 @@ export class EntriesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly roundsService: RoundsService,
+    @Optional() private readonly fraudService?: FraudService,
   ) {}
 
   async placeEntryForUser(args: PlaceEntryForUserArgs) {
@@ -250,6 +258,19 @@ export class EntriesService {
         : `${idempotencyScope}:${roomId}:${userId}:${randomUUID()}`;
 
     mark('input validation and idempotency normalization');
+
+    const fraudStartedAt = Date.now();
+    await this.assertFraudAllowed({
+      roomId,
+      userId,
+      amount: addAmount,
+      requestId: telemetry?.requestId,
+      requestAcceptedAt,
+    });
+    recordTiming(
+      'entry-timing',
+      `fraud preflight duration=${Date.now() - fraudStartedAt}ms`,
+    );
 
     const entryId = randomUUID();
 
@@ -959,6 +980,49 @@ export class EntriesService {
     args.observeStatus?.(row);
 
     return this.toPlacementResultFromRow(row, args);
+  }
+
+  private async assertFraudAllowed(args: {
+    roomId: string;
+    userId: string;
+    amount: bigint;
+    requestId?: string;
+    requestAcceptedAt: Date;
+  }) {
+    if (!this.fraudService) {
+      return;
+    }
+
+    const currentRound = await this.prisma.round.findFirst({
+      where: {
+        roomId: args.roomId,
+        status: RoundStatus.OPEN,
+        OR: [{ locksAt: null }, { locksAt: { gt: args.requestAcceptedAt } }],
+      },
+      orderBy: { roundNumber: 'desc' },
+      select: { id: true },
+    });
+
+    const evaluation = await this.fraudService.evaluateEntryAttempt({
+      userId: args.userId,
+      roomId: args.roomId,
+      roundId: currentRound?.id,
+      amount: args.amount,
+      requestId: args.requestId,
+    });
+
+    if (evaluation.decision !== 'BLOCK') {
+      return;
+    }
+
+    const rapidEntryFinding = evaluation.findings.find(
+      (finding) => finding.check === 'RAPID_ENTRY_ATTEMPTS',
+    );
+
+    throw new ForbiddenException(
+      rapidEntryFinding?.message ??
+        'Entry attempt was blocked by fraud protection.',
+    );
   }
 
   private toPlacementResultFromRow(

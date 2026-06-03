@@ -6,23 +6,18 @@ import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   BadgeDollarSign,
-  BarChart3,
   ChevronLeft,
   ChevronRight,
   Coins,
   Clock3,
-  Eye,
-  Gauge,
   Gamepad2,
   Home,
   LogOut,
-  Megaphone,
   Plus,
   Radio,
   Shield,
   User,
   Users,
-  Wallet,
 } from "lucide-react";
 import { GameShell } from "../components/player/game-shell";
 import { signOut, useSession } from "../lib/auth-client";
@@ -31,8 +26,8 @@ import {
   type WinnerFeedItem,
   type WinnerFeedScope,
 } from "../lib/api-client";
-import { formatCoins, truncateId } from "../lib/format";
-import { getCategoryDisplayName, getRoomDisplayName } from "../lib/game-modes";
+import { formatCoins } from "../lib/format";
+import { getRoomDisplayName } from "../lib/game-modes";
 import { getGameSocket } from "../lib/socket-client";
 import { useAuthStore } from "../stores/auth-store";
 import { useCategories } from "../hooks/use-categories";
@@ -48,14 +43,9 @@ const SIDEBAR_ITEMS: Array<{
   icon: LucideIcon;
   active?: boolean;
 }> = [
-  { label: "Promotions", href: "#promotions", icon: Megaphone, active: true },
-  { label: "Home", href: "/", icon: Home },
-  { label: "Betting Table", href: "#live-stats", icon: BarChart3 },
-  { label: "Spin Battle", href: "#games", icon: Gamepad2 },
+  { label: "Home", href: "/", icon: Home, active: true },
+  { label: "Games", href: "#games", icon: Gamepad2 },
   { label: "Rewards", href: "/wallet", icon: BadgeDollarSign },
-  { label: "Fast Games", href: "#games", icon: Gauge },
-  { label: "Wallet", href: "/wallet", icon: Wallet },
-  { label: "Live", href: "#live-stats", icon: Radio },
 ];
 
 const ADMIN_ROLES = new Set([
@@ -81,6 +71,8 @@ const WINNER_FEED_TABS: Array<{ scope: WinnerFeedScope; label: string }> = [
   { scope: "month", label: "Top of the month" },
 ];
 
+const HOMEPAGE_FEED_MAX_PLAYERS = 15;
+
 function MoneyIcon() {
   return (
     <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-black text-white">
@@ -92,20 +84,24 @@ function MoneyIcon() {
 function winnerName(winner: WinnerFeedItem) {
   const username = winner.winnerUsername?.trim();
 
-  return username ? username : `Player ${truncateId(winner.winnerUserId, 6)}`;
+  if (!username) return "Player";
+
+  const emailName = username.includes("@")
+    ? username.split("@")[0]?.trim()
+    : username;
+
+  return emailName || "Player";
 }
 
-function winnerBattleLabel(winner: WinnerFeedItem) {
-  const category = getCategoryDisplayName({
-    slug: winner.categorySlug,
-    name: winner.categoryName,
-  });
-  const room = getRoomDisplayName({
+function winnerRoomLabel(winner: WinnerFeedItem) {
+  return getRoomDisplayName({
     code: winner.roomCode,
     name: winner.roomName,
   });
+}
 
-  return `${category} / ${room}`;
+function winnerPlayerCountLabel(winner: WinnerFeedItem) {
+  return `${winner.playerCount}/${HOMEPAGE_FEED_MAX_PLAYERS}`;
 }
 
 function winnerCompletedLabel(completedAt: string | null) {
@@ -147,7 +143,7 @@ function HomeSidebar({
   return (
     // Navigation links and wallet/profile strip: safe visual styling zone.
     <aside
-      className={`sticky top-20 hidden h-[calc(100vh-6rem)] shrink-0 flex-col rounded-[14px] border border-[#1b2646] bg-[linear-gradient(180deg,#07112b_0%,#050716_36%,#03040d_100%)] p-3 shadow-[0_22px_54px_rgba(0,0,0,0.52)] transition-[width] duration-300 md:flex ${
+      className={`hidden h-full max-h-full shrink-0 flex-col rounded-[14px] border border-[#1b2646] bg-[linear-gradient(180deg,#07112b_0%,#050716_36%,#03040d_100%)] p-3 shadow-[0_22px_54px_rgba(0,0,0,0.52)] transition-[width] duration-300 md:flex ${
         expanded ? "w-[19.25rem]" : "w-20"
       }`}
       aria-label="Home navigation"
@@ -206,7 +202,7 @@ function HomeSidebar({
         </button>
       ) : null}
 
-      <nav className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-0.5">
+      <nav className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
         {SIDEBAR_ITEMS.map((item) => {
           const Icon = item.icon;
 
@@ -506,7 +502,7 @@ export default function SpinBattleHomePage() {
 
   return (
     <GameShell>
-      <div className="mx-auto flex min-h-[calc(100vh-var(--safe-bottom-padding)-4rem)] w-full max-w-[1260px] gap-5 px-3 py-4 md:px-5 md:py-6 lg:px-8">
+      <div className="mx-auto flex min-h-[calc(100vh-var(--safe-bottom-padding)-4rem)] w-full max-w-[1260px] gap-5 px-3 py-4 md:h-[calc(100vh-4rem)] md:min-h-0 md:overflow-hidden md:px-5 md:py-6 lg:px-8">
         <HomeSidebar
           expanded={isSidebarExpanded}
           hasSession={Boolean(session?.user)}
@@ -517,7 +513,7 @@ export default function SpinBattleHomePage() {
           onSignOut={() => void handleSignOut()}
         />
 
-        <main className="min-w-0 flex-1">
+        <main className="min-w-0 flex-1 md:h-full md:overflow-y-auto md:pr-1">
           <div className="mx-auto flex w-full max-w-md flex-col pb-8 md:max-w-[960px]">
             {/* Hero / carousel: safe visual styling zone. */}
             <div
@@ -647,7 +643,7 @@ export default function SpinBattleHomePage() {
 
                 <div className="hidden grid-cols-[minmax(0,1.35fr)_minmax(0,1.45fr)_minmax(0,0.75fr)_minmax(0,0.8fr)_minmax(0,0.9fr)] gap-4 border-b border-white/10 px-3 py-3 text-xs font-bold text-zinc-500 md:grid">
                   <span>Winner</span>
-                  <span>Battle</span>
+                  <span>Room</span>
                   <span>Players</span>
                   <span>Round</span>
                   <span>Payout</span>
@@ -690,14 +686,10 @@ export default function SpinBattleHomePage() {
                           </div>
                           <Link
                             href={roomHref}
-                            className="inline-flex min-w-0 items-center gap-2 text-zinc-200 transition hover:text-white"
+                            className="inline-flex min-w-0 items-center text-zinc-200 transition hover:text-white"
                           >
-                            <Eye
-                              className="h-4 w-4 shrink-0 text-sky-300"
-                              aria-hidden="true"
-                            />
                             <span className="truncate">
-                              {winnerBattleLabel(winner)}
+                              {winnerRoomLabel(winner)}
                             </span>
                           </Link>
                           <span className="inline-flex items-center gap-1.5 text-zinc-100">
@@ -705,7 +697,7 @@ export default function SpinBattleHomePage() {
                               className="h-4 w-4 text-yellow-200"
                               aria-hidden="true"
                             />
-                            {winner.playerCount}/{winner.roomMaxPlayers}
+                            {winnerPlayerCountLabel(winner)}
                           </span>
                           <span className="inline-flex items-center gap-1.5 text-zinc-100">
                             <Clock3
@@ -743,9 +735,8 @@ export default function SpinBattleHomePage() {
                                   {winnerName(winner)}
                                 </p>
                                 <p className="mt-0.5 truncate text-[11px] font-bold text-zinc-500">
-                                  {winnerBattleLabel(winner)} /{" "}
-                                  {winner.playerCount}/{winner.roomMaxPlayers}{" "}
-                                  players
+                                  {winnerRoomLabel(winner)} /{" "}
+                                  {winnerPlayerCountLabel(winner)} players
                                 </p>
                               </div>
                             </div>

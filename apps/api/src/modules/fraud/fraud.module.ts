@@ -1,9 +1,10 @@
-import { Module } from "@nestjs/common";
-import { PrismaModule } from "../../prisma/prisma.module";
-import { FraudService } from "./fraud.service";
+import { Module } from '@nestjs/common';
+import { PrismaModule } from '../../prisma/prisma.module';
+import { RedisModule } from '../redis/redis.module';
+import { FraudService } from './fraud.service';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, RedisModule],
   providers: [FraudService],
   exports: [FraudService],
 })

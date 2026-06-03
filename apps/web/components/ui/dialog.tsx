@@ -7,10 +7,22 @@ type DialogProps = {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  panelClassName?: string;
 };
 
-export function Dialog({ open, title, children, onClose }: DialogProps) {
+export function Dialog({
+  open,
+  title,
+  children,
+  onClose,
+  panelClassName = "",
+}: DialogProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const defaultPanelClassName =
+    "w-full max-w-lg rounded-lg border border-[var(--border-glow)] bg-[var(--bg-surface)] p-6 text-text-primary shadow-2xl outline-none";
+  const resolvedPanelClassName = panelClassName
+    ? `w-full text-text-primary outline-none ${panelClassName}`
+    : defaultPanelClassName;
 
   useEffect(() => {
     if (!open) return;
@@ -52,7 +64,7 @@ export function Dialog({ open, title, children, onClose }: DialogProps) {
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="w-full max-w-lg rounded-lg border border-[var(--border-glow)] bg-[var(--bg-surface)] p-6 text-text-primary shadow-2xl outline-none"
+        className={resolvedPanelClassName}
       >
         {children}
       </div>

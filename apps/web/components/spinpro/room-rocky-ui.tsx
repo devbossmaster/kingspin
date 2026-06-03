@@ -34,7 +34,6 @@ function getPhaseLabel(
 // Top bar
 export function RockyTopBar({
   backHref,
-  categoryName,
   roomName,
   roundNumber,
   phase,
@@ -42,7 +41,6 @@ export function RockyTopBar({
   connectionStatus,
 }: {
   backHref: string;
-  categoryName: string;
   roomName: string;
   roundNumber?: number | null;
   phase?: string | null;
@@ -62,15 +60,15 @@ export function RockyTopBar({
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
           <h1 className="truncate text-sm font-black leading-tight text-white">
-            {roomName}
+            Arena: {roomName}
           </h1>
           <span className="shrink-0 rounded-full bg-sky-400 px-1.5 text-[9px] font-black text-white">
             ✓
           </span>
         </div>
 
-        <p className="truncate font-mono text-[11px] font-bold text-slate-300">
-          {categoryName} / #{roundNumber ?? "-"}
+        <p className="truncate text-[11px] font-bold text-slate-300">
+          Round #{roundNumber ?? "-"}
         </p>
       </div>
 
@@ -91,8 +89,9 @@ export function RockyTopBar({
 
 // Arena hero card
 export function ArenaHeroCard({
-  categorySlug,
-  roomId,
+  categoryName,
+  roomName,
+  roundNumber,
   phase,
   status,
   playerCount,
@@ -101,8 +100,9 @@ export function ArenaHeroCard({
   msLeft,
   msUntilNextRound,
 }: {
-  categorySlug: string;
-  roomId: string;
+  categoryName: string;
+  roomName: string;
+  roundNumber?: number | null;
   phase: string | null | undefined;
   status?: string | null;
   playerCount: number;
@@ -113,6 +113,7 @@ export function ArenaHeroCard({
 }) {
   const publicPhase = getPublicRoundPhase({ phase, status });
   const activeIndex = PLAYER_PHASES.findIndex((item) => item === publicPhase);
+  const displayedMaxPlayers = maxPlayers ?? 30;
   const timerValue =
     publicPhase === "ENTRY_OPEN"
       ? formatMs(msLeft)
@@ -122,7 +123,7 @@ export function ArenaHeroCard({
   const stats = [
     {
       label: "Players",
-      value: `${playerCount} / ${maxPlayers ?? "-"}`,
+      value: `${playerCount} / ${displayedMaxPlayers}`,
     },
     {
       label: "Pool",
@@ -139,10 +140,10 @@ export function ArenaHeroCard({
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--gold)]">
-            Arena
+            {categoryName}
           </p>
-          <p className="truncate font-mono text-xs font-black text-slate-200">
-            {categorySlug.toUpperCase()} / #{roomId}
+          <p className="truncate text-xs font-black text-slate-200">
+            Arena: {roomName} · Round #{roundNumber ?? "-"}
           </p>
         </div>
 

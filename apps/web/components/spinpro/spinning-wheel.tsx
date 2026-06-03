@@ -7,8 +7,13 @@ import { formatCoins, formatMs } from "../../lib/format";
 import { getPublicRoundPhase } from "../../lib/room-summary";
 import { WheelPointer } from "./wheel-pointer";
 
+type WheelEntry = EntryWithPlayerSnapshot & {
+  pending?: boolean;
+  optimisticBaseEntryId?: string | null;
+};
+
 type SpinningWheelProps = {
-  entries: (EntryWithPlayerSnapshot & { pending?: boolean })[];
+  entries: WheelEntry[];
   totalEntryAmount: string;
   spinAngle: number | null | undefined;
   status: string | null | undefined;
@@ -49,8 +54,36 @@ const WHEEL_INNER_RADIUS = 76;
 const COUNTDOWN_RADIUS = 146;
 const COUNTDOWN_CIRCUMFERENCE = 2 * Math.PI * COUNTDOWN_RADIUS;
 
-export function getWheelSliceColor(index: number) {
-  return WHEEL_SLICE_COLORS[index % WHEEL_SLICE_COLORS.length] ?? "#22c55e";
+function hashColorKey(value: string) {
+  let hash = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+
+  return hash;
+}
+
+function getEntryColorKey(entry: WheelEntry, index: number) {
+  return (
+    entry.player?.id ??
+    entry.userId ??
+    entry.id ??
+    entry.optimisticBaseEntryId ??
+    String(index)
+  );
+}
+
+export function getWheelSliceColor(index: number, stableKey?: string | null) {
+  const colorIndex = stableKey
+    ? hashColorKey(stableKey) % WHEEL_SLICE_COLORS.length
+    : index % WHEEL_SLICE_COLORS.length;
+
+  return WHEEL_SLICE_COLORS[colorIndex] ?? "#22c55e";
+}
+
+export function getEntrySliceColor(entry: WheelEntry, index: number) {
+  return getWheelSliceColor(index, getEntryColorKey(entry, index));
 }
 
 function normalizePhase(
@@ -375,11 +408,11 @@ export function SpinningWheel({
 
     if (phase === "RANDOMIZING") {
       resultSettledForKeyRef.current = null;
-      setTransitionIfChanged(prefersReducedMotion ? 0 : 700);
-
-      setRotation((currentRotation) =>
-        prefersReducedMotion ? currentRotation : currentRotation + 90,
-      );
+      setTransitionIfChanged(prefersReducedMotion ? 0 : 450);
+      setRotation((currentRotation) => {
+        const idleTarget = normalizeDegrees(currentRotation);
+        return currentRotation === idleTarget ? currentRotation : idleTarget;
+      });
 
       return;
     }
@@ -445,8 +478,7 @@ export function SpinningWheel({
   ]);
 
   // Center display: copies backend/result phase without changing winner state.
-  const shouldGlow =
-    !prefersReducedMotion && (phase === "RANDOMIZING" || phase === "SPINNING");
+  const shouldGlow = !prefersReducedMotion && phase === "SPINNING";
   const showWinnerName = phase === "RESULT" && resultReason === "WINNER";
   const centerLabel =
     phase === "RESULT"
@@ -501,15 +533,23 @@ export function SpinningWheel({
           };
         }
 
+        .phase-pulse {
+          animation: ${
+            prefersReducedMotion
+              ? "none"
+              : "phaseHeartbeat 1.1s ease-in-out infinite"
+          };
+        }
+
         @keyframes wheelBreath {
           0%,
           100% {
             transform: scale(1);
-            filter: drop-shadow(0 22px 42px rgba(0, 0, 0, 0.52));
+            filter: drop-shadow(0 16px 30px rgba(0, 0, 0, 0.45));
           }
           50% {
-            transform: scale(1.012);
-            filter: drop-shadow(0 28px 58px rgba(99, 102, 241, 0.22));
+            transform: scale(1.006);
+            filter: drop-shadow(0 20px 38px rgba(99, 102, 241, 0.14));
           }
         }
 
@@ -547,18 +587,38 @@ export function SpinningWheel({
             transform: translateX(120%);
           }
         }
+
+        @keyframes phaseHeartbeat {
+          0%,
+          100% {
+            opacity: 0.78;
+            transform: scale(1);
+          }
+          45% {
+            opacity: 1;
+            transform: scale(1.06);
+          }
+        }
       `}</style>
 
-      <div className="relative flex min-h-[330px] items-center justify-center overflow-visible md:min-h-[500px]">
+      <div className="relative flex min-h-[310px] items-center justify-center overflow-visible md:min-h-[420px]">
         {/* Pointer */}
-        <div className="absolute inset-x-0 top-0 z-40 flex justify-center">
+        <div className="absolute inset-x-0 top-9 z-30 flex justify-center md:top-10">
           <WheelPointer />
         </div>
 
         {/* Safe class/layout zone: status badge and decorative overlays. */}
-        <div className="pointer-events-none absolute top-5 z-20 overflow-hidden rounded-full border border-white/10 bg-black/55 px-5 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-white/90 shadow-xl backdrop-blur-xl">
-          <span className="relative z-10">{statusCopy.label}</span>
-          <span className="status-shine absolute inset-y-0 w-12 rotate-12 bg-white/10 blur-sm" />
+        <div className="pointer-events-none absolute top-2 z-40 overflow-hidden rounded-full border border-white/10 bg-black/55 px-4 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-white/90 shadow-lg backdrop-blur-xl">
+          <span
+            className={`relative z-10 inline-block ${
+              phase === "RANDOMIZING" ? "phase-pulse" : ""
+            }`}
+          >
+            {statusCopy.label}
+          </span>
+          {phase === "SPINNING" ? (
+            <span className="status-shine absolute inset-y-0 w-12 rotate-12 bg-white/10 blur-sm" />
+          ) : null}
         </div>
 
         {coinBursts.map((key, index) => (
@@ -577,8 +637,8 @@ export function SpinningWheel({
 
         {shouldGlow ? (
           <>
-            <div className="pointer-events-none absolute h-[96%] w-[96%] rounded-full border border-fuchsia-400/20 shadow-[0_0_70px_rgba(217,70,239,0.18)]" />
-            <div className="pointer-events-none absolute h-[82%] w-[82%] rounded-full border border-cyan-300/15 shadow-[0_0_52px_rgba(34,211,238,0.14)]" />
+            <div className="pointer-events-none absolute h-[88%] w-[88%] rounded-full border border-fuchsia-400/15 shadow-[0_0_42px_rgba(217,70,239,0.12)]" />
+            <div className="pointer-events-none absolute h-[74%] w-[74%] rounded-full border border-cyan-300/10 shadow-[0_0_34px_rgba(34,211,238,0.1)]" />
           </>
         ) : null}
 
@@ -593,7 +653,7 @@ export function SpinningWheel({
                 )} coins`
               : "Prize wheel waiting for entries"
           }
-          className="wheel-shell wheel-pop relative z-10 aspect-square w-[94vw] max-w-[385px] md:max-w-[500px]"
+          className="wheel-shell wheel-pop relative z-10 aspect-square w-[88vw] max-w-[340px] md:max-w-[420px]"
           style={{ height: "auto" }}
         >
           <defs>
@@ -606,15 +666,15 @@ export function SpinningWheel({
             >
               <feDropShadow
                 dx="0"
-                dy="18"
-                stdDeviation="14"
+                dy="12"
+                stdDeviation="10"
                 floodColor="rgba(0,0,0,0.68)"
               />
               <feDropShadow
                 dx="0"
                 dy="0"
-                stdDeviation="5"
-                floodColor="rgba(250,204,21,0.24)"
+                stdDeviation="3"
+                floodColor="rgba(250,204,21,0.16)"
               />
             </filter>
 
@@ -677,7 +737,10 @@ export function SpinningWheel({
               transition: prefersReducedMotion
                 ? "none"
                 : "stroke-dashoffset 900ms linear, stroke 250ms ease",
-              filter: `drop-shadow(0 0 8px ${statusCopy.ring})`,
+              filter:
+                phase === "ENTRY_OPEN"
+                  ? `drop-shadow(0 0 5px ${statusCopy.ring})`
+                  : "none",
             }}
           />
 
@@ -711,32 +774,21 @@ export function SpinningWheel({
                   startAngle: 0,
                   endAngle: 360,
                 })}
-                fill={getWheelSliceColor(0)}
+                fill={entries[0] ? getEntrySliceColor(entries[0], 0) : getWheelSliceColor(0)}
                 opacity={entries[0]?.pending ? 0.72 : 1}
-                stroke={
-                  entries[0]?.id === winnerEntryId && phase === "RESULT"
-                    ? "#ffffff"
-                    : "#020617"
-                }
-                strokeWidth={
-                  entries[0]?.id === winnerEntryId && phase === "RESULT"
-                    ? "6"
-                    : "2.5"
-                }
+                stroke="#020617"
+                strokeWidth="2.25"
               />
             ) : (
               slices.map(({ entry, index, path }) => {
-                const isWinner =
-                  phase === "RESULT" && winnerEntryId === entry.id;
-
                 return (
                   <path
                     key={entry.id}
                     d={path}
-                    fill={getWheelSliceColor(index)}
+                    fill={getEntrySliceColor(entry, index)}
                     opacity={entry.pending ? 0.72 : 1}
-                    stroke={isWinner ? "#ffffff" : "#020617"}
-                    strokeWidth={isWinner ? "6" : "2.5"}
+                    stroke="#020617"
+                    strokeWidth="2.25"
                   />
                 );
               })
@@ -782,18 +834,18 @@ export function SpinningWheel({
         </svg>
 
         {/* Center display */}
-        <div className="pointer-events-none absolute z-20 flex h-[128px] w-[128px] flex-col items-center justify-center rounded-full text-center">
+        <div className="pointer-events-none absolute z-20 flex h-[112px] w-[112px] flex-col items-center justify-center rounded-full text-center md:h-[118px] md:w-[118px]">
           <div className="absolute inset-0 rounded-full bg-slate-950/20 backdrop-blur-[1px]" />
           <div className="relative">
             <p className="text-[11px] font-black uppercase tracking-[0.16em] text-white/85">
               {centerLabel}
             </p>
 
-            <p className="mt-1 font-mono text-[25px] font-black leading-none text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
+            <p className="mt-1 font-mono text-[22px] font-black leading-none text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
               {formatCoins(totalEntryAmount)}
             </p>
 
-            <p className="mt-2 max-w-[110px] truncate text-[11px] font-bold text-slate-200 drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
+            <p className="mt-2 max-w-[96px] truncate text-[10px] font-bold text-slate-200 drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
               {centerBottomText}
             </p>
           </div>

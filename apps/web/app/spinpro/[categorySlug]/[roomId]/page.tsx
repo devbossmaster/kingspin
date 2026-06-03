@@ -91,6 +91,9 @@ export default function LiveRoomPage() {
   }
 
   const totalEntryAmount = currentRound?.totalEntryAmount ?? "0";
+  const categoryName = getCategoryDisplayName(state.category);
+  const roomName = getRoomDisplayName(state.room);
+  const maxPlayers = state.room.maxPlayers ?? state.category.maxPlayers ?? 30;
 
   const visibleWinnerEntryId =
     publicPhase === "RESULT" && currentRound?.resultReason === "WINNER"
@@ -98,9 +101,7 @@ export default function LiveRoomPage() {
       : null;
 
   const isEntryOpen = publicPhase === "ENTRY_OPEN";
-  const isRoundFull =
-    typeof state.room.maxPlayers === "number" &&
-    state.entries.length >= state.room.maxPlayers;
+  const isRoundFull = state.entries.length >= maxPlayers;
   const parsedFixedEntryAmount = Number(state.room.fixedEntryAmount ?? 0);
   const fixedEntryAmount =
     state.room.gameMode === "FIXED_EQUAL_CHANCE" &&
@@ -129,8 +130,7 @@ export default function LiveRoomPage() {
         <section className="min-h-screen pb-4">
           <RockyTopBar
             backHref={`/spinpro/${params.categorySlug}`}
-            categoryName={getCategoryDisplayName(state.category)}
-            roomName={getRoomDisplayName(state.room)}
+            roomName={roomName}
             roundNumber={currentRound?.roundNumber}
             phase={roundPhase}
             status={roundStatus}
@@ -138,18 +138,19 @@ export default function LiveRoomPage() {
           />
 
           <ArenaHeroCard
-            categorySlug={params.categorySlug}
-            roomId={roomId}
+            categoryName={categoryName}
+            roomName={roomName}
+            roundNumber={currentRound?.roundNumber}
             phase={roundPhase}
             status={roundStatus}
             playerCount={state.entries.length}
-            maxPlayers={state.room.maxPlayers}
+            maxPlayers={maxPlayers}
             totalEntryAmount={totalEntryAmount}
             msLeft={msLeft}
             msUntilNextRound={currentRound?.msUntilNextRound}
           />
 
-          <section className="relative -mx-2 mt-2 flex min-h-[360px] items-center justify-center overflow-visible">
+          <section className="relative -mx-2 mt-2 flex min-h-[320px] items-center justify-center overflow-visible md:min-h-[410px]">
             <SpinningWheel
               entries={state.entries}
               totalEntryAmount={totalEntryAmount}
@@ -167,7 +168,7 @@ export default function LiveRoomPage() {
           <section className="rocky-glass mt-3 overflow-hidden rounded-[24px] p-3">
             <div className="mb-2 flex items-center justify-between gap-3">
               <p className="text-sm font-black text-white">
-                {state.entries.length} / {state.room.maxPlayers ?? "-"} Players
+                {state.entries.length} / {maxPlayers} Players
               </p>
 
               <p className="font-mono text-xs font-black text-[var(--gold)]">
@@ -220,6 +221,7 @@ export default function LiveRoomPage() {
       <WinnerReveal
         isOpen={isWinnerRevealOpen}
         result={latestResult}
+        durationMs={currentRound?.msUntilNextRound}
         onClose={dismissWinner}
       />
     </main>

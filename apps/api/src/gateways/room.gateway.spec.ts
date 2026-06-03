@@ -165,12 +165,27 @@ function buildRoomsService() {
   };
 }
 
+function buildAuthBridgeService(userId: string | null = 'user-1') {
+  return {
+    validateRequest: jest
+      .fn()
+      .mockResolvedValue(userId ? { id: userId } : null),
+  };
+}
+
 function buildClient(socketId = 'socket-1') {
   const roomEmitter = {
     emit: jest.fn(),
   };
   const client = {
     id: socketId,
+    data: {},
+    handshake: {
+      headers: {
+        cookie: 'better-auth.session_token=signed',
+      },
+    },
+    disconnect: jest.fn(),
     join: jest.fn().mockResolvedValue(undefined),
     leave: jest.fn().mockResolvedValue(undefined),
     emit: jest.fn(),
@@ -188,9 +203,11 @@ describe('RoomGateway', () => {
   it('validates room:join, joins the socket room, and emits round:state', async () => {
     jest.useFakeTimers().setSystemTime(now);
     const publicGameService = buildPublicGameService();
+    const authBridgeService = buildAuthBridgeService('verified-user');
     const gateway = new RoomGateway(
       publicGameService as any,
       buildRoomsService() as any,
+      authBridgeService as any,
     );
     gateway.server = {
       emit: jest.fn(),
@@ -199,6 +216,10 @@ describe('RoomGateway', () => {
 
     const ack = await gateway.handleJoin(client as any, { roomId: 'room-1' });
 
+    expect(authBridgeService.validateRequest).toHaveBeenCalledWith({
+      headers: client.handshake.headers,
+    });
+    expect(client.data.userId).toBe('verified-user');
     expect(client.join).toHaveBeenCalledWith('room-1');
     expect(client.join.mock.invocationCallOrder[0]).toBeLessThan(
       publicGameService.getRoomLiveState.mock.invocationCallOrder[0],
@@ -239,11 +260,53 @@ describe('RoomGateway', () => {
     );
   });
 
+  it('rejects unauthenticated room:join before loading room state', async () => {
+    const publicGameService = buildPublicGameService();
+    const authBridgeService = buildAuthBridgeService(null);
+    const gateway = new RoomGateway(
+      publicGameService as any,
+      buildRoomsService() as any,
+      authBridgeService as any,
+    );
+    const { client } = buildClient();
+
+    await expect(
+      gateway.handleJoin(client as any, { roomId: 'room-1' }),
+    ).rejects.toBeInstanceOf(WsException);
+
+    expect(authBridgeService.validateRequest).toHaveBeenCalledTimes(1);
+    expect(client.join).not.toHaveBeenCalled();
+    expect(publicGameService.getRoomLiveState).not.toHaveBeenCalled();
+  });
+
+  it('uses the verified session identity instead of socket payload identity', async () => {
+    jest.useFakeTimers().setSystemTime(now);
+    const authBridgeService = buildAuthBridgeService('verified-user');
+    const gateway = new RoomGateway(
+      buildPublicGameService() as any,
+      buildRoomsService() as any,
+      authBridgeService as any,
+    );
+    gateway.server = {
+      emit: jest.fn(),
+    } as any;
+    const { client } = buildClient();
+
+    await gateway.handleJoin(client as any, {
+      roomId: 'room-1',
+      userId: 'attacker-user',
+    });
+
+    expect(client.data.userId).toBe('verified-user');
+    expect(client.data.userId).not.toBe('attacker-user');
+  });
+
   it('deduplicates online player presence by socket across joined rooms', async () => {
     jest.useFakeTimers().setSystemTime(now);
     const gateway = new RoomGateway(
       buildPublicGameService() as any,
       buildRoomsService() as any,
+      buildAuthBridgeService() as any,
     );
     gateway.server = {
       emit: jest.fn(),
@@ -277,6 +340,7 @@ describe('RoomGateway', () => {
     const gateway = new RoomGateway(
       publicGameService as any,
       buildRoomsService() as any,
+      buildAuthBridgeService() as any,
     );
     const { client } = buildClient();
 
@@ -294,6 +358,7 @@ describe('RoomGateway', () => {
     const gateway = new RoomGateway(
       buildPublicGameService() as any,
       roomsService as any,
+      buildAuthBridgeService() as any,
     );
     const { client } = buildClient();
 
@@ -323,11 +388,32 @@ describe('RoomGateway', () => {
     );
   });
 
+  it('rejects unauthenticated category:join before loading category state', async () => {
+    const roomsService = buildRoomsService();
+    const authBridgeService = buildAuthBridgeService(null);
+    const gateway = new RoomGateway(
+      buildPublicGameService() as any,
+      roomsService as any,
+      authBridgeService as any,
+    );
+    const { client } = buildClient();
+
+    await expect(
+      gateway.handleCategoryJoin(client as any, {
+        categorySlug: 'starter',
+      }),
+    ).rejects.toBeInstanceOf(WsException);
+
+    expect(client.join).not.toHaveBeenCalled();
+    expect(roomsService.findActiveByCategorySlug).not.toHaveBeenCalled();
+  });
+
   it('handles room:leave safely and emits player-left presence', async () => {
     jest.useFakeTimers().setSystemTime(now);
     const gateway = new RoomGateway(
       buildPublicGameService() as any,
       buildRoomsService() as any,
+      buildAuthBridgeService() as any,
     );
     const { client, roomEmitter } = buildClient();
 
@@ -354,6 +440,7 @@ describe('RoomGateway', () => {
     const gateway = new RoomGateway(
       buildPublicGameService() as any,
       buildRoomsService() as any,
+      buildAuthBridgeService() as any,
     );
     const roomEmitter = {
       emit: jest.fn(),
@@ -395,6 +482,7 @@ describe('RoomGateway', () => {
     const gateway = new RoomGateway(
       buildPublicGameService() as any,
       buildRoomsService() as any,
+      buildAuthBridgeService() as any,
     );
     const roomEmitter = {
       emit: jest.fn(),
@@ -455,6 +543,7 @@ describe('RoomGateway', () => {
     const gateway = new RoomGateway(
       publicGameService as any,
       buildRoomsService() as any,
+      buildAuthBridgeService() as any,
     );
     const roomEmitter = {
       emit: jest.fn(),
@@ -485,6 +574,7 @@ describe('RoomGateway', () => {
     const gateway = new RoomGateway(
       publicGameService as any,
       roomsService as any,
+      buildAuthBridgeService() as any,
     );
     const roomEmitter = {
       emit: jest.fn(),
@@ -519,6 +609,7 @@ describe('RoomGateway', () => {
     const gateway = new RoomGateway(
       publicGameService as any,
       roomsService as any,
+      buildAuthBridgeService() as any,
     );
     const roomEmitter = {
       emit: jest.fn(),
@@ -555,6 +646,7 @@ describe('RoomGateway', () => {
     const gateway = new RoomGateway(
       publicGameService as any,
       roomsService as any,
+      buildAuthBridgeService() as any,
     );
     const roomEmitter = {
       emit: jest.fn(),
@@ -598,6 +690,7 @@ describe('RoomGateway', () => {
     const gateway = new RoomGateway(
       publicGameService as any,
       roomsService as any,
+      buildAuthBridgeService() as any,
     );
     const roomEmitter = {
       emit: jest.fn(),

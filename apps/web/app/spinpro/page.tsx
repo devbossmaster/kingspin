@@ -213,7 +213,7 @@ export default function SpinBattleRoomsPage() {
                 Choose how you want to clash.
               </h1>
               <p className="mt-4 max-w-xl text-sm font-semibold leading-6 text-zinc-400 md:text-base">
-                Pick a mode first, then choose Jemaw 1, Jemaw 2, or Jemaw 3.
+                Pick a mode first, then choose an arena tier.
                 Flexible favors bigger ticket ranges, Fixed gives everyone the
                 same shot.
               </p>

@@ -5,13 +5,12 @@ import {
   HttpException,
   HttpStatus,
   Logger,
-} from "@nestjs/common";
-import { getApiEnv } from "../config/api-env";
+} from '@nestjs/common';
+import type { Request, Response } from 'express';
+import { getApiEnv } from '../config/api-env';
+import { captureHttpException } from '../observability/sentry';
 
-type HttpRequest = {
-  method?: string;
-  originalUrl?: string;
-  url?: string;
+type HttpRequest = Request & {
   requestId?: string;
 };
 
@@ -26,13 +25,13 @@ export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost) {
-    if (host.getType() !== "http") {
+    if (host.getType() !== 'http') {
       throw exception;
     }
 
     const context = host.switchToHttp();
     const request = context.getRequest<HttpRequest>();
-    const response = context.getResponse();
+    const response = context.getResponse<Response>();
     const env = getApiEnv();
 
     const status =
@@ -44,30 +43,30 @@ export class HttpExceptionFilter implements ExceptionFilter {
       exception instanceof HttpException ? exception.getResponse() : null;
 
     const responseObject =
-      typeof exceptionResponse === "object" && exceptionResponse !== null
+      typeof exceptionResponse === 'object' && exceptionResponse !== null
         ? (exceptionResponse as HttpExceptionResponse)
         : null;
 
     const rawMessage =
-      responseObject && "message" in responseObject
+      responseObject && 'message' in responseObject
         ? responseObject.message
-        : typeof exceptionResponse === "string"
+        : typeof exceptionResponse === 'string'
           ? exceptionResponse
           : exception instanceof Error
             ? exception.message
-            : "Internal server error";
+            : 'Internal server error';
 
     const message =
-      status >= 500 && env.NODE_ENV === "production"
-        ? "Internal server error."
+      status >= 500 && env.NODE_ENV === 'production'
+        ? 'Internal server error.'
         : rawMessage;
 
     const error =
-      responseObject && typeof responseObject.error === "string"
+      responseObject && typeof responseObject.error === 'string'
         ? responseObject.error
         : this.getDefaultErrorLabel(status);
 
-    const path = request.originalUrl ?? request.url ?? "unknown";
+    const path = request.originalUrl ?? request.url ?? 'unknown';
     const body: Record<string, unknown> = {
       statusCode: status,
       message,
@@ -82,7 +81,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
 
     if (responseObject) {
       for (const [key, value] of Object.entries(responseObject)) {
-        if (["statusCode", "message", "error"].includes(key)) {
+        if (['statusCode', 'message', 'error'].includes(key)) {
           continue;
         }
 
@@ -93,14 +92,17 @@ export class HttpExceptionFilter implements ExceptionFilter {
     if (status >= 500) {
       const stack = exception instanceof Error ? exception.stack : undefined;
 
+      captureHttpException(exception, request);
+
       this.logger.error(
         JSON.stringify({
-          event: "http_exception",
+          event: 'http_exception',
           method: request.method,
           path,
           statusCode: status,
           requestId: request.requestId,
-          message: exception instanceof Error ? exception.message : String(exception),
+          message:
+            exception instanceof Error ? exception.message : String(exception),
         }),
         stack,
       );
@@ -113,12 +115,12 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const label = HttpStatus[status];
 
     if (!label) {
-      return "Error";
+      return 'Error';
     }
 
     return label
-      .split("_")
+      .split('_')
       .map((word) => word.charAt(0) + word.slice(1).toLowerCase())
-      .join(" ");
+      .join(' ');
   }
 }

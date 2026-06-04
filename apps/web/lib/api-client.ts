@@ -16,6 +16,8 @@ import type {
 } from "@kingspin/contracts";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const CSRF_MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+const CSRF_HEADER_NAME = "x-csrf-token";
 
 export type CategoryListItem = CategorySnapshot & {
   isActive?: boolean;
@@ -85,18 +87,58 @@ export type CreateWithdrawalResponse = {
 };
 
 const inFlightRequests = new Map<string, Promise<unknown>>();
+let csrfTokenPromise: Promise<string> | null = null;
+
+export async function getCsrfToken() {
+  csrfTokenPromise ??= fetch(`${API_URL}/csrf`, {
+    method: "GET",
+    credentials: "include",
+    cache: "no-store",
+  })
+    .then(async (response) => {
+      const payload = await response.json().catch(() => null);
+
+      if (
+        !response.ok ||
+        !payload ||
+        typeof payload !== "object" ||
+        typeof (payload as { csrfToken?: unknown }).csrfToken !== "string"
+      ) {
+        throw new Error("Unable to prepare a secure request token.");
+      }
+
+      return (payload as { csrfToken: string }).csrfToken;
+    })
+    .catch((error) => {
+      csrfTokenPromise = null;
+      throw error;
+    });
+
+  return csrfTokenPromise;
+}
+
+function isMutatingRequest(init?: RequestInit) {
+  const method = (init?.method ?? "GET").toUpperCase();
+
+  return CSRF_MUTATING_METHODS.has(method);
+}
 
 async function requestJson<TResponse>(
   path: string,
   init?: RequestInit,
 ): Promise<TResponse> {
+  const headers = new Headers(init?.headers);
+
+  headers.set("Content-Type", "application/json");
+
+  if (isMutatingRequest(init)) {
+    headers.set(CSRF_HEADER_NAME, await getCsrfToken());
+  }
+
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
     credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
+    headers,
     cache: "no-store",
   });
 

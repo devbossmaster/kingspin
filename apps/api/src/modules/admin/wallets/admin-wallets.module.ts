@@ -1,9 +1,10 @@
-import { Module } from "@nestjs/common";
-import { WalletsModule } from "../../wallets/wallets.module";
-import { AdminWalletsController } from "./admin-wallets.controller";
+import { Module } from '@nestjs/common';
+import { AuditModule } from '../../audit/audit.module';
+import { WalletsModule } from '../../wallets/wallets.module';
+import { AdminWalletsController } from './admin-wallets.controller';
 
 @Module({
-  imports: [WalletsModule],
+  imports: [WalletsModule, AuditModule],
   controllers: [AdminWalletsController],
 })
 export class AdminWalletsModule {}

@@ -13,8 +13,9 @@ Status: pass, with admin-only test tools intentionally retained.
   `/entries/dev-place`, or `playerKey`.
 - Production entry route is `POST /rooms/:roomId/entries`.
 - Entry body is strict: `amount` and optional `idempotencyKey` only.
-- Admin-only development helpers live under `/admin/*` and require
-  `x-admin-dev-key`.
+- Local-only development helpers live under `/admin/*` and require
+  `x-admin-dev-key`. They are disabled unless `APP_ENV=local` and
+  `NODE_ENV` is not `production`.
 
 Verify:
 
@@ -53,6 +54,8 @@ Status: pass for single trusted web origin.
 - API CORS credentials are enabled only for the configured web origin.
 - Socket.IO CORS uses the same configured origin policy.
 - Frontend protected fetches use `credentials: "include"`.
+- Cookie-authenticated REST mutations use a double-submit CSRF cookie plus
+  `x-csrf-token`; read-only GETs and Socket.IO are unaffected.
 - Production URLs must use HTTPS public domains.
 - `NEXT_PUBLIC_SOCKET_URL` should point at the public Socket.IO namespace, for
   example `https://api.your-domain.com/game`.
@@ -80,13 +83,16 @@ Only `.env.example` files should appear in tracked files.
 
 ## Admin Gates
 
-Status: pass for closed-alpha admin-only tooling.
+Status: pass for local-only development tooling.
 
 - Admin routes use `AdminDevGuard`.
 - Missing `ADMIN_DEV_KEY` rejects access.
 - Wrong `x-admin-dev-key` rejects access.
 - Normal player UI does not use admin routes.
-- Production must set a strong `ADMIN_DEV_KEY` or admin tools fail closed.
+- Do not configure `ADMIN_DEV_KEY` in staging, preview, or production.
+- Never expose `x-admin-dev-key` routes publicly.
+- Rotate `ADMIN_DEV_KEY` immediately if it is pasted into chat, logs, or a
+  ticket.
 
 Future improvement: replace admin dev key tooling with real admin auth and audit
 review workflows.
@@ -95,15 +101,13 @@ review workflows.
 
 Status: basic protection in place.
 
-- API has a global in-memory rate-limit guard.
+- API has a global rate-limit guard backed by Redis outside local/test.
 - Entry route is covered by API rate limiting.
 - Public live-state/latest-result endpoints are covered by API rate limiting.
 - Better Auth and Resend provide baseline auth email abuse controls.
 
 Limitations:
 
-- In-memory rate limiting is per API instance. Use Redis/shared rate limiting
-  before horizontal scaling or higher-risk closed-alpha exposure.
 - Fraud operations remain TODO.
 
 ## Headers And Error Handling
@@ -111,6 +115,9 @@ Limitations:
 Status: pass for basic closed-alpha headers/errors.
 
 - API global exception filter hides stack traces in production.
+- API initializes Sentry error capture when `SENTRY_DSN` is configured.
+- Sentry request context filters cookies, auth tokens, sessions, wallet,
+  payment, and private fields.
 - API responses include request IDs where available.
 - API request logging interceptor records method, path, status, and duration.
 - Web response headers include:
@@ -178,5 +185,5 @@ Expected:
 - Admin review workflow needs real admin auth.
 - Redis/shared rate limiter is needed before horizontal scaling.
 - Redis Socket.IO adapter needs live deployment testing.
-- Sentry/OpenTelemetry need real integration.
+- OpenTelemetry needs real integration if tracing is required.
 - Backup/restore and incident response plans need operational ownership.

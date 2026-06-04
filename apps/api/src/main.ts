@@ -2,21 +2,59 @@ import { randomUUID } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NextFunction, Request, Response } from 'express';
+import helmet from 'helmet';
 import { AppModule } from './app.module';
 import { getApiEnv } from './config/api-env';
 import { HttpExceptionFilter } from './filters/http-exception.filter';
 import { SimpleRateLimitGuard } from './guards/simple-rate-limit.guard';
 import { RequestLoggingInterceptor } from './interceptors/request-logging.interceptor';
+import { RedisService } from './modules/redis/redis.service';
+import { initSentry } from './observability/sentry';
+import { createCsrfMiddleware, getCsrfSecret } from './security/csrf';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
   const env = getApiEnv();
+  initSentry(env);
+
+  const app = await NestFactory.create(AppModule);
   const logger = new Logger('Bootstrap');
+  const allowInMemoryRateLimitFallback =
+    env.APP_ENV === 'local' || env.NODE_ENV === 'test';
+
+  if (
+    !allowInMemoryRateLimitFallback &&
+    (!env.ENABLE_REDIS || !env.REDIS_URL)
+  ) {
+    throw new Error(
+      'Global API rate limiter requires Redis outside local/test environments. Set ENABLE_REDIS=true and REDIS_URL.',
+    );
+  }
+
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false,
+      hsts:
+        env.APP_ENV === 'production'
+          ? {
+              maxAge: 15_552_000,
+              includeSubDomains: true,
+            }
+          : false,
+    }),
+  );
 
   app.enableCors({
     origin: env.API_CORS_ORIGIN,
     credentials: true,
   });
+
+  app.use(
+    createCsrfMiddleware({
+      secret: getCsrfSecret(env),
+      secureCookie: env.APP_ENV === 'production',
+    }),
+  );
 
   app.use((request: Request, response: Response, next: NextFunction) => {
     const forwardedRequestId = request.header('x-request-id');
@@ -37,19 +75,16 @@ async function bootstrap() {
       defaultMaxRequests: env.RATE_LIMIT_MAX,
       isProduction: env.NODE_ENV === 'production',
       trustProxyHeaders: env.TRUST_PROXY_HEADERS,
+      appEnv: env.APP_ENV,
+      allowInMemoryFallback: allowInMemoryRateLimitFallback,
+      redis: app.get(RedisService),
     }),
   );
   app.useGlobalInterceptors(new RequestLoggingInterceptor());
-
-  if (env.SENTRY_DSN) {
-    logger.warn(
-      'SENTRY_DSN is configured, but Sentry capture is not wired yet. TODO: add Sentry/OpenTelemetry provider integration.',
-    );
-  }
 
   await app.listen(env.PORT);
 
   logger.log(`KingSpin API running on http://localhost:${env.PORT}`);
 }
 
-bootstrap();
+void bootstrap();

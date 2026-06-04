@@ -22,6 +22,8 @@ money-ready architecture. It is not a real-money production certification.
 - `BETTER_AUTH_URL` and `WEB_URL` set to public HTTPS URLs.
 - `API_CORS_ORIGIN` or `CORS_ORIGIN` limited to trusted origins.
 - `ENABLE_DEV_AUTH=false`
+- Do not set `ADMIN_DEV_KEY` outside local development. Static dev-key routes
+  are local-only and are not production admin access.
 - `ROUND_MACHINE_AUTO_START=true` only on the intended machine process. On API
   boot this starts every `ACTIVE` permanent room machine; empty and single-player
   rounds are cancelled/refunded by the server lifecycle instead of drawing.
@@ -31,9 +33,9 @@ money-ready architecture. It is not a real-money production certification.
 - `PAYMENT_PROVIDER` set to a non-mock provider only after a real provider
   adapter has passed provider approval, webhook, and reconciliation testing.
 
-Do not commit secrets. Rotate any database password, Better Auth secret, admin
-key, payment secret, or Redis secret that has been pasted into chat, logs, or a
-ticket.
+Do not commit secrets. Rotate any database password, Better Auth secret,
+local admin dev key, payment secret, or Redis secret that has been pasted into
+chat, logs, or a ticket.
 
 ## Database And Prisma
 
@@ -65,7 +67,8 @@ ticket.
 ## Admin And Audit
 
 - Production admin access must use Better Auth roles.
-- `x-admin-dev-key` routes are local/dev emergency tools only.
+- `x-admin-dev-key` routes are local development tools only; do not configure
+  `ADMIN_DEV_KEY` in staging, preview, or production.
 - Admin mutations must write `AdminAuditLog` records.
 - Direct wallet balance editing is not allowed in production.
 - Finance actions should require least-privilege roles such as `OWNER`,

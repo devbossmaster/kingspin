@@ -36,7 +36,6 @@ WEB_URL=https://app.example.com
 API_CORS_ORIGIN=https://app.example.com
 BETTER_AUTH_URL=https://app.example.com
 BETTER_AUTH_SECRET=replace-with-the-same-secret-used-by-web
-ADMIN_DEV_KEY=replace-with-a-strong-admin-only-secret
 ROUND_MACHINE_AUTO_START=true
 ENABLE_DEV_AUTH=false
 ENABLE_REDIS=false
@@ -48,6 +47,9 @@ RATE_LIMIT_MAX=120
 LOG_LEVEL=info
 SENTRY_DSN=
 ```
+
+Do not configure `ADMIN_DEV_KEY` in Coolify/staging/production. The
+`x-admin-dev-key` routes are local development helpers only.
 
 ### Web Service
 

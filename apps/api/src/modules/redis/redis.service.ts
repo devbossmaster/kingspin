@@ -3,10 +3,10 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
-} from "@nestjs/common";
-import { randomUUID } from "node:crypto";
-import { createClient, type RedisClientType } from "redis";
-import { getApiEnv } from "../../config/api-env";
+} from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { createClient, type RedisClientType } from 'redis';
+import { getApiEnv } from '../../config/api-env';
 
 export type RedisDedicatedClient = RedisClientType;
 type RedisClient = RedisDedicatedClient;
@@ -101,19 +101,66 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   async incr(key: string, ttlMs?: number) {
+    if (ttlMs && ttlMs > 0) {
+      const result = await this.incrementWithTtl(key, ttlMs);
+      return result?.count ?? null;
+    }
+
     const client = await this.getClient();
 
     if (!client) {
       return null;
     }
 
-    const value = await client.incr(key);
+    return client.incr(key);
+  }
 
-    if (ttlMs && ttlMs > 0 && value === 1) {
-      await client.pExpire(key, ttlMs);
+  async incrementWithTtl(key: string, ttlMs: number) {
+    if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) {
+      throw new Error('Redis increment TTL must be a positive safe integer.');
     }
 
-    return value;
+    const client = await this.getClient();
+
+    if (!client) {
+      return null;
+    }
+
+    const result = await client.eval(
+      `
+local ttl = tonumber(ARGV[1])
+if not ttl or ttl <= 0 then
+  return redis.error_reply('ttl must be positive')
+end
+local count = redis.call('INCR', KEYS[1])
+local remaining = redis.call('PTTL', KEYS[1])
+if remaining < 0 then
+  redis.call('PEXPIRE', KEYS[1], ttl)
+  remaining = ttl
+end
+return { count, remaining }
+      `,
+      {
+        keys: [key],
+        arguments: [ttlMs.toString()],
+      },
+    );
+
+    if (!Array.isArray(result) || result.length < 2) {
+      throw new Error('Redis increment returned an invalid response.');
+    }
+
+    const count = this.toNumber(result[0]);
+    const remainingTtlMs = this.toNumber(result[1]);
+
+    if (!Number.isFinite(count) || !Number.isFinite(remainingTtlMs)) {
+      throw new Error('Redis increment returned non-numeric values.');
+    }
+
+    return {
+      count,
+      ttlMs: Math.max(0, remainingTtlMs),
+    };
   }
 
   async publish(channel: string, message: string) {
@@ -126,19 +173,21 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     handler: (message: string) => void | Promise<void>,
   ) {
     if (!this.isEnabled()) {
-      return async () => undefined;
+      return () => Promise.resolve(undefined);
     }
 
-    const subscriber = await this.createDedicatedClient(`subscriber:${channel}`);
+    const subscriber = await this.createDedicatedClient(
+      `subscriber:${channel}`,
+    );
 
     if (!subscriber) {
-      return async () => undefined;
+      return () => Promise.resolve(undefined);
     }
 
     await subscriber.subscribe(channel, (message) => {
       void Promise.resolve(handler(message)).catch((error: unknown) => {
         const detail =
-          error instanceof Error ? error.message : "Unknown subscriber error";
+          error instanceof Error ? error.message : 'Unknown subscriber error';
         this.logger.warn(`Redis subscriber handler failed: ${detail}`);
       });
     });
@@ -167,7 +216,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       PX: ttlMs,
     });
 
-    return result === "OK" ? { key, value } : null;
+    return result === 'OK' ? { key, value } : null;
   }
 
   async releaseLock(lock: RedisLock) {
@@ -202,7 +251,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
     const client = createClient({ url: this.env.REDIS_URL }) as RedisClient;
 
-    client.on("error", (error) => {
+    client.on('error', (error: Error) => {
       this.logger.error(`Redis ${label} client error: ${error.message}`);
     });
 
@@ -211,7 +260,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       return client;
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Unknown Redis connect error";
+        error instanceof Error ? error.message : 'Unknown Redis connect error';
 
       await Promise.allSettled([
         client.isOpen ? client.quit() : Promise.resolve(),
@@ -244,7 +293,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     }
 
     if (!this.env.REDIS_URL) {
-      this.handleUnavailable("ENABLE_REDIS=true but REDIS_URL is missing.");
+      this.handleUnavailable('ENABLE_REDIS=true but REDIS_URL is missing.');
       return null;
     }
 
@@ -264,18 +313,20 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   private async connectFreshClient(): Promise<RedisClient | null> {
     const client = createClient({ url: this.env.REDIS_URL }) as RedisClient;
 
-    client.on("error", (error) => {
+    client.on('error', (error: Error) => {
       this.logger.error(`Redis client error: ${error.message}`);
     });
 
     try {
       await client.connect();
       this.client = client;
-      this.logger.log("Redis connected for realtime cache, locks, and rate limits.");
+      this.logger.log(
+        'Redis connected for realtime cache, locks, and rate limits.',
+      );
       return client;
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Unknown Redis connect error";
+        error instanceof Error ? error.message : 'Unknown Redis connect error';
 
       await Promise.allSettled([
         client.isOpen ? client.quit() : Promise.resolve(),
@@ -289,7 +340,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   private handleUnavailable(message: string, error?: unknown) {
-    if (this.env.APP_ENV === "production") {
+    if (this.env.APP_ENV === 'production') {
       this.logger.error(message);
 
       if (error instanceof Error) {
@@ -299,6 +350,24 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
       throw new Error(message);
     }
 
-    this.logger.warn(`${message} Continuing without Redis in ${this.env.APP_ENV}.`);
+    this.logger.warn(
+      `${message} Continuing without Redis in ${this.env.APP_ENV}.`,
+    );
+  }
+
+  private toNumber(value: unknown) {
+    if (typeof value === 'number') {
+      return value;
+    }
+
+    if (typeof value === 'bigint') {
+      return Number(value);
+    }
+
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return Number(value);
+    }
+
+    return Number.NaN;
   }
 }

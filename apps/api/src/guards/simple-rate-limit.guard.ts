@@ -4,6 +4,8 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 
 type Bucket = {
@@ -24,13 +26,26 @@ type SimpleRateLimitOptions = {
   defaultMaxRequests: number;
   isProduction: boolean;
   trustProxyHeaders: boolean;
+  appEnv?: string;
+  allowInMemoryFallback?: boolean;
+  redis?: RateLimitRedisClient;
+};
+
+type RateLimitRedisClient = {
+  isEnabled: () => boolean;
+  incrementWithTtl: (
+    key: string,
+    ttlMs: number,
+  ) => Promise<{ count: number; ttlMs: number } | null>;
 };
 
 @Injectable()
 export class SimpleRateLimitGuard implements CanActivate {
+  private readonly logger = new Logger(SimpleRateLimitGuard.name);
   private readonly buckets = new Map<string, Bucket>();
   private readonly rules: RateLimitRule[];
   private readonly defaultRule: RateLimitRule;
+  private loggedRedisFallback = false;
 
   constructor(private readonly options: SimpleRateLimitOptions) {
     this.defaultRule = {
@@ -85,7 +100,7 @@ export class SimpleRateLimitGuard implements CanActivate {
     ];
   }
 
-  canActivate(context: ExecutionContext): boolean {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     if (context.getType() !== 'http') {
       return true;
     }
@@ -103,28 +118,17 @@ export class SimpleRateLimitGuard implements CanActivate {
     }>();
     const rule = this.getRuleForRequest(request);
     const now = Date.now();
-    const key = `${rule.name}:${this.getClientKey(request)}`;
-    const bucket = this.buckets.get(key);
+    const bucket = await this.incrementBucket(
+      rule,
+      this.getClientKey(request),
+      now,
+    );
 
-    if (!bucket || bucket.resetAt <= now) {
-      const nextBucket = {
-        count: 1,
-        resetAt: now + rule.windowMs,
-      };
-
-      this.buckets.set(key, nextBucket);
-      this.setRateLimitHeaders(response, rule, nextBucket);
-
-      this.pruneExpiredBuckets(now);
-      return true;
-    }
-
-    bucket.count += 1;
     this.setRateLimitHeaders(response, rule, bucket);
 
     if (bucket.count > rule.maxRequests) {
       const retryAfterSeconds = Math.ceil((bucket.resetAt - now) / 1_000);
-      response.setHeader?.('Retry-After', retryAfterSeconds);
+      response.setHeader?.('Retry-After', Math.max(1, retryAfterSeconds));
 
       throw new HttpException(
         {
@@ -136,6 +140,111 @@ export class SimpleRateLimitGuard implements CanActivate {
     }
 
     return true;
+  }
+
+  private async incrementBucket(
+    rule: RateLimitRule,
+    clientKey: string,
+    now: number,
+  ): Promise<Bucket> {
+    const key = this.getStorageKey(rule.name, clientKey);
+
+    if (this.options.redis?.isEnabled()) {
+      try {
+        const result = await this.options.redis.incrementWithTtl(
+          key,
+          rule.windowMs,
+        );
+
+        if (result) {
+          return {
+            count: result.count,
+            resetAt: now + this.normalizeRedisTtl(result.ttlMs, rule.windowMs),
+          };
+        }
+      } catch (error) {
+        if (!this.canUseInMemoryFallback()) {
+          throw this.toRedisUnavailableError(error);
+        }
+
+        this.logRedisFallback(error);
+      }
+    }
+
+    if (!this.canUseInMemoryFallback()) {
+      throw this.toRedisUnavailableError(
+        new Error(
+          'Global API rate limiter requires Redis outside local/test environments.',
+        ),
+      );
+    }
+
+    return this.incrementInMemory(key, rule, now);
+  }
+
+  private incrementInMemory(key: string, rule: RateLimitRule, now: number) {
+    const bucket = this.buckets.get(key);
+
+    if (!bucket || bucket.resetAt <= now) {
+      const nextBucket = {
+        count: 1,
+        resetAt: now + rule.windowMs,
+      };
+
+      this.buckets.set(key, nextBucket);
+      this.pruneExpiredBuckets(now);
+      return nextBucket;
+    }
+
+    bucket.count += 1;
+    return bucket;
+  }
+
+  private getStorageKey(routeKey: string, clientKey: string) {
+    return `ratelimit:global:${routeKey}:${clientKey}`;
+  }
+
+  private normalizeRedisTtl(ttlMs: number, windowMs: number) {
+    if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+      return windowMs;
+    }
+
+    return Math.min(ttlMs, windowMs);
+  }
+
+  private canUseInMemoryFallback() {
+    if (typeof this.options.allowInMemoryFallback === 'boolean') {
+      return this.options.allowInMemoryFallback;
+    }
+
+    return this.options.appEnv === 'local' || process.env.NODE_ENV === 'test';
+  }
+
+  private logRedisFallback(error: unknown) {
+    if (this.loggedRedisFallback) {
+      return;
+    }
+
+    this.loggedRedisFallback = true;
+    const detail =
+      error instanceof Error ? error.message : 'Unknown Redis rate-limit error';
+
+    this.logger.warn(
+      `Global API rate limiter is falling back to in-memory storage: ${detail}`,
+    );
+  }
+
+  private toRedisUnavailableError(error: unknown) {
+    const detail =
+      error instanceof Error ? error.message : 'Unknown Redis rate-limit error';
+
+    this.logger.error(
+      `Global API rate limiter Redis storage unavailable: ${detail}`,
+    );
+
+    return new ServiceUnavailableException(
+      'Global API rate limiter Redis storage is unavailable.',
+    );
   }
 
   private getRuleForRequest(request: {

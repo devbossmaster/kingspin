@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { GameShell } from "../../components/player/game-shell";
 import { Button } from "../../components/ui/button";
-import { apiClient } from "../../lib/api-client";
+import { apiClient, getCsrfToken } from "../../lib/api-client";
 import { formatCoins } from "../../lib/format";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -148,11 +148,13 @@ function JsonTable({ rows }: { rows: unknown }) {
 }
 
 async function adminPost(path: string) {
+  const csrfToken = await getCsrfToken();
   const response = await fetch(`${API_URL}${path}`, {
     method: "POST",
     credentials: "include",
     headers: {
       "Content-Type": "application/json",
+      "x-csrf-token": csrfToken,
     },
   });
 

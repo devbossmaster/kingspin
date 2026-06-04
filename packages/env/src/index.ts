@@ -142,8 +142,15 @@ const ApiEnvBaseSchema = z
     CORS_ORIGIN: OptionalUrlSchema,
     API_CORS_ORIGIN: OptionalUrlSchema,
     ADMIN_DEV_KEY: OptionalStringSchema,
+    ADMIN_DEV_CREDIT_MAX: z.coerce
+      .number()
+      .int()
+      .positive()
+      .max(Number.MAX_SAFE_INTEGER)
+      .default(10_000),
     ROUND_MACHINE_AUTO_START: BooleanStringSchema.optional(),
     ENABLE_DEV_AUTH: BooleanStringSchema.default(false),
+    ENABLE_LOCAL_DEV_AUTH: BooleanStringSchema.optional(),
     ENABLE_REDIS: BooleanStringSchema.default(false),
     REDIS_URL: OptionalStringSchema,
     PAYMENT_PROVIDER: z
@@ -159,6 +166,7 @@ const ApiEnvBaseSchema = z
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
     RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
     TRUST_PROXY_HEADERS: BooleanStringSchema.default(false),
+    CSRF_SECRET: OptionalStringSchema,
   })
   .passthrough()
   .transform((env) => ({
@@ -166,6 +174,7 @@ const ApiEnvBaseSchema = z
     APP_ENV: resolveAppEnv(env),
     API_CORS_ORIGIN: env.API_CORS_ORIGIN ?? env.CORS_ORIGIN ?? env.WEB_URL,
     BETTER_AUTH_URL: env.BETTER_AUTH_URL ?? env.WEB_URL,
+    ENABLE_LOCAL_DEV_AUTH: env.ENABLE_LOCAL_DEV_AUTH ?? env.ENABLE_DEV_AUTH,
   }));
 
 export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
@@ -191,6 +200,15 @@ export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
       path: ["PAYMENT_PROVIDER"],
       message:
         "PAYMENT_PROVIDER=MOCK is local-only. Use MANUAL or a configured real adapter stub in production.",
+    });
+  }
+
+  if (env.APP_ENV !== "local" && env.ADMIN_DEV_KEY) {
+    context.addIssue({
+      code: "custom",
+      path: ["ADMIN_DEV_KEY"],
+      message:
+        "ADMIN_DEV_KEY is local-only. Remove it from staging/production and use Better Auth admin roles.",
     });
   }
 
@@ -244,15 +262,6 @@ export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
       code: "custom",
       path: ["BETTER_AUTH_SECRET"],
       message: "BETTER_AUTH_SECRET is required in production.",
-    });
-  }
-
-  if (!env.ADMIN_DEV_KEY) {
-    context.addIssue({
-      code: "custom",
-      path: ["ADMIN_DEV_KEY"],
-      message:
-        "ADMIN_DEV_KEY is required in production so admin routes fail closed behind a real secret.",
     });
   }
 

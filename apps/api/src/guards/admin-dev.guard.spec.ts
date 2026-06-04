@@ -1,13 +1,15 @@
-import { UnauthorizedException } from '@nestjs/common';
+import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { resetApiEnvForTesting } from '../config/api-env';
 import { AdminDevGuard } from './admin-dev.guard';
 
-function buildContext(headers: Record<string, string | undefined> = {}) {
+function buildContext(
+  headers: Record<string, string | undefined> = {},
+): ExecutionContext {
   return {
     switchToHttp: () => ({
       getRequest: () => ({ headers }),
     }),
-  } as any;
+  } as unknown as ExecutionContext;
 }
 
 describe('AdminDevGuard', () => {
@@ -59,7 +61,6 @@ describe('AdminDevGuard', () => {
     process.env.WEB_URL = 'https://kingspin.example.com';
     process.env.API_CORS_ORIGIN = 'https://kingspin.example.com';
     process.env.BETTER_AUTH_SECRET = 'production-secret';
-    process.env.ADMIN_DEV_KEY = 'secret';
     process.env.RESEND_API_KEY = 'resend-production';
     process.env.RESEND_FROM_EMAIL = 'SpinPro <noreply@kingspin.com>';
     process.env.PAYMENT_PROVIDER = 'MANUAL';

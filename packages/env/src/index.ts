@@ -186,11 +186,29 @@ export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
     });
   }
 
-  if (env.APP_ENV === "production" && env.ENABLE_REDIS && !env.REDIS_URL) {
+  if (env.APP_ENV !== "local" && env.NODE_ENV !== "production") {
+    context.addIssue({
+      code: "custom",
+      path: ["NODE_ENV"],
+      message: "NODE_ENV=production is required outside local development.",
+    });
+  }
+
+  if (env.APP_ENV !== "local" && !env.ENABLE_REDIS) {
+    context.addIssue({
+      code: "custom",
+      path: ["ENABLE_REDIS"],
+      message:
+        "ENABLE_REDIS=true is required outside local development for shared rate limiting and fraud protection.",
+    });
+  }
+
+  if (env.APP_ENV !== "local" && !env.REDIS_URL) {
     context.addIssue({
       code: "custom",
       path: ["REDIS_URL"],
-      message: "REDIS_URL is required when ENABLE_REDIS=true in production.",
+      message:
+        "REDIS_URL is required outside local development for shared rate limiting and fraud protection.",
     });
   }
 
@@ -290,6 +308,14 @@ export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
       message: "ENABLE_DEV_AUTH must be disabled in production.",
     });
   }
+
+  if (env.ENABLE_LOCAL_DEV_AUTH) {
+    context.addIssue({
+      code: "custom",
+      path: ["ENABLE_LOCAL_DEV_AUTH"],
+      message: "ENABLE_LOCAL_DEV_AUTH must be disabled outside local development.",
+    });
+  }
 });
 
 export type ApiEnv = z.infer<typeof ApiEnvSchema>;
@@ -332,6 +358,14 @@ export const WebEnvSchema = WebEnvBaseSchema.superRefine((env, context) => {
       code: "custom",
       path: ["APP_ENV"],
       message: "APP_ENV and DEPLOY_ENV must match when both are set.",
+    });
+  }
+
+  if (env.APP_ENV !== "local" && env.NODE_ENV !== "production") {
+    context.addIssue({
+      code: "custom",
+      path: ["NODE_ENV"],
+      message: "NODE_ENV=production is required outside local development.",
     });
   }
 

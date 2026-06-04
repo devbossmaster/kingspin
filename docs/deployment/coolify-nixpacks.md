@@ -38,8 +38,10 @@ BETTER_AUTH_URL=https://app.example.com
 BETTER_AUTH_SECRET=replace-with-the-same-secret-used-by-web
 ROUND_MACHINE_AUTO_START=true
 ENABLE_DEV_AUTH=false
-ENABLE_REDIS=false
-REDIS_URL=
+ENABLE_LOCAL_DEV_AUTH=false
+ENABLE_REDIS=true
+REDIS_URL=redis://default:PASSWORD@redis:6379
+TRUST_PROXY_HEADERS=false
 RESEND_API_KEY=replace-with-resend-key
 RESEND_FROM_EMAIL=SpinPro <auth@example.com>
 RATE_LIMIT_WINDOW_MS=60000
@@ -50,6 +52,11 @@ SENTRY_DSN=
 
 Do not configure `ADMIN_DEV_KEY` in Coolify/staging/production. The
 `x-admin-dev-key` routes are local development helpers only.
+
+Set `TRUST_PROXY_HEADERS=true` only when the API is behind trusted
+Coolify/Nginx/proxy infrastructure that controls the forwarded client IP
+headers. `SENTRY_DSN` is optional, but recommended for production error
+visibility.
 
 ### Web Service
 
@@ -155,18 +162,19 @@ this initial migration at an unreviewed live database.
 
 ## Redis and Socket.IO
 
-Single API instance closed-alpha can run without Redis, but production logs will
-warn. Before horizontal scaling, enable Redis or sticky sessions:
+Production API deployments require Redis for shared API rate limiting, fraud
+protection, Socket.IO fanout, live-state cache, and round-machine locking. Add a
+Coolify Redis service and configure:
 
 ```bash
 ENABLE_REDIS=true
 REDIS_URL=redis://...
 ```
 
-The Socket.IO Redis adapter, short TTL public live-state cache,
-round-machine Redis lock, entry spam limiter, and room presence use Redis when
-it is enabled. Postgres remains the source of truth for money, entries, rounds,
-payouts, and winners.
+Outside local development, the API fails startup if Redis is disabled or missing
+instead of falling back to in-memory rate limits. Local development and tests can
+still run without Redis for single-instance workflows. Postgres remains the
+source of truth for money, entries, rounds, payouts, and winners.
 
 ## Smoke Test
 

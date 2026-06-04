@@ -416,29 +416,14 @@ export class RoomGateway
 
     this.queueOpenRoundSummaryPatch(roomId, payload);
 
-    if (this.isOpenRoundStartAction(action)) {
-      void this.broadcastOpenRoundSummaryPatch(roomId, action).catch(
-        (error: unknown) => {
-          const message =
-            error instanceof Error
-              ? error.message
-              : 'Unknown category state error';
+    void this.broadcastRoundState(roomId, action).catch((error: unknown) => {
+      const message =
+        error instanceof Error ? error.message : 'Unknown round state error';
 
-          this.logger.warn(
-            `Failed to broadcast patched category state for ${roomId} after ${action}: ${message}`,
-          );
-        },
+      this.logger.warn(
+        `Failed to broadcast room state for ${roomId} after machine result: ${message}`,
       );
-    } else {
-      void this.broadcastRoundState(roomId, action).catch((error: unknown) => {
-        const message =
-          error instanceof Error ? error.message : 'Unknown round state error';
-
-        this.logger.warn(
-          `Failed to broadcast room state for ${roomId} after machine result: ${message}`,
-        );
-      });
-    }
+    });
 
     if (action === 'STARTED_OPEN_ROUND') {
       this.emitMachineEvent(
@@ -1042,35 +1027,6 @@ export class RoomGateway
     this.pendingOpenRoundSummaryPatchesByRoom.set(roomId, currentRound);
   }
 
-  private async broadcastOpenRoundSummaryPatch(roomId: string, reason: string) {
-    const categorySlug =
-      await this.roomsService.findCategorySlugForRoom(roomId);
-    const openRoundPatch =
-      this.pendingOpenRoundSummaryPatchesByRoom.get(roomId) ?? null;
-
-    if (!categorySlug) {
-      this.pendingOpenRoundSummaryPatchesByRoom.delete(roomId);
-      return;
-    }
-
-    const useCachedSummary =
-      openRoundPatch !== null &&
-      this.roomsService.patchLiveRoomSummaryCacheWithOpenRound(
-        roomId,
-        openRoundPatch,
-      );
-
-    this.pendingOpenRoundSummaryPatchesByRoom.delete(roomId);
-
-    if (!useCachedSummary) {
-      this.roomsService.invalidateLiveRoomSummariesForCategory(categorySlug);
-    }
-
-    await this.scheduleCategoryStateBroadcast(categorySlug, reason, {
-      useCachedSummary,
-    });
-  }
-
   getSpinBattleOnlinePresence() {
     const activeRooms = new Set<string>();
     let onlinePlayers = 0;
@@ -1102,17 +1058,6 @@ export class RoomGateway
     this.server.emit(
       SOCKET_EVENTS.SPIN_BATTLE_ONLINE,
       this.getSpinBattleOnlinePresence(),
-    );
-  }
-
-  private isOpenRoundStartAction(action: string) {
-    return (
-      action === 'STARTED_OPEN_ROUND' ||
-      action === 'CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT' ||
-      action === 'CANCELLED_SINGLE_PLAYER_ROUND_AND_STARTED_NEXT' ||
-      action === 'CANCELLED_EMPTY_LOCKED_ROUND_AND_STARTED_NEXT' ||
-      action === 'CANCELLED_SINGLE_PLAYER_LOCKED_ROUND_AND_STARTED_NEXT' ||
-      action === 'STARTED_NEXT_ROUND_AFTER_COMPLETION'
     );
   }
 

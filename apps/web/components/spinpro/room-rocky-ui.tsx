@@ -123,7 +123,7 @@ export function ArenaHeroCard({
   const stats = [
     {
       label: "Players",
-      value: `${playerCount} / ${displayedMaxPlayers}`,
+      value: `${playerCount} / ${displayedMaxPlayers} Players`,
     },
     {
       label: "Pool",
@@ -166,11 +166,7 @@ export function ArenaHeroCard({
                     : isDone
                       ? "bg-green-go"
                       : "bg-white/15"
-                } ${
-                  isActive && (item === "RANDOMIZING" || item === "SPINNING")
-                    ? "animate-pulse"
-                    : ""
-                }`}
+                } ${isActive && item === "SPINNING" ? "animate-pulse" : ""}`}
               />
             </div>
           );

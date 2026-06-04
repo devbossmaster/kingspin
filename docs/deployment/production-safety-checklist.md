@@ -22,14 +22,19 @@ money-ready architecture. It is not a real-money production certification.
 - `BETTER_AUTH_URL` and `WEB_URL` set to public HTTPS URLs.
 - `API_CORS_ORIGIN` or `CORS_ORIGIN` limited to trusted origins.
 - `ENABLE_DEV_AUTH=false`
+- `ENABLE_LOCAL_DEV_AUTH=false`
 - Do not set `ADMIN_DEV_KEY` outside local development. Static dev-key routes
   are local-only and are not production admin access.
+- `TRUST_PROXY_HEADERS=true` only when the API is behind trusted
+  Coolify/Nginx/proxy infrastructure that controls forwarded client IP headers.
 - `ROUND_MACHINE_AUTO_START=true` only on the intended machine process. On API
   boot this starts every `ACTIVE` permanent room machine; empty and single-player
   rounds are cancelled/refunded by the server lifecycle instead of drawing.
-- `ENABLE_REDIS=true` before horizontal API scaling.
-- `REDIS_URL` set when Redis, Socket.IO adapter, BullMQ, or multi-instance
-  round-machine locking is enabled.
+- `ENABLE_REDIS=true` and `REDIS_URL` set. Production API startup must not fall
+  back to in-memory rate limiting or fraud counters.
+- Browser clients fetch `GET /csrf` with credentials before mutating
+  cookie-auth REST requests and send the returned value as `x-csrf-token`.
+- `SENTRY_DSN` is optional, but recommended for production error visibility.
 - `PAYMENT_PROVIDER` set to a non-mock provider only after a real provider
   adapter has passed provider approval, webhook, and reconciliation testing.
 
@@ -77,13 +82,14 @@ chat, logs, or a ticket.
 
 ## Realtime And Redis
 
-- Socket.IO Redis adapter should be enabled before multiple API instances.
+- Production API requires Redis; confirm `/health/redis` before entry testing.
+- Socket.IO Redis adapter should be healthy before multiple API instances.
 - Live-state cache keys must remain room-specific and short-lived.
 - Invalidate room live-state after entry placement and every round transition.
 - Redis locks must be room-specific and release only with matching values.
 - Presence keys must be room-specific and TTL-backed.
-- Redis outages must degrade realtime features safely without corrupting money
-  state.
+- Redis outages must fail closed for sensitive rate-limit, fraud, and locking
+  paths without corrupting money state.
 
 ## Worker Operations
 

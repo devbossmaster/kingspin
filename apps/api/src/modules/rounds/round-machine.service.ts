@@ -115,9 +115,13 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     const existingState = this.states.get(roomId);
 
     if (existingState?.isRunning) {
-      await this.runRoomTickImmediately(roomId, { force: false }, {
-        priority: ROUND_MACHINE_TICK_PRIORITIES.CATCH_UP,
-      });
+      await this.runRoomTickImmediately(
+        roomId,
+        { force: false },
+        {
+          priority: ROUND_MACHINE_TICK_PRIORITIES.CATCH_UP,
+        },
+      );
       return this.getRoomMachineStatus(roomId);
     }
 
@@ -804,13 +808,20 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     await Promise.allSettled(workers);
   }
 
-  private async tickRoom(roomId: string) {
+  private async tickRoom(
+    roomId: string,
+    priority: number = ROUND_MACHINE_TICK_PRIORITIES.SCHEDULED,
+  ) {
     this.timers.delete(roomId);
 
-    await this.runRoomTick(roomId, { force: false }, {
-      skipIfStopped: true,
-      priority: ROUND_MACHINE_TICK_PRIORITIES.SCHEDULED,
-    });
+    await this.runRoomTick(
+      roomId,
+      { force: false },
+      {
+        skipIfStopped: true,
+        priority,
+      },
+    );
   }
 
   private async runRoomTickImmediately(
@@ -822,8 +833,7 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
 
     return this.runRoomTick(roomId, options, {
       skipIfStopped: tickOptions.skipIfStopped ?? true,
-      priority:
-        tickOptions.priority ?? ROUND_MACHINE_TICK_PRIORITIES.CATCH_UP,
+      priority: tickOptions.priority ?? ROUND_MACHINE_TICK_PRIORITIES.CATCH_UP,
     });
   }
 
@@ -967,7 +977,8 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
 
       if (state.isRunning) {
         const nextDelayMs = this.getNextDelayMs(result);
-        this.scheduleNextTick(roomId, nextDelayMs);
+        const nextPriority = this.getNextTickPriority(result);
+        this.scheduleNextTick(roomId, nextDelayMs, nextPriority);
       } else {
         state.nextTickAt = null;
         this.states.set(roomId, state);
@@ -1055,7 +1066,11 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     return true;
   }
 
-  private scheduleNextTick(roomId: string, delayMs: number) {
+  private scheduleNextTick(
+    roomId: string,
+    delayMs: number,
+    priority: number = ROUND_MACHINE_TICK_PRIORITIES.SCHEDULED,
+  ) {
     const state = this.getOrCreateState(roomId);
 
     if (!state.isRunning) {
@@ -1074,7 +1089,7 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     this.states.set(roomId, state);
 
     const timer = setTimeout(() => {
-      void this.tickRoom(roomId);
+      void this.tickRoom(roomId, priority);
     }, safeDelayMs);
 
     this.timers.set(roomId, timer);
@@ -1150,6 +1165,20 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
     }
 
     return 1_000;
+  }
+
+  private getNextTickPriority(result: any): number {
+    const action = result?.action;
+
+    if (
+      action === 'SETTLED_ROUND' ||
+      action === 'RESUMED_SETTLEMENT' ||
+      action === 'WAITING_FOR_COMPLETION_COOLDOWN'
+    ) {
+      return ROUND_MACHINE_TICK_PRIORITIES.CATCH_UP;
+    }
+
+    return ROUND_MACHINE_TICK_PRIORITIES.SCHEDULED;
   }
 
   private delayUntilRoundLocksAt(round: { locksAt?: string | null } | null) {

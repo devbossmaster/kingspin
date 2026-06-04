@@ -35,7 +35,9 @@ testing.
 - `BETTER_AUTH_SECRET` is required in production for API and web.
 - `BETTER_AUTH_URL` must be the deployed web origin.
 - `ENABLE_DEV_AUTH=false` is required in production.
-- `x-dev-user-id` is rejected in production.
+- `ENABLE_LOCAL_DEV_AUTH=false` is required outside local development.
+- `x-dev-user-id` is rejected outside true local development and is
+  database-validated when enabled locally.
 - Protected API routes reject unauthenticated requests.
 - Better Auth requires email verification before email/password auth flow is
   considered ready for room entry.
@@ -56,6 +58,8 @@ Status: pass for single trusted web origin.
 - Frontend protected fetches use `credentials: "include"`.
 - Cookie-authenticated REST mutations use a double-submit CSRF cookie plus
   `x-csrf-token`; read-only GETs and Socket.IO are unaffected.
+- Frontend clients fetch `GET /csrf` with credentials before mutating
+  cookie-auth REST requests.
 - Production URLs must use HTTPS public domains.
 - `NEXT_PUBLIC_SOCKET_URL` should point at the public Socket.IO namespace, for
   example `https://api.your-domain.com/game`.
@@ -102,13 +106,17 @@ review workflows.
 Status: basic protection in place.
 
 - API has a global rate-limit guard backed by Redis outside local/test.
+- Production env validation requires `ENABLE_REDIS=true` and `REDIS_URL`; there
+  is no in-memory rate-limit fallback outside local/test.
 - Entry route is covered by API rate limiting.
 - Public live-state/latest-result endpoints are covered by API rate limiting.
+- Rapid-entry fraud protection uses Redis and fails closed if Redis is
+  unavailable in production.
 - Better Auth and Resend provide baseline auth email abuse controls.
 
 Limitations:
 
-- Fraud operations remain TODO.
+- Fraud operations workflow and support tooling remain TODO.
 
 ## Headers And Error Handling
 
@@ -144,18 +152,21 @@ Status: pass for deployment readiness.
 
 ## Socket Security
 
-Status: watch-only sockets are acceptable for closed-alpha; auth handshake is a
-future hardening item.
+Status: pass for authenticated room/category joins, with deployed
+cookie/domain testing still required.
 
 - Socket.IO CORS matches the configured web origin.
-- `room:join` validates that the room exists.
-- Anonymous sockets may observe live room state.
+- `room:join` and `category:join` require Better Auth session validation before
+  live state is returned.
+- Authenticated socket user IDs are stored on socket state for subsequent room
+  events.
+- Room existence is validated before joining room-specific broadcasts.
 - Entry placement still requires authenticated REST API requests.
 - Reconnect handling refreshes room state.
 
-Future improvement: add Better Auth session validation to the Socket.IO
-handshake if private rooms, user-specific socket events, or moderation actions
-move onto sockets.
+Future improvement: move session validation to the initial Socket.IO handshake
+if private rooms, user-specific socket events, or moderation actions move onto
+sockets.
 
 ## Static Checks
 
@@ -183,7 +194,6 @@ Expected:
 - Fraud operations are TODO.
 - Reconciliation is skeleton-level.
 - Admin review workflow needs real admin auth.
-- Redis/shared rate limiter is needed before horizontal scaling.
-- Redis Socket.IO adapter needs live deployment testing.
+- Redis Socket.IO adapter and `/health/redis` need live deployment testing.
 - OpenTelemetry needs real integration if tracing is required.
 - Backup/restore and incident response plans need operational ownership.

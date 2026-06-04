@@ -85,6 +85,8 @@ describe('HttpExceptionFilter', () => {
       DATABASE_URL: 'postgresql://user:pass@localhost:5432/kingspin',
       DIRECT_URL: 'postgresql://user:pass@localhost:5432/kingspin',
       BETTER_AUTH_SECRET: 'test-secret',
+      ENABLE_REDIS: 'true',
+      REDIS_URL: 'redis://redis.example.com:6379',
       RESEND_API_KEY: 'resend-test',
       EMAIL_FROM: 'SpinPro <auth@spinpro.com>',
       PAYMENT_PROVIDER: 'MANUAL',

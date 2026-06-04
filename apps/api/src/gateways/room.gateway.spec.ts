@@ -679,7 +679,7 @@ describe('RoomGateway', () => {
     );
   });
 
-  it('broadcasts category summaries after a skip/cancel machine result starts the next round', async () => {
+  it('broadcasts room state and category summaries when completion cooldown starts the next round', async () => {
     jest.useFakeTimers().setSystemTime(now);
     const publicGameService = buildPublicGameService();
     const roomsService = buildRoomsService();
@@ -701,7 +701,7 @@ describe('RoomGateway', () => {
     } as any;
 
     await gateway.broadcastMachineResult('room-1', {
-      action: 'CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT',
+      action: 'STARTED_NEXT_ROUND_AFTER_COMPLETION',
       currentRound: {
         id: 'round-2',
         roomId: 'room-1',
@@ -730,8 +730,10 @@ describe('RoomGateway', () => {
     await jest.advanceTimersByTimeAsync(50);
     await jest.advanceTimersByTimeAsync(50);
 
-    expect(publicGameService.invalidateRoomLiveState).not.toHaveBeenCalled();
-    expect(publicGameService.getRoomLiveState).not.toHaveBeenCalled();
+    expect(publicGameService.invalidateRoomLiveState).toHaveBeenCalledWith(
+      'room-1',
+    );
+    expect(publicGameService.getRoomLiveState).toHaveBeenCalledWith('room-1');
     expect(
       roomsService.patchLiveRoomSummaryCacheWithOpenRound,
     ).toHaveBeenCalledWith(
@@ -748,10 +750,24 @@ describe('RoomGateway', () => {
       'starter',
     );
     expect(roomEmitter.emit).toHaveBeenCalledWith(
+      SOCKET_EVENTS.ROUND_STATE,
+      expect.objectContaining({
+        roomId: 'room-1',
+        reason: 'STARTED_NEXT_ROUND_AFTER_COMPLETION',
+      }),
+    );
+    expect(roomEmitter.emit).toHaveBeenCalledWith(
+      SOCKET_EVENTS.ROUND_UPDATED,
+      expect.objectContaining({
+        roomId: 'room-1',
+        action: 'STARTED_NEXT_ROUND_AFTER_COMPLETION',
+      }),
+    );
+    expect(roomEmitter.emit).toHaveBeenCalledWith(
       SOCKET_EVENTS.CATEGORY_STATE,
       expect.objectContaining({
         categorySlug: 'starter',
-        reason: 'CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT',
+        reason: 'STARTED_NEXT_ROUND_AFTER_COMPLETION',
       }),
     );
   });

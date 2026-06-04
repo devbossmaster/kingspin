@@ -17,10 +17,10 @@ pnpm --filter @kingspin/db migrate:status
 ```
 
 - Redis status:
-  - If `ENABLE_REDIS=false`, confirm logs show single-instance/sticky-session
-    warning only.
-  - If `ENABLE_REDIS=true`, confirm API logs show Socket.IO Redis adapter
+  - For Coolify/production envs, confirm `ENABLE_REDIS=true`, `REDIS_URL` is
+    set, `/health/redis` succeeds, and API logs show the Socket.IO Redis adapter
     enabled.
+  - `ENABLE_REDIS=false` is for local/test single-instance workflows only.
 
 Automated smoke check:
 
@@ -48,12 +48,14 @@ Expected:
 ## 3. Wallet Setup
 
 1. Create or seed a test user wallet through a safe one-off process.
-2. Credit the test wallet through admin-only tooling.
+2. Credit the test wallet through role-protected admin tooling or a safe
+   one-off process.
 3. Verify the balance with `GET /me/wallet`.
 
 Expected:
 
-- Admin wallet tools require `x-admin-dev-key`.
+- `x-admin-dev-key` wallet helpers are local development only and are not
+  configured in Coolify/staging/production.
 - Missing or wrong admin key is rejected.
 - Normal player UI does not ask for `playerKey`, `userId`, or `walletId`.
 
@@ -103,7 +105,11 @@ Run these checks before inviting users:
 - `GET /dev/players/:playerKey/balance` returns 404 or 410.
 - Wrong `x-admin-dev-key` is rejected.
 - `ENABLE_DEV_AUTH=false` in production.
+- `ENABLE_LOCAL_DEV_AUTH=false` and `ADMIN_DEV_KEY` is not configured outside
+  local development.
 - API CORS allows only the deployed web origin.
+- Frontend entry POSTs fetch `/csrf` with credentials and send `x-csrf-token`;
+  cross-site ambient-cookie POSTs are rejected.
 - Browser session cookies work over HTTPS.
 
 ## 7. Security Checks

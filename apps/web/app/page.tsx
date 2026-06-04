@@ -143,7 +143,7 @@ function HomeSidebar({
   return (
     // Navigation links and wallet/profile strip: safe visual styling zone.
     <aside
-      className={`hidden h-full max-h-full shrink-0 flex-col rounded-[14px] border border-[#1b2646] bg-[linear-gradient(180deg,#07112b_0%,#050716_36%,#03040d_100%)] p-3 shadow-[0_22px_54px_rgba(0,0,0,0.52)] transition-[width] duration-300 md:flex ${
+      className={`hidden h-[calc(100vh-3rem)] max-h-[calc(100vh-3rem)] shrink-0 flex-col overflow-hidden rounded-[14px] border border-[#1b2646] bg-[linear-gradient(180deg,#07112b_0%,#050716_36%,#03040d_100%)] p-3 shadow-[0_22px_54px_rgba(0,0,0,0.52)] transition-[width] duration-300 md:sticky md:top-6 md:flex ${
         expanded ? "w-[19.25rem]" : "w-20"
       }`}
       aria-label="Home navigation"

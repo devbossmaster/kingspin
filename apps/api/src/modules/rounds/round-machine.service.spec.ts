@@ -257,10 +257,7 @@ describe('RoundMachineService', () => {
 
     expect(
       roundsService.cancelExpiredOpenRoundAndStartNextForRoom,
-    ).toHaveBeenCalledWith(
-      'room-1',
-      'round-1',
-    );
+    ).toHaveBeenCalledWith('room-1', 'round-1');
     expect(roundsService.startOpenRoundForRoom).not.toHaveBeenCalled();
     expect(status).toEqual(
       expect.objectContaining({
@@ -414,10 +411,7 @@ describe('RoundMachineService', () => {
 
     expect(
       roundsService.cancelExpiredOpenRoundAndStartNextForRoom,
-    ).toHaveBeenCalledWith(
-      'room-1',
-      'round-1',
-    );
+    ).toHaveBeenCalledWith('room-1', 'round-1');
     expect(roundsService.startOpenRoundForRoom).not.toHaveBeenCalled();
     expect(status).toEqual(
       expect.objectContaining({
@@ -528,16 +522,10 @@ describe('RoundMachineService', () => {
 
     expect(
       roundsService.cancelExpiredEmptyOpenRoundAndStartNextForRoom,
-    ).toHaveBeenCalledWith(
-      'room-1',
-      'round-1',
-    );
+    ).toHaveBeenCalledWith('room-1', 'round-1');
     expect(
       roundsService.cancelExpiredOpenRoundAndStartNextForRoom,
-    ).toHaveBeenCalledWith(
-      'room-1',
-      'round-1',
-    );
+    ).toHaveBeenCalledWith('room-1', 'round-1');
     expect(roundsService.startOpenRoundForRoom).not.toHaveBeenCalled();
     expect(roundsService.lockCurrentRoundForRoom).not.toHaveBeenCalled();
     expect(roundsService.drawCurrentRoundForRoom).not.toHaveBeenCalled();
@@ -605,10 +593,7 @@ describe('RoundMachineService', () => {
 
     expect(
       roundsService.cancelExpiredOpenRoundAndStartNextForRoom,
-    ).toHaveBeenCalledWith(
-      'room-1',
-      'round-1',
-    );
+    ).toHaveBeenCalledWith('room-1', 'round-1');
     expect(roundsService.startOpenRoundForRoom).not.toHaveBeenCalled();
     expect(result).toEqual(
       expect.objectContaining({
@@ -645,10 +630,7 @@ describe('RoundMachineService', () => {
 
     expect(
       roundsService.cancelExpiredOpenRoundAndStartNextForRoom,
-    ).toHaveBeenCalledWith(
-      'room-1',
-      'round-1',
-    );
+    ).toHaveBeenCalledWith('room-1', 'round-1');
     expect(roundsService.startOpenRoundForRoom).not.toHaveBeenCalled();
     expect(roundsService.lockCurrentRoundForRoom).not.toHaveBeenCalled();
     expect(roundsService.drawCurrentRoundForRoom).not.toHaveBeenCalled();
@@ -1089,6 +1071,64 @@ describe('RoundMachineService', () => {
       }),
     );
     expect(jest.getTimerCount()).toBe(1);
+
+    service.onModuleDestroy();
+  });
+
+  it('schedules completed cooldown follow-up ticks with catch-up priority', async () => {
+    jest.useFakeTimers().setSystemTime(now);
+    const settlingRound = buildRound({
+      status: RoundStatus.SETTLING,
+      settlingAt: new Date('2026-05-26T11:59:00.000Z'),
+      winnerEntryId: 'entry-1',
+      winnerUserId: 'user-1',
+    });
+    const { service } = buildService({
+      currentRound: settlingRound,
+      entryCount: 2,
+    });
+    const scheduled: {
+      roomId: string;
+      delayMs: number;
+      priority: number | undefined;
+    }[] = [];
+    const originalScheduleNextTick = (service as any).scheduleNextTick.bind(
+      service,
+    );
+    jest
+      .spyOn(service as any, 'scheduleNextTick')
+      .mockImplementation(
+        (roomId: string, delayMs: number, priority?: number) => {
+          scheduled.push({ roomId, delayMs, priority });
+          return originalScheduleNextTick(roomId, delayMs, priority);
+        },
+      );
+
+    (service as any).states.set('room-1', {
+      roomId: 'room-1',
+      isRunning: true,
+      tickCount: 0,
+      lastAction: null,
+      lastError: null,
+      lastTickAt: null,
+      nextTickAt: null,
+    });
+
+    await (service as any).tickRoom('room-1');
+
+    const cooldownPriority = (service as any).getNextTickPriority({
+      action: 'SETTLED_ROUND',
+    });
+    const regularPriority = (service as any).getNextTickPriority({
+      action: 'STARTED_SPINNING_ROUND',
+    });
+
+    expect(cooldownPriority).toBeLessThan(regularPriority);
+    expect(scheduled).toContainEqual({
+      roomId: 'room-1',
+      delayMs: 9_000,
+      priority: cooldownPriority,
+    });
 
     service.onModuleDestroy();
   });

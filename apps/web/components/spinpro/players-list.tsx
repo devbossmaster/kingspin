@@ -3,7 +3,11 @@
 import { useMemo } from "react";
 import type { EntryWithPlayerSnapshot } from "@kingspin/contracts";
 import { formatCoins } from "../../lib/format";
-import { getEntrySliceColor } from "./spinning-wheel";
+import {
+  getEntryDisplayColor,
+  getPlayerDisplayName,
+  sortDisplayEntries,
+} from "./player-display";
 
 type PlayersListProps = {
   entries: (EntryWithPlayerSnapshot & { pending?: boolean })[];
@@ -22,15 +26,6 @@ function getEntryChance(entryAmount: string, totalEntryAmount: string) {
   return Math.max(0, Math.min(100, (amount / total) * 100));
 }
 
-function playerName(entry: EntryWithPlayerSnapshot, index: number) {
-  return (
-    entry.player?.username ??
-    entry.player?.fullName ??
-    entry.userId?.slice(0, 6) ??
-    `Player ${index + 1}`
-  );
-}
-
 function shortChance(value: number) {
   if (value >= 10) return value.toFixed(1);
   if (value > 0) return value.toFixed(2);
@@ -44,16 +39,7 @@ export function PlayersList({
 }: PlayersListProps) {
   // Keep player display order stable: created time first, then id.
   const sortedEntries = useMemo(() => {
-    return [...entries].sort((left, right) => {
-      const leftTime = new Date(left.createdAt).getTime();
-      const rightTime = new Date(right.createdAt).getTime();
-
-      if (leftTime !== rightTime) {
-        return leftTime - rightTime;
-      }
-
-      return left.id.localeCompare(right.id);
-    });
+    return sortDisplayEntries(entries);
   }, [entries]);
 
   if (sortedEntries.length === 0) {
@@ -73,7 +59,7 @@ export function PlayersList({
         const isWinner = winnerEntryId === entry.id;
         const isPending = Boolean(entry.pending);
         const chance = getEntryChance(entry.amount, totalEntryAmount);
-        const displayName = playerName(entry, index);
+        const displayName = getPlayerDisplayName(entry, index);
 
         // Winner/current-user highlight section: this component only receives winnerEntryId.
         return (
@@ -96,7 +82,7 @@ export function PlayersList({
                 className={`h-3 w-3 shrink-0 rounded-full ring-2 ring-black/30 shadow-[0_0_12px_rgba(255,255,255,0.12)] ${
                   isPending ? "animate-pulse" : ""
                 }`}
-                style={{ backgroundColor: getEntrySliceColor(entry, index) }}
+                style={{ backgroundColor: getEntryDisplayColor(entry, index) }}
                 aria-hidden="true"
               />
 

@@ -23,8 +23,28 @@ describe('API environment validation', () => {
         API_CORS_ORIGIN: 'https://kingspin.example.com',
         BETTER_AUTH_SECRET: 'production-secret',
         RESEND_API_KEY: 'resend-production',
-        RESEND_FROM_EMAIL: 'SpinPro <noreply@example.com>',
+        RESEND_FROM_EMAIL: 'SpinPro <noreply@kingspin.io>',
         PAYMENT_PROVIDER: 'MOCK',
+        ENABLE_REDIS: 'true',
+        REDIS_URL: 'redis://redis.example.com:6379',
+      }),
+    ).toThrow(EnvValidationError);
+  });
+
+  it('requires production Node runtime outside local development', () => {
+    expect(() =>
+      parseApiEnv({
+        NODE_ENV: 'test',
+        APP_ENV: 'production',
+        DATABASE_URL: 'postgresql://user:pass@db.example.com:5432/app',
+        WEB_URL: 'https://kingspin.example.com',
+        API_CORS_ORIGIN: 'https://kingspin.example.com',
+        BETTER_AUTH_SECRET: 'production-secret',
+        RESEND_API_KEY: 'resend-production',
+        RESEND_FROM_EMAIL: 'SpinPro <noreply@kingspin.io>',
+        PAYMENT_PROVIDER: 'MANUAL',
+        ENABLE_REDIS: 'true',
+        REDIS_URL: 'redis://redis.example.com:6379',
       }),
     ).toThrow(EnvValidationError);
   });
@@ -79,8 +99,62 @@ describe('API environment validation', () => {
         BETTER_AUTH_SECRET: 'production-secret',
         ADMIN_DEV_KEY: 'admin-production-secret',
         RESEND_API_KEY: 'resend-production',
-        RESEND_FROM_EMAIL: 'SpinPro <noreply@example.com>',
+        RESEND_FROM_EMAIL: 'SpinPro <noreply@kingspin.io>',
         PAYMENT_PROVIDER: 'MANUAL',
+        ENABLE_REDIS: 'true',
+        REDIS_URL: 'redis://redis.example.com:6379',
+      }),
+    ).toThrow(EnvValidationError);
+  });
+
+  it('requires Redis outside local development', () => {
+    expect(() =>
+      parseApiEnv({
+        NODE_ENV: 'production',
+        APP_ENV: 'production',
+        DATABASE_URL: 'postgresql://user:pass@db.example.com:5432/app',
+        WEB_URL: 'https://kingspin.example.com',
+        API_CORS_ORIGIN: 'https://kingspin.example.com',
+        BETTER_AUTH_SECRET: 'production-secret',
+        RESEND_API_KEY: 'resend-production',
+        RESEND_FROM_EMAIL: 'SpinPro <noreply@kingspin.io>',
+        PAYMENT_PROVIDER: 'MANUAL',
+        ENABLE_REDIS: 'false',
+      }),
+    ).toThrow(EnvValidationError);
+
+    expect(
+      parseApiEnv({
+        NODE_ENV: 'production',
+        APP_ENV: 'production',
+        DATABASE_URL: 'postgresql://user:pass@db.example.com:5432/app',
+        WEB_URL: 'https://kingspin.example.com',
+        API_CORS_ORIGIN: 'https://kingspin.example.com',
+        BETTER_AUTH_SECRET: 'production-secret',
+        RESEND_API_KEY: 'resend-production',
+        RESEND_FROM_EMAIL: 'SpinPro <noreply@kingspin.io>',
+        PAYMENT_PROVIDER: 'MANUAL',
+        ENABLE_REDIS: 'true',
+        REDIS_URL: 'redis://redis.example.com:6379',
+      }).ENABLE_REDIS,
+    ).toBe(true);
+  });
+
+  it('rejects local dev auth flags outside local development', () => {
+    expect(() =>
+      parseApiEnv({
+        NODE_ENV: 'production',
+        APP_ENV: 'production',
+        DATABASE_URL: 'postgresql://user:pass@db.example.com:5432/app',
+        WEB_URL: 'https://kingspin.example.com',
+        API_CORS_ORIGIN: 'https://kingspin.example.com',
+        BETTER_AUTH_SECRET: 'production-secret',
+        RESEND_API_KEY: 'resend-production',
+        RESEND_FROM_EMAIL: 'SpinPro <noreply@kingspin.io>',
+        PAYMENT_PROVIDER: 'MANUAL',
+        ENABLE_REDIS: 'true',
+        REDIS_URL: 'redis://redis.example.com:6379',
+        ENABLE_LOCAL_DEV_AUTH: 'true',
       }),
     ).toThrow(EnvValidationError);
   });

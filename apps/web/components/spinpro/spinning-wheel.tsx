@@ -5,6 +5,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useCountdown } from "../../hooks/use-countdown";
 import { formatCoins, formatMs } from "../../lib/format";
 import { getPublicRoundPhase } from "../../lib/room-summary";
+import {
+  getEntryDisplayColor,
+  getPaletteColor,
+  getPlayerDisplayName,
+  PLAYER_SLICE_COLORS,
+  sortDisplayEntries,
+} from "./player-display";
 import { WheelPointer } from "./wheel-pointer";
 
 type WheelEntry = EntryWithPlayerSnapshot & {
@@ -32,58 +39,21 @@ type WheelPhase =
   | "RESULT"
   | "WAITING";
 
-export const WHEEL_SLICE_COLORS = [
-  "#22c55e",
-  "#ec4899",
-  "#06b6d4",
-  "#f97316",
-  "#8b5cf6",
-  "#ef4444",
-  "#14b8a6",
-  "#facc15",
-  "#3b82f6",
-  "#a855f7",
-  "#10b981",
-  "#fb7185",
-];
+export const WHEEL_SLICE_COLORS = PLAYER_SLICE_COLORS;
 
 const SPIN_DURATION_MS = 5600;
 const WHEEL_CENTER = 150;
-const WHEEL_OUTER_RADIUS = 140;
-const WHEEL_INNER_RADIUS = 76;
-const COUNTDOWN_RADIUS = 146;
+const WHEEL_OUTER_RADIUS = 136;
+const WHEEL_INNER_RADIUS = 68;
+const COUNTDOWN_RADIUS = 143;
 const COUNTDOWN_CIRCUMFERENCE = 2 * Math.PI * COUNTDOWN_RADIUS;
 
-function hashColorKey(value: string) {
-  let hash = 0;
-
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
-  }
-
-  return hash;
-}
-
-function getEntryColorKey(entry: WheelEntry, index: number) {
-  return (
-    entry.player?.id ??
-    entry.userId ??
-    entry.id ??
-    entry.optimisticBaseEntryId ??
-    String(index)
-  );
-}
-
 export function getWheelSliceColor(index: number, stableKey?: string | null) {
-  const colorIndex = stableKey
-    ? hashColorKey(stableKey) % WHEEL_SLICE_COLORS.length
-    : index % WHEEL_SLICE_COLORS.length;
-
-  return WHEEL_SLICE_COLORS[colorIndex] ?? "#22c55e";
+  return getPaletteColor(index, stableKey);
 }
 
 export function getEntrySliceColor(entry: WheelEntry, index: number) {
-  return getWheelSliceColor(index, getEntryColorKey(entry, index));
+  return getEntryDisplayColor(entry, index);
 }
 
 function normalizePhase(
@@ -225,12 +195,9 @@ function getEntryName(
   entry: EntryWithPlayerSnapshot | null | undefined,
   fallback = "Winner",
 ) {
-  return (
-    entry?.player?.username ??
-    entry?.player?.fullName ??
-    entry?.userId?.slice(0, 6) ??
-    fallback
-  );
+  const displayName = getPlayerDisplayName(entry);
+
+  return displayName === "Player" ? fallback : displayName;
 }
 
 function devLog(message: string, details?: unknown) {
@@ -269,6 +236,8 @@ export function SpinningWheel({
 
   const phase = normalizePhase(publicPhase, status);
   const statusCopy = getWheelStatusCopy(phase);
+  const displayEntries = useMemo(() => sortDisplayEntries(entries), [entries]);
+  const entryCount = displayEntries.length;
 
   const { msLeft } = useCountdown({
     locksAt,
@@ -284,7 +253,10 @@ export function SpinningWheel({
         : 0;
 
   // Wheel data mapping: ticket ranges define slice weight, falling back to amount.
-  const weights = useMemo(() => entries.map(entryWeight), [entries]);
+  const weights = useMemo(
+    () => displayEntries.map(entryWeight),
+    [displayEntries],
+  );
 
   const total = useMemo(() => {
     return (
@@ -293,17 +265,17 @@ export function SpinningWheel({
     );
   }, [totalEntryAmount, weights]);
 
-  const hasEntries = entries.length > 0 && total > 0;
+  const hasEntries = entryCount > 0 && total > 0;
 
   const winner = useMemo(() => {
-    return entries.find((entry) => entry.id === winnerEntryId) ?? null;
-  }, [entries, winnerEntryId]);
+    return displayEntries.find((entry) => entry.id === winnerEntryId) ?? null;
+  }, [displayEntries, winnerEntryId]);
 
   // Wheel data mapping: each entry maps to one slice in the current entry order.
   const slices = useMemo(() => {
     let cursor = 0;
 
-    return entries.map((entry, index) => {
+    return displayEntries.map((entry, index) => {
       const safeWeight = weights[index] ?? 0;
       const sliceDegrees = total > 0 ? (safeWeight / total) * 360 : 0;
       const startAngle = cursor;
@@ -325,7 +297,7 @@ export function SpinningWheel({
         }),
       };
     });
-  }, [entries, total, weights]);
+  }, [displayEntries, total, weights]);
 
   const emptyWheelSlices = useMemo(() => {
     const segmentCount = 16;
@@ -365,7 +337,7 @@ export function SpinningWheel({
   }, []);
 
   useEffect(() => {
-    if (entries.length > previousEntryCountRef.current) {
+    if (entryCount > previousEntryCountRef.current) {
       setJoinPopKey((key) => key + 1);
 
       const burstKey = Date.now();
@@ -376,8 +348,8 @@ export function SpinningWheel({
       }, 1100);
     }
 
-    previousEntryCountRef.current = entries.length;
-  }, [entries.length]);
+    previousEntryCountRef.current = entryCount;
+  }, [entryCount]);
 
   // Spin/result behavior: preserves phase timing, spin start, and final settle logic.
   useEffect(() => {
@@ -500,7 +472,7 @@ export function SpinningWheel({
           ? "No entries"
           : phase === "RESULT" && resultReason === "REFUNDED_SINGLE"
             ? "Refunded"
-            : `${entries.length} ${entries.length === 1 ? "entry" : "entries"}`;
+            : `${entryCount} ${entryCount === 1 ? "entry" : "entries"}`;
 
   return (
     <section className="relative overflow-visible bg-transparent p-0">
@@ -545,11 +517,11 @@ export function SpinningWheel({
           0%,
           100% {
             transform: scale(1);
-            filter: drop-shadow(0 16px 30px rgba(0, 0, 0, 0.45));
+            filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.34));
           }
           50% {
-            transform: scale(1.006);
-            filter: drop-shadow(0 20px 38px rgba(99, 102, 241, 0.14));
+            transform: scale(1.003);
+            filter: drop-shadow(0 12px 24px rgba(99, 102, 241, 0.08));
           }
         }
 
@@ -601,9 +573,9 @@ export function SpinningWheel({
         }
       `}</style>
 
-      <div className="relative flex min-h-[310px] items-center justify-center overflow-visible md:min-h-[420px]">
+      <div className="relative flex min-h-[280px] items-center justify-center overflow-visible md:min-h-[360px]">
         {/* Pointer */}
-        <div className="absolute inset-x-0 top-9 z-30 flex justify-center md:top-10">
+        <div className="absolute inset-x-0 top-11 z-30 flex justify-center md:top-12">
           <WheelPointer />
         </div>
 
@@ -637,8 +609,8 @@ export function SpinningWheel({
 
         {shouldGlow ? (
           <>
-            <div className="pointer-events-none absolute h-[88%] w-[88%] rounded-full border border-fuchsia-400/15 shadow-[0_0_42px_rgba(217,70,239,0.12)]" />
-            <div className="pointer-events-none absolute h-[74%] w-[74%] rounded-full border border-cyan-300/10 shadow-[0_0_34px_rgba(34,211,238,0.1)]" />
+            <div className="pointer-events-none absolute h-[80%] w-[80%] rounded-full border border-fuchsia-400/10 shadow-[0_0_24px_rgba(217,70,239,0.08)]" />
+            <div className="pointer-events-none absolute h-[66%] w-[66%] rounded-full border border-cyan-300/10 shadow-[0_0_20px_rgba(34,211,238,0.08)]" />
           </>
         ) : null}
 
@@ -648,12 +620,12 @@ export function SpinningWheel({
           role="img"
           aria-label={
             hasEntries
-              ? `Prize wheel with ${entries.length} entries and pool ${formatCoins(
+              ? `Prize wheel with ${entryCount} entries and pool ${formatCoins(
                   totalEntryAmount,
                 )} coins`
               : "Prize wheel waiting for entries"
           }
-          className="wheel-shell wheel-pop relative z-10 aspect-square w-[88vw] max-w-[340px] md:max-w-[420px]"
+          className="wheel-shell wheel-pop relative z-10 aspect-square w-[84vw] max-w-[310px] md:max-w-[360px]"
           style={{ height: "auto" }}
         >
           <defs>
@@ -697,20 +669,20 @@ export function SpinningWheel({
           <circle
             cx="150"
             cy="150"
-            r="148"
+            r="146"
             fill="none"
             stroke="url(#metalOuterRing)"
-            strokeWidth="4"
+            strokeWidth="3"
             filter="url(#donutWheelShadow)"
           />
 
           <circle
             cx="150"
             cy="150"
-            r="144"
+            r="140"
             fill="none"
             stroke="rgba(2,6,23,0.92)"
-            strokeWidth="6"
+            strokeWidth="5"
           />
 
           <circle
@@ -719,7 +691,7 @@ export function SpinningWheel({
             r={COUNTDOWN_RADIUS}
             fill="none"
             stroke="rgba(255,255,255,0.13)"
-            strokeWidth="5"
+            strokeWidth="4"
           />
 
           <circle
@@ -728,7 +700,7 @@ export function SpinningWheel({
             r={COUNTDOWN_RADIUS}
             fill="none"
             stroke={statusCopy.ring}
-            strokeWidth="5"
+            strokeWidth="4"
             strokeLinecap="round"
             strokeDasharray={COUNTDOWN_CIRCUMFERENCE}
             strokeDashoffset={COUNTDOWN_CIRCUMFERENCE * (1 - countdownRatio)}
@@ -761,10 +733,10 @@ export function SpinningWheel({
                   d={path}
                   fill={index % 2 === 0 ? "#172033" : "#111827"}
                   stroke="#020617"
-                  strokeWidth="2.5"
+                  strokeWidth="2"
                 />
               ))
-            ) : entries.length === 1 ? (
+            ) : entryCount === 1 ? (
               <path
                 d={describeDonutSlice({
                   centerX: WHEEL_CENTER,
@@ -774,10 +746,14 @@ export function SpinningWheel({
                   startAngle: 0,
                   endAngle: 360,
                 })}
-                fill={entries[0] ? getEntrySliceColor(entries[0], 0) : getWheelSliceColor(0)}
-                opacity={entries[0]?.pending ? 0.72 : 1}
+                fill={
+                  displayEntries[0]
+                    ? getEntrySliceColor(displayEntries[0], 0)
+                    : getWheelSliceColor(0)
+                }
+                opacity={displayEntries[0]?.pending ? 0.72 : 1}
                 stroke="#020617"
-                strokeWidth="2.25"
+                strokeWidth="1.8"
               />
             ) : (
               slices.map(({ entry, index, path }) => {
@@ -788,7 +764,7 @@ export function SpinningWheel({
                     fill={getEntrySliceColor(entry, index)}
                     opacity={entry.pending ? 0.72 : 1}
                     stroke="#020617"
-                    strokeWidth="2.25"
+                    strokeWidth="1.8"
                   />
                 );
               })
@@ -800,7 +776,7 @@ export function SpinningWheel({
               r={WHEEL_OUTER_RADIUS}
               fill="none"
               stroke="rgba(255,255,255,0.12)"
-              strokeWidth="1.5"
+              strokeWidth="1"
             />
 
             <circle
@@ -808,8 +784,8 @@ export function SpinningWheel({
               cy="150"
               r={WHEEL_INNER_RADIUS}
               fill="none"
-              stroke="rgba(255,255,255,0.2)"
-              strokeWidth="3"
+              stroke="rgba(255,255,255,0.16)"
+              strokeWidth="2"
             />
           </g>
 
@@ -817,35 +793,35 @@ export function SpinningWheel({
           <circle
             cx="150"
             cy="150"
-            r="73"
+            r="63"
             fill="none"
             stroke="rgba(15,23,42,0.85)"
-            strokeWidth="5"
+            strokeWidth="4"
           />
 
           <circle
             cx="150"
             cy="150"
-            r="62"
+            r="53"
             fill="none"
             stroke="rgba(255,255,255,0.1)"
-            strokeWidth="2"
+            strokeWidth="1.5"
           />
         </svg>
 
         {/* Center display */}
-        <div className="pointer-events-none absolute z-20 flex h-[112px] w-[112px] flex-col items-center justify-center rounded-full text-center md:h-[118px] md:w-[118px]">
+        <div className="pointer-events-none absolute z-20 flex h-[98px] w-[98px] flex-col items-center justify-center rounded-full text-center md:h-[104px] md:w-[104px]">
           <div className="absolute inset-0 rounded-full bg-slate-950/20 backdrop-blur-[1px]" />
           <div className="relative">
             <p className="text-[11px] font-black uppercase tracking-[0.16em] text-white/85">
               {centerLabel}
             </p>
 
-            <p className="mt-1 font-mono text-[22px] font-black leading-none text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
+            <p className="mt-1 font-mono text-xl font-black leading-none text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
               {formatCoins(totalEntryAmount)}
             </p>
 
-            <p className="mt-2 max-w-[96px] truncate text-[10px] font-bold text-slate-200 drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
+            <p className="mt-2 max-w-[84px] truncate text-[10px] font-bold text-slate-200 drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
               {centerBottomText}
             </p>
           </div>

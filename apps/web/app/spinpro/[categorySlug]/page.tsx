@@ -9,7 +9,6 @@ import {
   Clock3,
   Coins,
   Equal,
-  Eye,
   Swords,
   UsersRound,
 } from "lucide-react";
@@ -96,7 +95,10 @@ function RoomBattleCard({
       <div className="flex min-w-0 items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-2">
-            <Swords className="h-5 w-5 shrink-0 text-white" aria-hidden="true" />
+            <Swords
+              className="h-5 w-5 shrink-0 text-white"
+              aria-hidden="true"
+            />
             <h2 className="truncate font-display text-lg font-black text-white">
               {getRoomDisplayName(room, index)}
             </h2>
@@ -115,26 +117,23 @@ function RoomBattleCard({
         </span>
       </div>
 
-      <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
-        <div className="min-w-0 space-y-1.5">
-          <div className="flex min-w-0 items-center gap-1.5 text-[11px] font-black text-slate-300">
-            <Clock3 className="h-3.5 w-3.5 shrink-0 text-teal-200" aria-hidden="true" />
-            <span className="truncate">{formatLockCountdown(displayMs)}</span>
-          </div>
-          <div className="flex min-w-0 items-center gap-1.5 text-[11px] font-black text-slate-300">
-            <UsersRound className="h-3.5 w-3.5 shrink-0 text-yellow-200" aria-hidden="true" />
-            <span className="truncate">
-              {playerCount}/{room.maxPlayers} players
-            </span>
-          </div>
+      <div className="mt-3 min-w-0 space-y-1.5">
+        <div className="flex min-w-0 items-center gap-1.5 text-[11px] font-black text-slate-300">
+          <Clock3
+            className="h-3.5 w-3.5 shrink-0 text-teal-200"
+            aria-hidden="true"
+          />
+          <span className="truncate">{formatLockCountdown(displayMs)}</span>
         </div>
-
-        <span
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-md border border-white/10 bg-white/[0.07] text-white transition group-hover:border-lime-300/60 group-hover:bg-lime-400/15"
-          aria-label="Watch room"
-        >
-          <Eye className="h-5 w-5" aria-hidden="true" />
-        </span>
+        <div className="flex min-w-0 items-center gap-1.5 text-[11px] font-black text-slate-300">
+          <UsersRound
+            className="h-3.5 w-3.5 shrink-0 text-yellow-200"
+            aria-hidden="true"
+          />
+          <span className="truncate">
+            {playerCount} / {room.maxPlayers} Players
+          </span>
+        </div>
       </div>
     </Link>
   );
@@ -213,7 +212,10 @@ export default function CategoryLobbyPage() {
 
             <div className="mt-2 flex min-w-0 items-center justify-between gap-2">
               <span className="inline-flex min-w-0 items-center gap-1.5 rounded-md border border-white/10 bg-white/[0.05] px-2 py-1 text-[10px] font-black text-slate-200">
-                <ModeIcon className="h-3.5 w-3.5 shrink-0 text-lime-300" aria-hidden="true" />
+                <ModeIcon
+                  className="h-3.5 w-3.5 shrink-0 text-lime-300"
+                  aria-hidden="true"
+                />
                 <span className="truncate">{getModeTag(mode)}</span>
               </span>
               <span className="truncate text-right text-[10px] font-black uppercase tracking-[0.12em] text-yellow-200">

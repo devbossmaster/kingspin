@@ -9,6 +9,10 @@ not mean KingSpin / SpinPro is real-money ready.
   production HTTPS origins, auth email settings, or non-mock payment provider
   settings are missing.
 - `ENABLE_DEV_AUTH=false` in production.
+- `ENABLE_LOCAL_DEV_AUTH=false` and `ADMIN_DEV_KEY` is not configured outside
+  local development.
+- `ENABLE_REDIS=true` and `REDIS_URL` are set; production startup does not use
+  in-memory rate limits or fraud counters.
 - Admin development key routes reject outside local development.
 - Normal player UI has no `playerKey`, `userId`, wallet id, role, or balance
   fields in entry requests.
@@ -55,10 +59,12 @@ not mean KingSpin / SpinPro is real-money ready.
 
 ## Realtime And Workers
 
-- With `ENABLE_REDIS=false`, join a room and confirm REST live-state and local
-  socket broadcasts still work on one instance.
-- With `ENABLE_REDIS=true` and `REDIS_URL`, confirm Socket.IO adapter, live-state
-  invalidation, Redis cache, and Redis lock logs show healthy operation.
+- With production env, confirm `/health/redis` succeeds before entry testing.
+- With `ENABLE_REDIS=true` and `REDIS_URL`, confirm Socket.IO adapter,
+  live-state invalidation, Redis cache, and Redis lock logs show healthy
+  operation.
+- In local/test only, `ENABLE_REDIS=false` may be used to confirm single-instance
+  REST live-state and local socket broadcasts.
 - Enqueue retry jobs with stable job ids and confirm worker result logs upsert
   deterministic `result:<jobId>` records.
 - Confirm worker jobs report or call idempotent services only; workers must not

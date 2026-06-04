@@ -54,6 +54,8 @@ describe('AuthBridgeService', () => {
     process.env.EMAIL_FROM = 'SpinPro <auth@spinpro.com>';
     process.env.ENABLE_DEV_AUTH = 'false';
     process.env.PAYMENT_PROVIDER = 'MANUAL';
+    process.env.ENABLE_REDIS = 'true';
+    process.env.REDIS_URL = 'redis://redis.example.com:6379';
   }
 
   function setStagingEnv() {
@@ -67,9 +69,11 @@ describe('AuthBridgeService', () => {
     process.env.BETTER_AUTH_SECRET = 'test-secret';
     process.env.RESEND_API_KEY = 'resend-test';
     process.env.EMAIL_FROM = 'SpinPro <auth@spinpro.com>';
-    process.env.ENABLE_DEV_AUTH = 'true';
-    process.env.ENABLE_LOCAL_DEV_AUTH = 'true';
+    process.env.ENABLE_DEV_AUTH = 'false';
+    process.env.ENABLE_LOCAL_DEV_AUTH = 'false';
     process.env.PAYMENT_PROVIDER = 'MANUAL';
+    process.env.ENABLE_REDIS = 'true';
+    process.env.REDIS_URL = 'redis://redis.example.com:6379';
   }
 
   it('fails closed when local dev auth is not enabled', async () => {
@@ -122,7 +126,7 @@ describe('AuthBridgeService', () => {
     ).resolves.toBeNull();
   });
 
-  it('does not accept x-dev-user-id in staging even if dev auth flags are set', async () => {
+  it('does not accept x-dev-user-id in staging', async () => {
     const { service, prisma } = buildService({ id: 'user-1' });
 
     setStagingEnv();

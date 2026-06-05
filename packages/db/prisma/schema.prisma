@@ -75,10 +75,12 @@ enum AdminAuditAction {
   ADMIN_DEBIT
   DEPOSIT_APPROVED
   DEPOSIT_CANCELLED
+  DEPOSIT_REJECTED
   WITHDRAWAL_APPROVED
   WITHDRAWAL_REJECTED
   WITHDRAWAL_MARKED_PROCESSING
   WITHDRAWAL_MARKED_PAID
+  WITHDRAWAL_COMPLETED
   WITHDRAWAL_MARKED_FAILED
   RISK_EVENT_REVIEWED
   RISK_EVENT_DISMISSED
@@ -100,6 +102,9 @@ enum GameMode {
 enum PaymentProvider {
   MANUAL
   MOCK
+  TELEBIRR_RECEIPT
+  TELEBIRR_OFFICIAL
+  MANUAL_BANK
   NOWPAYMENTS
   CHAPA
   STRIPE
@@ -108,16 +113,30 @@ enum PaymentProvider {
 
 enum DepositStatus {
   PENDING
+  VERIFYING
+  VERIFIED
+  CREDITED
+  REJECTED
+  NEEDS_MANUAL_REVIEW
   CONFIRMED
   FAILED
   EXPIRED
   CANCELLED
 }
 
+enum VerificationAttemptStatus {
+  ACCEPTED
+  REJECTED
+  NEEDS_MANUAL_REVIEW
+  FETCH_FAILED
+  PARSE_FAILED
+}
+
 enum WithdrawalStatus {
   PENDING_REVIEW
   APPROVED
   PROCESSING
+  COMPLETED
   PAID
   REJECTED
   FAILED
@@ -178,6 +197,7 @@ model User {
   walletAccounts      WalletAccount[]
   entries             Entry[]
   deposits            Deposit[]
+  depositIntents      DepositIntent[]
   withdrawals         Withdrawal[]    @relation("WithdrawalUser")
   reviewedWithdrawals Withdrawal[]    @relation("WithdrawalReviewedByAdmin")
   riskEvents          RiskEvent[]     @relation("RiskEventUser")
@@ -421,6 +441,64 @@ model Deposit {
   @@index([status, createdAt])
   @@index([provider, status, createdAt])
   @@map("deposits")
+}
+
+model DepositIntent {
+  id                    String          @id @default(cuid())
+  userId                String
+  provider              PaymentProvider
+  status                DepositStatus   @default(PENDING)
+  expectedAmount        Decimal         @db.Decimal(18, 2)
+  currency              String          @default("ETB")
+  receiverName          String?
+  receiverAccount       String?
+  receiverShortCode     String?
+  providerRef           String?         @unique
+  receiptNo             String?         @unique
+  creditedWalletEntryId String?
+  idempotencyKey        String?         @unique
+  rejectionReason       String?
+  reviewReason          String?
+  rawProviderHash       String?
+  verifiedAt            DateTime?
+  creditedAt            DateTime?
+  expiresAt             DateTime
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  user     User                         @relation(fields: [userId], references: [id])
+  attempts PaymentVerificationAttempt[]
+
+  @@index([userId, status])
+  @@index([provider, status])
+  @@index([createdAt])
+  @@map("deposit_intents")
+}
+
+model PaymentVerificationAttempt {
+  id              String                    @id @default(cuid())
+  depositIntentId String
+  provider        PaymentProvider
+  submittedValue  String
+  normalizedRef   String?
+  status          VerificationAttemptStatus
+  reason          String?
+  httpStatus      Int?
+  providerStatus  String?
+  parsedAmount    Decimal?                  @db.Decimal(18, 2)
+  parsedCurrency  String?
+  parsedReceiver  String?
+  parsedPayer     String?
+  parsedPaidAt    DateTime?
+  rawProviderHash String?
+  createdAt       DateTime                  @default(now())
+
+  depositIntent DepositIntent @relation(fields: [depositIntentId], references: [id])
+
+  @@index([depositIntentId])
+  @@index([normalizedRef])
+  @@index([createdAt])
+  @@map("payment_verification_attempts")
 }
 
 model Withdrawal {

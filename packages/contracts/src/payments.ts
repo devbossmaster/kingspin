@@ -4,6 +4,9 @@ import { BigIntStringSchema, IsoDateStringSchema } from "./common";
 export const PaymentProviderSchema = z.enum([
   "MANUAL",
   "MOCK",
+  "TELEBIRR_RECEIPT",
+  "TELEBIRR_OFFICIAL",
+  "MANUAL_BANK",
   "NOWPAYMENTS",
   "CHAPA",
   "STRIPE",
@@ -12,6 +15,11 @@ export const PaymentProviderSchema = z.enum([
 
 export const DepositStatusSchema = z.enum([
   "PENDING",
+  "VERIFYING",
+  "VERIFIED",
+  "CREDITED",
+  "REJECTED",
+  "NEEDS_MANUAL_REVIEW",
   "CONFIRMED",
   "FAILED",
   "EXPIRED",
@@ -22,19 +30,31 @@ export const WithdrawalStatusSchema = z.enum([
   "PENDING_REVIEW",
   "APPROVED",
   "PROCESSING",
+  "COMPLETED",
   "PAID",
   "REJECTED",
   "FAILED",
   "CANCELLED",
 ]);
 
+const DecimalAmountStringSchema = z
+  .string()
+  .trim()
+  .regex(/^\d+(?:\.\d{1,2})?$/, "amount must be a positive decimal string");
+
 export const CreateDepositSchema = z
   .object({
     provider: PaymentProviderSchema.default("MOCK"),
-    amount: z.number().int().positive(),
+    amount: z.union([z.number().int().positive(), DecimalAmountStringSchema]),
     currency: z.string().min(1).max(12).default("COIN"),
-    idempotencyKey: z.string().min(1).max(200),
+    idempotencyKey: z.string().min(1).max(200).optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
+  })
+  .strict();
+
+export const SubmitTelebirrReceiptSchema = z
+  .object({
+    receiptInput: z.string().trim().min(4).max(4000),
   })
   .strict();
 
@@ -55,13 +75,18 @@ export const DepositSnapshotSchema = z.object({
   provider: PaymentProviderSchema,
   providerReference: z.string().nullable(),
   amount: BigIntStringSchema,
+  expectedAmount: z.string().optional(),
   currency: z.string(),
   status: DepositStatusSchema,
-  idempotencyKey: z.string(),
+  idempotencyKey: z.string().nullable().optional(),
   metadata: z.unknown().nullable().optional(),
   createdAt: IsoDateStringSchema,
   updatedAt: IsoDateStringSchema,
   confirmedAt: IsoDateStringSchema.nullable(),
+  expiresAt: IsoDateStringSchema.nullable().optional(),
+  receiptNo: z.string().nullable().optional(),
+  rejectionReason: z.string().nullable().optional(),
+  reviewReason: z.string().nullable().optional(),
 });
 
 export const WithdrawalSnapshotSchema = z.object({
@@ -88,6 +113,9 @@ export type PaymentProvider = z.infer<typeof PaymentProviderSchema>;
 export type DepositStatus = z.infer<typeof DepositStatusSchema>;
 export type WithdrawalStatus = z.infer<typeof WithdrawalStatusSchema>;
 export type CreateDepositInput = z.infer<typeof CreateDepositSchema>;
+export type SubmitTelebirrReceiptInput = z.infer<
+  typeof SubmitTelebirrReceiptSchema
+>;
 export type CreateWithdrawalInput = z.infer<typeof CreateWithdrawalSchema>;
 export type DepositSnapshot = z.infer<typeof DepositSnapshotSchema>;
 export type WithdrawalSnapshot = z.infer<typeof WithdrawalSnapshotSchema>;

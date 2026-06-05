@@ -16,10 +16,11 @@ import type {
   PaymentProvider,
   WithdrawalSnapshot,
 } from "@kingspin/contracts";
+import { DepositCard } from "../../components/payments/deposit-card";
 import { GameShell } from "../../components/player/game-shell";
 import { Button } from "../../components/ui/button";
 import { useSession } from "../../lib/auth-client";
-import { apiClient } from "../../lib/api-client";
+import { apiClient, type CreateDepositResponse } from "../../lib/api-client";
 import { formatCoins, truncateId } from "../../lib/format";
 import { useAuthStore } from "../../stores/auth-store";
 
@@ -54,6 +55,14 @@ function parseAmount(value: FormDataEntryValue | null) {
   const amount = Number(value);
 
   return Number.isSafeInteger(amount) && amount > 0 ? amount : null;
+}
+
+function parseDecimalAmount(value: FormDataEntryValue | null) {
+  const amount = String(value ?? "").trim();
+
+  return /^\d+(?:\.\d{1,2})?$/.test(amount) && Number(amount) > 0
+    ? amount
+    : null;
 }
 
 function formatDate(value: string) {
@@ -119,6 +128,8 @@ export default function WalletPage() {
   const fetchWallet = useAuthStore((store) => store.fetchWallet);
   const [activeTab, setActiveTab] = useState<WalletTab>("deposit");
   const [deposits, setDeposits] = useState<DepositSnapshot[]>([]);
+  const [activeDepositIntent, setActiveDepositIntent] =
+    useState<CreateDepositResponse | null>(null);
   const [withdrawals, setWithdrawals] = useState<WithdrawalSnapshot[]>([]);
   const [transactions, setTransactions] = useState<LedgerTransactionSnapshot[]>(
     [],
@@ -178,10 +189,7 @@ export default function WalletPage() {
     setError(null);
 
     const formData = new FormData(event.currentTarget);
-    const amount = parseAmount(formData.get("amount"));
-    const provider = String(
-      formData.get("provider") ?? "MANUAL",
-    ) as PaymentProvider;
+    const amount = parseDecimalAmount(formData.get("amount"));
 
     if (!amount) {
       setError("Enter a valid deposit amount.");
@@ -191,18 +199,69 @@ export default function WalletPage() {
     setIsSubmitting(true);
 
     try {
-      await apiClient.createDeposit({
+      const result = await apiClient.createDeposit({
         amount,
-        provider,
-        currency: "COIN",
+        provider: "TELEBIRR_RECEIPT",
+        currency: "ETB",
         idempotencyKey: createIdempotencyKey("deposit"),
       });
       event.currentTarget.reset();
+      setActiveDepositIntent(result);
       setMessage("Deposit request created.");
       await refreshWallet();
     } catch (caught) {
       setError(
         caught instanceof Error ? caught.message : "Could not create deposit.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleTelebirrReceipt(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage(null);
+    setError(null);
+
+    const depositIntentId = activeDepositIntent?.deposit.id;
+    const formData = new FormData(event.currentTarget);
+    const receiptInput = String(formData.get("receiptInput") ?? "").trim();
+
+    if (!depositIntentId) {
+      setError("Create a deposit request first.");
+      return;
+    }
+
+    if (!receiptInput) {
+      setError("Paste the Telebirr receipt.");
+      return;
+    }
+
+    setIsSubmitting(true);
+
+    try {
+      const result = await apiClient.submitTelebirrReceipt(depositIntentId, {
+        receiptInput,
+      });
+
+      event.currentTarget.reset();
+      setActiveDepositIntent((current) =>
+        current
+          ? {
+              ...current,
+              deposit: result.deposit,
+            }
+          : null,
+      );
+      setMessage(
+        result.deposit.status === "CREDITED"
+          ? "Deposit credited."
+          : "Receipt submitted for review.",
+      );
+      await Promise.all([refreshWallet(), fetchWallet()]);
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Could not verify receipt.",
       );
     } finally {
       setIsSubmitting(false);
@@ -374,64 +433,95 @@ export default function WalletPage() {
             {activeTab === "deposit" ? (
               <section className="rounded-lg border border-white/10 bg-white/[0.045] p-4 md:p-5">
                 <h2 className="font-display text-lg font-black text-white">
-                  Deposit Funds
+                  Telebirr Deposit
                 </h2>
                 <form
-                  className="mt-4 grid gap-4 md:grid-cols-[1fr_12rem_auto]"
+                  className="mt-4 grid gap-4 md:grid-cols-[1fr_auto]"
                   onSubmit={handleDeposit}
                 >
                   <label>
-                    <span className={labelClass}>Amount</span>
+                    <span className={labelClass}>Amount ETB</span>
                     <input
                       className={inputClass}
                       name="amount"
-                      inputMode="numeric"
-                      placeholder="1000"
+                      inputMode="decimal"
+                      placeholder="500.00"
                     />
-                  </label>
-                  <label>
-                    <span className={labelClass}>Provider</span>
-                    <select
-                      className={inputClass}
-                      name="provider"
-                      defaultValue="MANUAL"
-                    >
-                      <option value="MANUAL">Manual</option>
-                      <option value="MOCK">Mock</option>
-                    </select>
                   </label>
                   <Button
                     type="submit"
                     disabled={isSubmitting}
                     className="mt-auto"
                   >
-                    {isSubmitting ? "Creating..." : "Create Deposit"}
+                    {isSubmitting ? "Creating..." : "Create Intent"}
                   </Button>
                 </form>
+
+                {activeDepositIntent?.instructions ? (
+                  <div className="mt-5 grid gap-3 rounded-lg border border-sky-300/25 bg-sky-400/10 p-4 text-sm font-semibold text-slate-200 md:grid-cols-2">
+                    <div>
+                      <p className={labelClass}>Pay</p>
+                      <p className="mt-1 font-mono text-xl font-black text-white">
+                        {activeDepositIntent.instructions.expectedAmount}{" "}
+                        {activeDepositIntent.instructions.currency}
+                      </p>
+                    </div>
+                    <div>
+                      <p className={labelClass}>Receiver</p>
+                      <p className="mt-1 text-white">
+                        {activeDepositIntent.instructions.receiverName ??
+                          "Configured merchant"}
+                      </p>
+                      <p className="mt-1 font-mono text-xs text-slate-400">
+                        {activeDepositIntent.instructions.receiverAccount ??
+                          activeDepositIntent.instructions.receiverShortCode ??
+                          "Merchant account"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className={labelClass}>Expires</p>
+                      <p className="mt-1 text-white">
+                        {formatDate(activeDepositIntent.instructions.expiresAt)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className={labelClass}>Intent</p>
+                      <p className="mt-1 font-mono text-xs text-slate-400">
+                        {truncateId(activeDepositIntent.deposit.id, 6)}
+                      </p>
+                    </div>
+                  </div>
+                ) : null}
+
+                {activeDepositIntent ? (
+                  <form
+                    className="mt-4 grid gap-4"
+                    onSubmit={handleTelebirrReceipt}
+                  >
+                    <label>
+                      <span className={labelClass}>Receipt</span>
+                      <textarea
+                        className={`${inputClass} min-h-28 resize-y`}
+                        name="receiptInput"
+                        placeholder="Receipt URL, receipt number, or full 127 SMS"
+                      />
+                    </label>
+                    <Button type="submit" disabled={isSubmitting}>
+                      {isSubmitting ? "Verifying..." : "Submit Receipt"}
+                    </Button>
+                  </form>
+                ) : null}
 
                 <div className="mt-5 grid gap-2">
                   {deposits.length === 0 ? (
                     <EmptyState label="No deposits yet." />
                   ) : (
                     deposits.map((deposit) => (
-                      <div
+                      <DepositCard
                         key={deposit.id}
-                        className="grid gap-3 rounded-lg border border-white/10 bg-black/25 p-3 sm:grid-cols-[minmax(0,1fr)_auto_auto]"
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm font-black text-white">
-                            {titleCase(deposit.provider)} deposit
-                          </p>
-                          <p className="mt-1 text-xs font-semibold text-slate-500">
-                            {formatDate(deposit.createdAt)} /{" "}
-                            {truncateId(deposit.id, 5)}
-                          </p>
-                        </div>
-                        <StatusBadge status={deposit.status} />
-                        <p className="font-mono text-sm font-black text-lime-300">
-                          +{formatCoins(deposit.amount)}
-                        </p>
-                      </div>
+                        deposit={deposit}
+                        formatAmount={formatCoins}
+                      />
                     ))
                   )}
                 </div>

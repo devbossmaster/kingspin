@@ -13,6 +13,7 @@ import type {
   RoomLiveState,
   WalletSnapshot,
   WithdrawalSnapshot,
+  SubmitTelebirrReceiptInput,
 } from "@kingspin/contracts";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -76,6 +77,22 @@ export type PlaceEntryResponse = {
 export type CreateDepositResponse = {
   deposit: DepositSnapshot;
   checkoutUrl?: string | null;
+  instructions?: {
+    depositIntentId: string;
+    expectedAmount: string;
+    currency: string;
+    receiverName: string | null;
+    receiverAccount: string | null;
+    receiverShortCode: string | null;
+    expiresAt: string;
+  };
+  reused: boolean;
+};
+
+export type SubmitTelebirrReceiptResponse = {
+  deposit: DepositSnapshot;
+  wallet?: WalletSnapshot;
+  transaction?: LedgerTransactionSnapshot;
   reused: boolean;
 };
 
@@ -244,6 +261,20 @@ export const apiClient = {
     return requestJson<DepositSnapshot[]>("/payments/deposits");
   },
 
+  getDepositStatus(id: string) {
+    return requestJson<DepositSnapshot>(`/payments/deposits/${id}`);
+  },
+
+  submitTelebirrReceipt(id: string, input: SubmitTelebirrReceiptInput) {
+    return requestJson<SubmitTelebirrReceiptResponse>(
+      `/payments/deposits/${id}/telebirr-receipt`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+  },
+
   requestWithdrawal(input: CreateWithdrawalInput) {
     return requestJson<CreateWithdrawalResponse>("/payments/withdrawals", {
       method: "POST",
@@ -318,9 +349,17 @@ export const apiClient = {
       return requestJson("/admin/payments/deposits");
     },
 
-    approveDeposit(id: string) {
+    approveDeposit(id: string, adminNote: string) {
       return requestJson(`/admin/payments/deposits/${id}/approve`, {
-        method: "PATCH",
+        method: "POST",
+        body: JSON.stringify({ adminNote }),
+      });
+    },
+
+    rejectDeposit(id: string, reason: string) {
+      return requestJson(`/admin/payments/deposits/${id}/reject`, {
+        method: "POST",
+        body: JSON.stringify({ reason }),
       });
     },
 
@@ -338,6 +377,13 @@ export const apiClient = {
       return requestJson(`/admin/payments/withdrawals/${id}/reject`, {
         method: "PATCH",
         body: JSON.stringify({ reason }),
+      });
+    },
+
+    completeWithdrawal(id: string, externalReference: string) {
+      return requestJson(`/admin/payments/withdrawals/${id}/complete`, {
+        method: "POST",
+        body: JSON.stringify({ externalReference }),
       });
     },
 

@@ -1,10 +1,11 @@
-import { Injectable } from "@nestjs/common";
-import { PaymentProvider } from "@kingspin/db";
-import { getApiEnv } from "../../config/api-env";
-import { ManualPaymentProvider } from "./providers/manual-payment.provider";
-import { MockPaymentProvider } from "./providers/mock-payment.provider";
-import type { PaymentGatewayProvider } from "./providers/payment-gateway.provider";
-import { StubPaymentProvider } from "./providers/stub-payment.provider";
+import { Injectable } from '@nestjs/common';
+import { PaymentProvider } from '@kingspin/db';
+import { getApiEnv } from '../../config/api-env';
+import { ManualPaymentProvider } from './providers/manual-payment.provider';
+import { MockPaymentProvider } from './providers/mock-payment.provider';
+import type { PaymentGatewayProvider } from './providers/payment-gateway.provider';
+import { StubPaymentProvider } from './providers/stub-payment.provider';
+import { TelebirrReceiptProvider } from './providers/telebirr-receipt/telebirr-receipt.provider';
 
 @Injectable()
 export class PaymentsProviderRegistry {
@@ -13,6 +14,7 @@ export class PaymentsProviderRegistry {
   constructor(
     private readonly manualProvider: ManualPaymentProvider,
     private readonly mockProvider: MockPaymentProvider,
+    private readonly telebirrReceiptProvider: TelebirrReceiptProvider,
   ) {}
 
   getDefaultProvider() {
@@ -22,7 +24,7 @@ export class PaymentsProviderRegistry {
       return configured;
     }
 
-    return getApiEnv().APP_ENV === "local"
+    return getApiEnv().APP_ENV === 'local'
       ? PaymentProvider.MOCK
       : PaymentProvider.MANUAL;
   }
@@ -34,6 +36,10 @@ export class PaymentsProviderRegistry {
 
     if (provider === PaymentProvider.MOCK) {
       return this.mockProvider;
+    }
+
+    if (provider === PaymentProvider.TELEBIRR_RECEIPT) {
+      return this.manualProvider;
     }
 
     const existing = this.stubs.get(provider);
@@ -52,7 +58,10 @@ export class PaymentsProviderRegistry {
     return Object.values(PaymentProvider).map((provider) => ({
       provider,
       configured:
-        provider === PaymentProvider.MANUAL || provider === PaymentProvider.MOCK,
+        provider === PaymentProvider.MANUAL ||
+        provider === PaymentProvider.MOCK ||
+        (provider === PaymentProvider.TELEBIRR_RECEIPT &&
+          this.telebirrReceiptProvider.getConfig().enabled),
       default: provider === this.getDefaultProvider(),
     }));
   }

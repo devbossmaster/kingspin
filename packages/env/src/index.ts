@@ -36,6 +36,7 @@ const OptionalUrlSchema = z.preprocess((value) => {
 
 const LogLevelSchema = z.enum(["debug", "info", "warn", "error"]);
 const AppEnvSchema = z.enum(["local", "staging", "production"]);
+const TELEBIRR_RECEIPT_HOSTNAME = "transactioninfo.ethiotelecom.et";
 
 type AppEnv = z.infer<typeof AppEnvSchema>;
 
@@ -154,8 +155,43 @@ const ApiEnvBaseSchema = z
     ENABLE_REDIS: BooleanStringSchema.default(false),
     REDIS_URL: OptionalStringSchema,
     PAYMENT_PROVIDER: z
-      .enum(["MANUAL", "MOCK", "NOWPAYMENTS", "CHAPA", "STRIPE", "CUSTOM"])
+      .enum([
+        "MANUAL",
+        "MOCK",
+        "TELEBIRR_RECEIPT",
+        "TELEBIRR_OFFICIAL",
+        "MANUAL_BANK",
+        "NOWPAYMENTS",
+        "CHAPA",
+        "STRIPE",
+        "CUSTOM",
+      ])
       .default("MOCK"),
+    TELEBIRR_RECEIPT_VERIFICATION_ENABLED: BooleanStringSchema.default(false),
+    TELEBIRR_RECEIPT_BASE_URL: z
+      .string()
+      .url()
+      .default(`https://${TELEBIRR_RECEIPT_HOSTNAME}/receipt`),
+    TELEBIRR_EXPECTED_RECEIVER_NAME: OptionalStringSchema,
+    TELEBIRR_EXPECTED_RECEIVER_ACCOUNT: OptionalStringSchema,
+    TELEBIRR_EXPECTED_SHORT_CODE: OptionalStringSchema,
+    TELEBIRR_DEPOSIT_MIN: z.coerce.number().positive().default(10),
+    TELEBIRR_DEPOSIT_MAX: z.coerce.number().positive().default(10_000),
+    TELEBIRR_DEPOSIT_INTENT_TTL_MINUTES: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(15),
+    TELEBIRR_RECEIPT_HTTP_TIMEOUT_MS: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(8_000),
+    TELEBIRR_RECEIPT_MAX_HTML_BYTES: z.coerce
+      .number()
+      .int()
+      .positive()
+      .default(200_000),
     BETTER_AUTH_SECRET: OptionalStringSchema,
     BETTER_AUTH_URL: OptionalUrlSchema,
     RESEND_API_KEY: OptionalStringSchema,
@@ -218,6 +254,76 @@ export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
       path: ["PAYMENT_PROVIDER"],
       message:
         "PAYMENT_PROVIDER=MOCK is local-only. Use MANUAL or a configured real adapter stub in production.",
+    });
+  }
+
+  const telebirrReceiptUrl = new URL(env.TELEBIRR_RECEIPT_BASE_URL);
+
+  if (telebirrReceiptUrl.protocol !== "https:") {
+    context.addIssue({
+      code: "custom",
+      path: ["TELEBIRR_RECEIPT_BASE_URL"],
+      message: "TELEBIRR_RECEIPT_BASE_URL must use HTTPS.",
+    });
+  }
+
+  if (
+    env.APP_ENV !== "local" &&
+    telebirrReceiptUrl.hostname !== TELEBIRR_RECEIPT_HOSTNAME
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["TELEBIRR_RECEIPT_BASE_URL"],
+      message:
+        "TELEBIRR_RECEIPT_BASE_URL must use transactioninfo.ethiotelecom.et outside local development.",
+    });
+  }
+
+  if (env.TELEBIRR_DEPOSIT_MAX <= env.TELEBIRR_DEPOSIT_MIN) {
+    context.addIssue({
+      code: "custom",
+      path: ["TELEBIRR_DEPOSIT_MAX"],
+      message:
+        "TELEBIRR_DEPOSIT_MAX must be greater than TELEBIRR_DEPOSIT_MIN.",
+    });
+  }
+
+  if (
+    env.TELEBIRR_RECEIPT_HTTP_TIMEOUT_MS < 1_000 ||
+    env.TELEBIRR_RECEIPT_HTTP_TIMEOUT_MS > 30_000
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["TELEBIRR_RECEIPT_HTTP_TIMEOUT_MS"],
+      message:
+        "TELEBIRR_RECEIPT_HTTP_TIMEOUT_MS must be between 1000 and 30000.",
+    });
+  }
+
+  if (
+    env.TELEBIRR_RECEIPT_MAX_HTML_BYTES < 10_000 ||
+    env.TELEBIRR_RECEIPT_MAX_HTML_BYTES > 1_000_000
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["TELEBIRR_RECEIPT_MAX_HTML_BYTES"],
+      message:
+        "TELEBIRR_RECEIPT_MAX_HTML_BYTES must be between 10000 and 1000000.",
+    });
+  }
+
+  if (
+    env.APP_ENV === "production" &&
+    env.TELEBIRR_RECEIPT_VERIFICATION_ENABLED &&
+    !env.TELEBIRR_EXPECTED_RECEIVER_NAME &&
+    !env.TELEBIRR_EXPECTED_RECEIVER_ACCOUNT &&
+    !env.TELEBIRR_EXPECTED_SHORT_CODE
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["TELEBIRR_EXPECTED_RECEIVER_NAME"],
+      message:
+        "At least one Telebirr receiver identity field is required in production when receipt verification is enabled.",
     });
   }
 
@@ -313,7 +419,8 @@ export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
     context.addIssue({
       code: "custom",
       path: ["ENABLE_LOCAL_DEV_AUTH"],
-      message: "ENABLE_LOCAL_DEV_AUTH must be disabled outside local development.",
+      message:
+        "ENABLE_LOCAL_DEV_AUTH must be disabled outside local development.",
     });
   }
 });

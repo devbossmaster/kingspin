@@ -30,6 +30,9 @@ money-ready architecture. It is not a real-money production certification.
 - `ROUND_MACHINE_AUTO_START=true` only on the intended machine process. On API
   boot this starts every `ACTIVE` permanent room machine; empty and single-player
   rounds are cancelled/refunded by the server lifecycle instead of drawing.
+- Confirm `GET /health/round-machine` reports `roundMachine.enabled=true`,
+  running permanent room machines, Redis availability, and zero stale
+  completed/current rounds before opening traffic.
 - `ENABLE_REDIS=true` and `REDIS_URL` set. Production API startup must not fall
   back to in-memory rate limiting or fraud counters.
 - Browser clients fetch `GET /csrf` with credentials before mutating
@@ -83,6 +86,9 @@ chat, logs, or a ticket.
 ## Realtime And Redis
 
 - Production API requires Redis; confirm `/health/redis` before entry testing.
+- Confirm `/health/round-machine` before entry testing. Treat
+  `status: "degraded"`, `staleCompletedOrCurrent > 0`, or active permanent
+  rooms with `runningPermanent=0` as a release blocker.
 - Socket.IO Redis adapter should be healthy before multiple API instances.
 - Live-state cache keys must remain room-specific and short-lived.
 - Invalidate room live-state after entry placement and every round transition.
@@ -90,6 +96,9 @@ chat, logs, or a ticket.
 - Presence keys must be room-specific and TTL-backed.
 - Redis outages must fail closed for sensitive rate-limit, fraud, and locking
   paths without corrupting money state.
+- Round machine warning logs should be monitored:
+  `[round-machine-stuck:*]`, `[round-machine-skip:*]`, and
+  `[round-machine-tick-failed:*]`.
 
 ## Worker Operations
 
@@ -123,7 +132,8 @@ Manual smoke checks:
 - Sign in as a normal user.
 - Enter an OPEN round and confirm wallet, entry, live-state, and ledger agree.
 - Confirm locked/completed rounds reject entry without wallet debit.
-- Confirm `/health/db`, `/health/redis`, and realtime health endpoints.
+- Confirm `/health/db`, `/health/redis`, `/health/realtime`, and
+  `/health/round-machine` endpoints.
 - Confirm admin dashboard requires an admin role.
 - Confirm admin room mutation writes an audit log.
 - Confirm mock/manual deposit approval is unavailable or tightly guarded in

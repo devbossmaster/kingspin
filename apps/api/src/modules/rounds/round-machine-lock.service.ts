@@ -1,13 +1,13 @@
-import { Injectable, Logger, Optional } from "@nestjs/common";
-import { getApiEnv } from "../../config/api-env";
-import { PrismaService } from "../../prisma/prisma.service";
-import { RealtimeMetricsService } from "../redis/realtime-metrics.service";
-import { RedisService } from "../redis/redis.service";
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { getApiEnv } from '../../config/api-env';
+import { PrismaService } from '../../prisma/prisma.service';
+import { RealtimeMetricsService } from '../redis/realtime-metrics.service';
+import { RedisService } from '../redis/redis.service';
 
 export type RoundMachineLockSkipReason =
-  | "PROCESS_LOCKED"
-  | "DATABASE_LOCKED"
-  | "REDIS_LOCKED";
+  | 'PROCESS_LOCKED'
+  | 'DATABASE_LOCKED'
+  | 'REDIS_LOCKED';
 
 export type RoundMachineLockResult<T> =
   | {
@@ -31,6 +31,18 @@ export class RoundMachineLockService {
     @Optional() private readonly metrics?: RealtimeMetricsService,
   ) {}
 
+  getLeadershipSnapshot() {
+    const env = getApiEnv();
+    const redisAvailable = this.redisService?.isAvailable() === true;
+
+    return {
+      mode: redisAvailable ? 'redis' : 'process',
+      redisRequired: env.APP_ENV === 'production',
+      redisAvailable,
+      processLockedRooms: this.activeRooms.size,
+    };
+  }
+
   async withRoomTickLock<T>(
     roomId: string,
     work: () => Promise<T>,
@@ -38,7 +50,7 @@ export class RoundMachineLockService {
     if (this.activeRooms.has(roomId)) {
       return {
         acquired: false,
-        reason: "PROCESS_LOCKED",
+        reason: 'PROCESS_LOCKED',
       };
     }
 
@@ -61,10 +73,10 @@ export class RoundMachineLockService {
       const redisLock = await this.tryAcquireRedisLeadership(roomId);
 
       if (this.redisService?.isAvailable() && !redisLock) {
-        this.metrics?.increment("redisLockContentionCount");
+        this.metrics?.increment('redisLockContentionCount');
         return {
           acquired: false,
-          reason: "REDIS_LOCKED",
+          reason: 'REDIS_LOCKED',
         };
       }
 
@@ -79,7 +91,7 @@ export class RoundMachineLockService {
           if (!acquiredDatabaseLeadership) {
             return {
               acquired: false,
-              reason: "DATABASE_LOCKED",
+              reason: 'DATABASE_LOCKED',
             };
           }
         }
@@ -102,9 +114,9 @@ export class RoundMachineLockService {
     const env = getApiEnv();
 
     if (!this.redisService?.isAvailable()) {
-      if (env.APP_ENV === "production") {
+      if (env.APP_ENV === 'production') {
         throw new Error(
-          "Round machine Redis locking is required in production before horizontal scaling.",
+          'Round machine Redis locking is required in production before horizontal scaling.',
         );
       }
 
@@ -117,7 +129,7 @@ export class RoundMachineLockService {
     );
 
     if (lock) {
-      this.metrics?.increment("redisLockAcquiredCount");
+      this.metrics?.increment('redisLockAcquiredCount');
     }
 
     return lock;
@@ -130,7 +142,7 @@ export class RoundMachineLockService {
      * Keep local/dev fast. Supabase pooler pressure is currently hurting the
      * player entry path more than this advisory check helps.
      */
-    if (env.APP_ENV !== "production") {
+    if (env.APP_ENV !== 'production') {
       return false;
     }
 
@@ -142,13 +154,13 @@ export class RoundMachineLockService {
     return false;
   }
 
-  private async tryAcquireDatabaseLeadership(
-    roomId: string,
-  ): Promise<boolean> {
+  private async tryAcquireDatabaseLeadership(roomId: string): Promise<boolean> {
     const lockKey = `round-machine:${roomId}`;
 
     try {
-      const lockResult = await this.prisma.$queryRaw<Array<{ locked: boolean }>>`
+      const lockResult = await this.prisma.$queryRaw<
+        Array<{ locked: boolean }>
+      >`
         SELECT pg_try_advisory_xact_lock(hashtext(${lockKey})::bigint)::boolean AS locked
       `;
 
@@ -156,7 +168,7 @@ export class RoundMachineLockService {
     } catch (error) {
       const env = getApiEnv();
       const message =
-        error instanceof Error ? error.message : "Unknown advisory lock error";
+        error instanceof Error ? error.message : 'Unknown advisory lock error';
 
       this.logger.warn(
         `Round machine advisory leadership unavailable for room ${roomId}; skipping DB leadership in ${env.APP_ENV}: ${message}`,
@@ -169,14 +181,14 @@ export class RoundMachineLockService {
   private logProductionPolicy() {
     const env = getApiEnv();
 
-    if (env.APP_ENV !== "production" || this.hasLoggedProductionPolicy) {
+    if (env.APP_ENV !== 'production' || this.hasLoggedProductionPolicy) {
       return;
     }
 
     this.hasLoggedProductionPolicy = true;
 
     this.logger.warn(
-      "Round machine requires Redis locking before production horizontal scaling. Set ENABLE_REDIS=true and REDIS_URL for distributed leadership.",
+      'Round machine requires Redis locking before production horizontal scaling. Set ENABLE_REDIS=true and REDIS_URL for distributed leadership.',
     );
   }
 }

@@ -13,6 +13,10 @@ not mean KingSpin / SpinPro is real-money ready.
   local development.
 - `ENABLE_REDIS=true` and `REDIS_URL` are set; production startup does not use
   in-memory rate limits or fraud counters.
+- `ROUND_MACHINE_AUTO_START=true` on the API process that owns permanent room
+  lifecycle startup.
+- `GET /health/round-machine` reports enabled/running machines, Redis
+  availability, and zero stale completed/current rounds.
 - Admin development key routes reject outside local development.
 - Normal player UI has no `playerKey`, `userId`, wallet id, role, or balance
   fields in entry requests.
@@ -50,6 +54,8 @@ not mean KingSpin / SpinPro is real-money ready.
   - `fixed-50` / `FIX-50` / fixed / 50
 - Confirm each seeded room is `ACTIVE`, `isPermanent=true`, and has an active
   round or a running round machine.
+- Confirm `/health/round-machine` shows each active permanent room covered by a
+  running machine before game-flow testing.
 - Pro 10-100 accepts 10, 50, and 100.
 - Pro rejects 9 and 101.
 - Pro top-up works only while the round is `OPEN`.
@@ -60,6 +66,10 @@ not mean KingSpin / SpinPro is real-money ready.
 ## Realtime And Workers
 
 - With production env, confirm `/health/redis` succeeds before entry testing.
+- With production env, confirm `/health/round-machine` returns `status: "ok"`
+  before entry testing. If it is degraded, check for stopped machines, stale
+  completed rounds past cooldown, stale locked/drawing/spinning rounds, Redis
+  lock contention, or tick failure logs.
 - With `ENABLE_REDIS=true` and `REDIS_URL`, confirm Socket.IO adapter,
   live-state invalidation, Redis cache, and Redis lock logs show healthy
   operation.

@@ -53,6 +53,7 @@ function buildService(args?: {
         status: RoomStatus.ACTIVE,
         roundDurationMs: 45_000,
       }),
+      count: jest.fn().mockResolvedValue(1),
       findMany: jest.fn(),
     },
     round: {
@@ -173,6 +174,12 @@ function buildService(args?: {
   };
 
   const roundMachineLockService = {
+    getLeadershipSnapshot: jest.fn().mockReturnValue({
+      mode: 'process',
+      redisRequired: false,
+      redisAvailable: false,
+      processLockedRooms: 0,
+    }),
     withRoomTickLock: jest.fn(
       async (_roomId: string, work: () => Promise<Record<string, unknown>>) => {
         if (args?.lockResult) {
@@ -429,6 +436,59 @@ describe('RoundMachineService', () => {
     );
 
     service.onModuleDestroy();
+  });
+
+  it('reports and logs stale completed permanent rooms without opening rounds', async () => {
+    jest.useFakeTimers().setSystemTime(now);
+    process.env.APP_ENV = 'local';
+    process.env.ROUND_MACHINE_AUTO_START = 'true';
+    resetApiEnvForTesting();
+
+    const staleCompletedRound = buildRound({
+      status: RoundStatus.COMPLETED,
+      completedAt: new Date('2026-05-26T11:59:00.000Z'),
+      locksAt: null,
+    });
+    const { service, prisma, roundsService } = buildService();
+    const warnSpy = jest
+      .spyOn((service as any).logger, 'warn')
+      .mockImplementation(() => undefined);
+
+    prisma.room.findMany.mockResolvedValueOnce([
+      {
+        id: 'room-1',
+        code: 'PRO-A',
+        rounds: [staleCompletedRound],
+      },
+    ]);
+
+    const snapshot = await service.getRoundMachineHealthSnapshot({
+      logWarnings: true,
+    });
+
+    expect(roundsService.startOpenRoundForRoom).not.toHaveBeenCalled();
+    expect(snapshot).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        rooms: expect.objectContaining({
+          active: 1,
+          activePermanent: 1,
+        }),
+        staleRounds: expect.objectContaining({
+          completedPastCooldown: 1,
+          activePermanentRoomsStaleWithoutCurrentRound: 1,
+          staleCompletedOrCurrent: 1,
+        }),
+      }),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('reason=COMPLETED_PAST_COOLDOWN'),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('reason=NO_CURRENT_ACTIVE_ROUND'),
+    );
+
+    warnSpy.mockRestore();
   });
 
   it('schedules an immediate follow-up when an OPEN deadline is already past', () => {

@@ -176,6 +176,40 @@ instead of falling back to in-memory rate limits. Local development and tests ca
 still run without Redis for single-instance workflows. Postgres remains the
 source of truth for money, entries, rounds, payouts, and winners.
 
+## Round Machine Operations
+
+Coolify starts the round machine through the API service start command:
+`pnpm --filter api start:prod`. When `ROUND_MACHINE_AUTO_START=true`, API boot
+finds every `ACTIVE` permanent room and starts its server-side room machine. No
+frontend route, browser timer, or separate worker process creates the next
+round.
+
+Multiple API instances are safe only when Redis is enabled and healthy. Redis is
+the distributed room tick lock; Postgres advisory locking and unique round
+constraints still protect the actual open-round creation path. If Redis is not
+available in production, the API should be treated as unhealthy for room
+lifecycle operations.
+
+After deployment, check:
+
+```bash
+curl https://api.example.com/health/round-machine
+```
+
+Expected:
+
+- `roundMachine.enabled` is `true`.
+- `roundMachine.rooms.activePermanent` is the number of seeded permanent rooms.
+- `roundMachine.rooms.runningPermanent` matches the active permanent room count.
+- `roundMachine.staleRounds.staleCompletedOrCurrent` is `0`.
+- `redis.available` is `true` in staging/production.
+
+If the endpoint returns `status: "degraded"` or stale counts are non-zero,
+inspect API logs for `[round-machine-stuck:*]`,
+`[round-machine-skip:*]`, and `[round-machine-tick-failed:*]` entries before
+manually intervening. Do not create fake frontend rounds or manually duplicate
+open rounds.
+
 ## Smoke Test
 
 After deploying both services and running migrations manually, run:
@@ -194,6 +228,8 @@ Expected results:
 
 - `/health` returns ok.
 - `/health/db` returns database ok.
+- `/health/round-machine` reports the round machine enabled, running for active
+  permanent rooms, and no stale completed/current rounds.
 - `/categories` returns an array.
 - anonymous `/me` returns 401.
 - web home returns 2xx.

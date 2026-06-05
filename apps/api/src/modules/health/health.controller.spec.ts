@@ -1,10 +1,10 @@
-import { INestApplication } from "@nestjs/common";
-import { Test } from "@nestjs/testing";
-import request from "supertest";
-import { HealthController } from "./health.controller";
-import { HealthService } from "./health.service";
+import { INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import { HealthController } from './health.controller';
+import { HealthService } from './health.service';
 
-describe("HealthController", () => {
+describe('HealthController', () => {
   let app: INestApplication;
 
   beforeEach(async () => {
@@ -15,20 +15,24 @@ describe("HealthController", () => {
           provide: HealthService,
           useValue: {
             getHealth: jest.fn().mockReturnValue({
-              status: "ok",
-              service: "kingspin-api",
+              status: 'ok',
+              service: 'kingspin-api',
             }),
             getDbHealth: jest.fn().mockResolvedValue({
-              status: "ok",
-              database: { status: "ok" },
+              status: 'ok',
+              database: { status: 'ok' },
             }),
             getRedisHealth: jest.fn().mockResolvedValue({
-              status: "ok",
+              status: 'ok',
               redis: { enabled: false, available: false },
             }),
             getRealtimeHealth: jest.fn().mockResolvedValue({
-              status: "ok",
+              status: 'ok',
               metrics: {},
+            }),
+            getRoundMachineHealth: jest.fn().mockResolvedValue({
+              status: 'ok',
+              roundMachine: { enabled: true },
             }),
           },
         },
@@ -43,33 +47,40 @@ describe("HealthController", () => {
     await app.close();
   });
 
-  it("serves GET /health", async () => {
+  it('serves GET /health', async () => {
+    await request(app.getHttpServer()).get('/health').expect(200).expect({
+      status: 'ok',
+      service: 'kingspin-api',
+    });
+  });
+
+  it('serves GET /health/db', async () => {
     await request(app.getHttpServer())
-      .get("/health")
+      .get('/health/db')
       .expect(200)
       .expect({
-        status: "ok",
-        service: "kingspin-api",
+        status: 'ok',
+        database: { status: 'ok' },
       });
   });
 
-  it("serves GET /health/db", async () => {
+  it('serves GET /health/realtime', async () => {
     await request(app.getHttpServer())
-      .get("/health/db")
+      .get('/health/realtime')
       .expect(200)
       .expect({
-        status: "ok",
-        database: { status: "ok" },
-      });
-  });
-
-  it("serves GET /health/realtime", async () => {
-    await request(app.getHttpServer())
-      .get("/health/realtime")
-      .expect(200)
-      .expect({
-        status: "ok",
+        status: 'ok',
         metrics: {},
+      });
+  });
+
+  it('serves GET /health/round-machine', async () => {
+    await request(app.getHttpServer())
+      .get('/health/round-machine')
+      .expect(200)
+      .expect({
+        status: 'ok',
+        roundMachine: { enabled: true },
       });
   });
 });

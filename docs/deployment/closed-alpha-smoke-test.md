@@ -10,6 +10,8 @@ closed-alpha validation only.
 - Web URL: `https://your-domain.com`
 - API health: open `https://api.your-domain.com/health`
 - DB health: open `https://api.your-domain.com/health/db`
+- Round machine health: open
+  `https://api.your-domain.com/health/round-machine`
 - Migration status:
 
 ```bash
@@ -21,6 +23,13 @@ pnpm --filter @kingspin/db migrate:status
     set, `/health/redis` succeeds, and API logs show the Socket.IO Redis adapter
     enabled.
   - `ENABLE_REDIS=false` is for local/test single-instance workflows only.
+- Round machine status:
+  - Confirm `roundMachine.enabled=true`.
+  - Confirm active permanent rooms have running machines.
+  - Confirm `roundMachine.staleRounds.staleCompletedOrCurrent=0`.
+  - If stale counts are non-zero, inspect API logs for
+    `[round-machine-stuck:*]`, `[round-machine-skip:*]`, or
+    `[round-machine-tick-failed:*]` before continuing.
 
 Automated smoke check:
 
@@ -75,13 +84,18 @@ Expected:
    - `round:settled`
 8. Wait for round lock/draw/spin/settle.
 9. Confirm winner reveal displays.
-10. Confirm latest-result fairness proof passes.
-11. Confirm payout appears for the winner.
+10. Wait for the reveal cooldown to end.
+11. Confirm the room automatically switches to a fresh backend `OPEN` round.
+12. Place an entry in the new round.
+13. Confirm latest-result fairness proof passes.
+14. Confirm payout appears for the winner.
 
 Expected:
 
 - Round timing, entries, ticket ranges, winner, spin angle, settlement, and
   wallet movement come from the backend.
+- The next round is opened by the backend room machine, not by frontend fake
+  state.
 - Socket reconnect refreshes live room state.
 
 ## 5. Idempotency

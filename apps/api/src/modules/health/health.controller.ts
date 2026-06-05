@@ -1,7 +1,7 @@
-import { Controller, Get } from "@nestjs/common";
-import { HealthService } from "./health.service";
+import { Controller, Get } from '@nestjs/common';
+import { HealthService } from './health.service';
 
-@Controller("health")
+@Controller('health')
 export class HealthController {
   constructor(private readonly healthService: HealthService) {}
 
@@ -10,18 +10,23 @@ export class HealthController {
     return this.healthService.getHealth();
   }
 
-  @Get("db")
+  @Get('db')
   getDbHealth() {
     return this.healthService.getDbHealth();
   }
 
-  @Get("redis")
+  @Get('redis')
   getRedisHealth() {
     return this.healthService.getRedisHealth();
   }
 
-  @Get("realtime")
+  @Get('realtime')
   getRealtimeHealth() {
     return this.healthService.getRealtimeHealth();
+  }
+
+  @Get('round-machine')
+  getRoundMachineHealth() {
+    return this.healthService.getRoundMachineHealth();
   }
 }

@@ -25,7 +25,12 @@ describe('AuthBridgeService', () => {
     process.env = originalEnv;
   });
 
-  function buildPrisma(user: { id: string } | null = { id: 'user-1' }) {
+  function buildPrisma(
+    user: { id: string; emailVerified: boolean } | null = {
+      id: 'user-1',
+      emailVerified: true,
+    },
+  ) {
     return {
       user: {
         findUnique: jest.fn().mockResolvedValue(user),
@@ -33,7 +38,12 @@ describe('AuthBridgeService', () => {
     };
   }
 
-  function buildService(user: { id: string } | null = { id: 'user-1' }) {
+  function buildService(
+    user: { id: string; emailVerified: boolean } | null = {
+      id: 'user-1',
+      emailVerified: true,
+    },
+  ) {
     const prisma = buildPrisma(user);
 
     return {
@@ -91,7 +101,10 @@ describe('AuthBridgeService', () => {
   });
 
   it('accepts x-dev-user-id only in local dev when the user exists', async () => {
-    const { service, prisma } = buildService({ id: 'user-1' });
+    const { service, prisma } = buildService({
+      id: 'user-1',
+      emailVerified: true,
+    });
 
     process.env.NODE_ENV = 'development';
     process.env.APP_ENV = 'local';
@@ -105,7 +118,7 @@ describe('AuthBridgeService', () => {
 
     expect(prisma.user.findUnique).toHaveBeenCalledWith({
       where: { id: 'user-1' },
-      select: { id: true },
+      select: { id: true, emailVerified: true },
     });
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('LOCAL DEVELOPMENT AUTH BYPASS ENABLED'),
@@ -126,8 +139,28 @@ describe('AuthBridgeService', () => {
     ).resolves.toBeNull();
   });
 
+  it('rejects x-dev-user-id for an unverified local user', async () => {
+    const { service } = buildService({
+      id: 'user-1',
+      emailVerified: false,
+    });
+
+    process.env.NODE_ENV = 'development';
+    process.env.APP_ENV = 'local';
+    process.env.ENABLE_LOCAL_DEV_AUTH = 'true';
+
+    await expect(
+      service.validateRequest({
+        headers: { 'x-dev-user-id': 'user-1' },
+      }),
+    ).resolves.toBeNull();
+  });
+
   it('does not accept x-dev-user-id in staging', async () => {
-    const { service, prisma } = buildService({ id: 'user-1' });
+    const { service, prisma } = buildService({
+      id: 'user-1',
+      emailVerified: true,
+    });
 
     setStagingEnv();
 
@@ -140,7 +173,10 @@ describe('AuthBridgeService', () => {
   });
 
   it('does not accept x-dev-user-id in production', async () => {
-    const { service, prisma } = buildService({ id: 'user-1' });
+    const { service, prisma } = buildService({
+      id: 'user-1',
+      emailVerified: true,
+    });
 
     setProductionEnv();
 
@@ -157,7 +193,10 @@ describe('AuthBridgeService', () => {
     const fetchMock = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: () => Promise.resolve({ user: { id: 'user-1' } }),
+      json: () =>
+        Promise.resolve({
+          user: { id: 'user-1', emailVerified: true },
+        }),
     });
 
     setProductionEnv();
@@ -188,6 +227,27 @@ describe('AuthBridgeService', () => {
       'user-agent': 'jest',
       'x-forwarded-for': '203.0.113.10',
     });
+  });
+
+  it('rejects a Better Auth session for an unverified user', async () => {
+    const { service } = buildService();
+    const fetchMock = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          user: { id: 'user-1', emailVerified: false },
+        }),
+    });
+
+    setProductionEnv();
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      service.validateRequest({
+        headers: { cookie: 'better-auth.session_token=signed-token' },
+      }),
+    ).resolves.toBeNull();
   });
 
   it('fails closed when Better Auth session validation is unavailable', async () => {

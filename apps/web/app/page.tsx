@@ -359,7 +359,7 @@ export default function SpinBattleHomePage() {
   const gameHref = !session?.user
     ? `/sign-in?callbackURL=${encodeURIComponent("/spinpro")}`
     : session.user.emailVerified === false
-      ? `/verify-email?email=${encodeURIComponent(session.user.email)}`
+      ? "/verify-email"
       : "/spinpro";
 
   useEffect(() => {

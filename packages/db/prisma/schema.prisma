@@ -270,6 +270,15 @@ model Verification {
   @@map("verifications")
 }
 
+model RateLimit {
+  id          String @id
+  key         String @unique
+  count       Int
+  lastRequest BigInt
+
+  @@map("rate_limits")
+}
+
 model Category {
   id              String   @id @default(cuid())
   name            String   @unique

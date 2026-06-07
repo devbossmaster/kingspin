@@ -39,12 +39,12 @@ export class AuthBridgeService {
   ): Promise<AuthBridgeUser | null> {
     const user = await this.prisma.user.findUnique({
       where: { id: devUserId },
-      select: { id: true },
+      select: { id: true, emailVerified: true },
     });
 
-    if (!user) {
+    if (!user || !user.emailVerified) {
       this.logger.warn(
-        `Rejected x-dev-user-id for nonexistent local development user ${devUserId}.`,
+        `Rejected x-dev-user-id for an unavailable local development user ${devUserId}.`,
       );
       return null;
     }
@@ -101,12 +101,15 @@ export class AuthBridgeService {
       const payload = (await response.json().catch(() => null)) as {
         user?: {
           id?: unknown;
+          emailVerified?: unknown;
         };
       } | null;
       const userId =
         typeof payload?.user?.id === 'string' ? payload.user.id.trim() : '';
 
-      return userId ? { id: userId } : null;
+      return userId && payload?.user?.emailVerified === true
+        ? { id: userId }
+        : null;
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Unknown Better Auth error';

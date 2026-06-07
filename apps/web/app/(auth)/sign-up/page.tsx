@@ -15,6 +15,12 @@ import {
   getPasswordStrength,
 } from "../../../components/auth/password-strength";
 import { signUp } from "../../../lib/auth-client";
+import {
+  PENDING_CALLBACK_KEY,
+  PENDING_EMAIL_KEY,
+  PENDING_SENT_AT_KEY,
+  safeRelativeCallback,
+} from "../../../lib/email-otp";
 
 function getSafeCallbackUrl() {
   if (typeof window === "undefined") {
@@ -24,7 +30,7 @@ function getSafeCallbackUrl() {
   const params = new URLSearchParams(window.location.search);
   const callbackUrl = params.get("callbackURL") ?? params.get("redirect");
 
-  return callbackUrl?.startsWith("/") ? callbackUrl : "/spinpro";
+  return safeRelativeCallback(callbackUrl);
 }
 
 const phoneCountryCodeSchema = z.literal("+251");
@@ -125,7 +131,10 @@ export default function SignUpPage() {
     }
 
     setSuccess("Check your email to verify your Spin Battle account.");
-    router.push(`/verify-email?email=${encodeURIComponent(email)}`);
+    window.sessionStorage.setItem(PENDING_EMAIL_KEY, email.toLowerCase());
+    window.sessionStorage.setItem(PENDING_CALLBACK_KEY, callbackURL);
+    window.sessionStorage.setItem(PENDING_SENT_AT_KEY, String(Date.now()));
+    router.push("/verify-email");
   }
 
   return (

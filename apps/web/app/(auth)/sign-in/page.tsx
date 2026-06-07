@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import {
   AuthShell,
   FormMessage,
@@ -10,6 +10,12 @@ import {
   authInputClass,
 } from "../../../components/auth/auth-shell";
 import { signIn } from "../../../lib/auth-client";
+import {
+  PENDING_CALLBACK_KEY,
+  PENDING_EMAIL_KEY,
+  PENDING_SENT_AT_KEY,
+  safeRelativeCallback,
+} from "../../../lib/email-otp";
 
 function getSafeCallbackUrl() {
   if (typeof window === "undefined") {
@@ -19,19 +25,39 @@ function getSafeCallbackUrl() {
   const params = new URLSearchParams(window.location.search);
   const callbackUrl = params.get("callbackURL") ?? params.get("redirect");
 
-  return callbackUrl?.startsWith("/") ? callbackUrl : "/";
+  return safeRelativeCallback(callbackUrl);
+}
+
+function requiresEmailVerification(error: {
+  code?: string;
+  message?: string;
+}) {
+  return (
+    error.code === "EMAIL_NOT_VERIFIED" ||
+    error.message?.toLowerCase() === "email not verified"
+  );
 }
 
 export default function SignInPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const callbackURL =
     typeof window === "undefined" ? "/" : getSafeCallbackUrl();
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    if (params.get("verified") === "1") {
+      setSuccess("Email verified. Sign in to continue.");
+    }
+  }, []);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    setSuccess(null);
     setIsSubmitting(true);
 
     const formData = new FormData(event.currentTarget);
@@ -55,6 +81,22 @@ export default function SignInPage() {
     setIsSubmitting(false);
 
     if (result.error) {
+      if (requiresEmailVerification(result.error)) {
+        if (login.includes("@")) {
+          window.sessionStorage.setItem(
+            PENDING_EMAIL_KEY,
+            login.toLowerCase(),
+          );
+        } else {
+          window.sessionStorage.removeItem(PENDING_EMAIL_KEY);
+        }
+
+        window.sessionStorage.setItem(PENDING_CALLBACK_KEY, callbackURL);
+        window.sessionStorage.removeItem(PENDING_SENT_AT_KEY);
+        router.push("/verify-email?notice=unverified");
+        return;
+      }
+
       setError(result.error.message ?? "Sign in failed.");
       return;
     }
@@ -82,6 +124,7 @@ export default function SignInPage() {
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         {error ? <FormMessage tone="error">{error}</FormMessage> : null}
+        {success ? <FormMessage tone="success">{success}</FormMessage> : null}
 
         <label className="block text-sm font-semibold text-slate-200">
           የተጠቃሚ ስም ወይም ኢሜይል

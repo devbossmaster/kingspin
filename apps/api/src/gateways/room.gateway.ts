@@ -87,6 +87,8 @@ type OpenRoundSummaryPatch = {
   completedAt: string | null;
   cancelledAt: string | null;
   serverSeedHash: string | null;
+  fairnessAlgorithm: string | null;
+  entriesHash: string | null;
   winningTicket: string | null;
   winnerUserId: string | null;
   winnerEntryId: string | null;
@@ -1088,6 +1090,9 @@ export class RoomGateway
       (typeof round.cancelledAt === 'string' || round.cancelledAt === null) &&
       (typeof round.serverSeedHash === 'string' ||
         round.serverSeedHash === null) &&
+      (typeof round.fairnessAlgorithm === 'string' ||
+        round.fairnessAlgorithm === null) &&
+      (typeof round.entriesHash === 'string' || round.entriesHash === null) &&
       (typeof round.winningTicket === 'string' ||
         round.winningTicket === null) &&
       (typeof round.winnerUserId === 'string' || round.winnerUserId === null) &&

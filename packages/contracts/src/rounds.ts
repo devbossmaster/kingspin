@@ -44,6 +44,8 @@ export const RoundSnapshotSchema = z.object({
   completedAt: NullableIsoDateStringSchema,
   cancelledAt: NullableIsoDateStringSchema,
   serverSeedHash: z.string().nullable(),
+  fairnessAlgorithm: z.string().nullable(),
+  entriesHash: z.string().nullable(),
   winningTicket: BigIntStringSchema.nullable(),
   winnerUserId: z.string().nullable(),
   winnerEntryId: z.string().nullable(),
@@ -60,16 +62,28 @@ export const LiveRoundSnapshotSchema = RoundSnapshotSchema.extend({
 });
 
 export const FairnessProofSchema = z.object({
+  algorithm: z.string().nullable(),
+  algorithmMatches: z.boolean(),
   serverSeedHash: z.string().nullable(),
+  serverSeedReveal: z.string().nullable(),
   recomputedServerSeedHash: z.string().nullable(),
   seedHashMatches: z.boolean(),
+  entriesHash: z.string().nullable(),
+  recomputedEntriesHash: z.string().nullable(),
+  entriesHashMatches: z.boolean(),
+  totalEntryAmount: BigIntStringSchema,
+  winningTicket: BigIntStringSchema.nullable(),
   drawInput: z.string().nullable(),
   drawHash: z.string().nullable(),
+  recomputedDrawHash: z.string().nullable(),
+  drawHashMatches: z.boolean(),
+  nonceUsed: z.number().int().nonnegative().nullable(),
   recomputedWinningTicket: BigIntStringSchema.nullable(),
   winningTicketMatches: z.boolean(),
   winnerTicketInsideRange: z.boolean(),
   rangesCoverTotal: z.boolean(),
   rangeError: z.string().nullable(),
+  verificationPassed: z.boolean(),
 });
 
 export const LatestRoundResultSchema = z.object({

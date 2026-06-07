@@ -38,6 +38,8 @@ function buildLiveStateRows() {
       roundCompletedAt: null,
       roundCancelledAt: null,
       roundServerSeedHash: 'hash',
+      roundFairnessAlgorithm: 'HMAC_SHA256_REJECTION_SAMPLING_V1',
+      roundEntriesHash: null,
       roundWinningTicket: null,
       roundWinnerUserId: null,
       roundWinnerEntryId: null,
@@ -86,8 +88,11 @@ describe('PublicGameService', () => {
         phase: 'ENTRY_OPEN',
         phaseLabel: 'ENTRY OPEN',
         resultReason: null,
+        fairnessAlgorithm: 'HMAC_SHA256_REJECTION_SAMPLING_V1',
+        entriesHash: null,
       }),
     );
+    expect(snapshot.currentRound).not.toHaveProperty('serverSeedReveal');
     expect(snapshot.entries).toEqual([
       expect.objectContaining({
         id: 'entry-1',

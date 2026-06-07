@@ -103,19 +103,6 @@ function getPayoutAmount(
     : round?.payoutAmount;
 }
 
-function fairnessChecks(result: LatestRoundResult | null) {
-  const proof = result?.fairness;
-
-  if (!proof) return [];
-
-  return [
-    { label: "Seed", value: proof.seedHashMatches },
-    { label: "Ticket", value: proof.winningTicketMatches },
-    { label: "Range", value: proof.winnerTicketInsideRange },
-    { label: "Entries", value: proof.rangesCoverTotal },
-  ];
-}
-
 export function WinnerReveal({
   isOpen,
   result,
@@ -144,7 +131,6 @@ export function WinnerReveal({
     : outcomeLabel;
   const payoutAmount = getPayoutAmount(outcome, round);
   const multiplierLabel = getMultiplierLabel(result);
-  const checks = fairnessChecks(result);
 
   const progressRatio =
     revealDurationMs > 0
@@ -246,29 +232,6 @@ export function WinnerReveal({
             />
           </div>
         </div>
-
-        {checks.length > 0 ? (
-          <details className="mt-4 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-300">
-            <summary className="cursor-pointer select-none font-black uppercase tracking-[0.16em] text-slate-400">
-              Fairness proof
-            </summary>
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              {checks.map((check) => (
-                <span
-                  key={check.label}
-                  className={`rounded-full border px-2 py-1 font-black ${
-                    check.value
-                      ? "border-emerald-300/25 bg-emerald-400/10 text-emerald-200"
-                      : "border-red-300/25 bg-red-400/10 text-red-200"
-                  }`}
-                >
-                  {check.label}: {check.value ? "PASS" : "CHECK"}
-                </span>
-              ))}
-            </div>
-          </details>
-        ) : null}
 
         <Button onClick={onClose} className="mt-5 min-h-11 w-full text-sm">
           Continue

@@ -9,9 +9,12 @@ import {
 import { Prisma, RoundStatus, type Entry } from '@kingspin/db';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
+  calculateEntriesHash,
   calculateSpinAngle as calculateGameSpinAngle,
+  FAIRNESS_ALGORITHM,
   selectWinner,
-  verifyTicketRanges,
+  verifyFairnessProof,
+  type FairnessEntry,
   type TicketRange,
 } from '@kingspin/game-engine';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -60,6 +63,8 @@ export type RoundSnapshot = {
   completedAt: string | null;
   cancelledAt: string | null;
   serverSeedHash: string | null;
+  fairnessAlgorithm: string | null;
+  entriesHash: string | null;
   winningTicket: string | null;
   winnerUserId: string | null;
   winnerEntryId: string | null;
@@ -104,6 +109,8 @@ type RoundSnapshotSource = {
   completedAt: Date | null;
   cancelledAt: Date | null;
   serverSeedHash: string | null;
+  fairnessAlgorithm?: string | null;
+  entriesHash?: string | null;
   winningTicket: bigint | null;
   winnerUserId: string | null;
   winnerEntryId: string | null;
@@ -112,6 +119,7 @@ type RoundSnapshotSource = {
 
 type TicketRangeEntrySource = {
   id: string;
+  roundId: string;
   userId: string;
   amount: bigint;
   ticketStart: bigint | null;
@@ -136,6 +144,10 @@ type LatestRoundResultRow = {
   roundPayoutAmount: bigint;
   roundServerSeedHash: string | null;
   roundServerSeedReveal: string | null;
+  roundFairnessAlgorithm: string | null;
+  roundEntriesHash: string | null;
+  roundDrawHash: string | null;
+  roundDrawNonce: number | null;
   roundWinningTicket: bigint | null;
   roundWinnerUserId: string | null;
   roundWinnerEntryId: string | null;
@@ -179,6 +191,8 @@ type WinnerFeedRow = {
 
 type LatestRoundResultRound = RoundSnapshotSource & {
   serverSeedReveal: string | null;
+  drawHash: string | null;
+  drawNonce: number | null;
 };
 
 type CancelAndStartTiming = {
@@ -208,6 +222,8 @@ type EmptyCancelAndStartRow = {
   cancelledCompletedAt: Date | null;
   cancelledCancelledAt: Date | null;
   cancelledServerSeedHash: string | null;
+  cancelledFairnessAlgorithm: string | null;
+  cancelledEntriesHash: string | null;
   cancelledWinningTicket: bigint | null;
   cancelledWinnerUserId: string | null;
   cancelledWinnerEntryId: string | null;
@@ -228,6 +244,8 @@ type EmptyCancelAndStartRow = {
   nextCompletedAt: Date | null;
   nextCancelledAt: Date | null;
   nextServerSeedHash: string | null;
+  nextFairnessAlgorithm: string | null;
+  nextEntriesHash: string | null;
   nextWinningTicket: bigint | null;
   nextWinnerUserId: string | null;
   nextWinnerEntryId: string | null;
@@ -358,6 +376,7 @@ export class RoundsService {
         locksAt,
         serverSeedHash,
         serverSeedReveal: serverSeed,
+        fairnessAlgorithm: FAIRNESS_ALGORITHM,
         idempotencyKey: `round:start:${args.roomId}:${roundNumber}`,
       },
     });
@@ -474,6 +493,13 @@ export class RoundsService {
       }
 
       const finalTotal = assignment.totalAmount;
+      const lockedEntries = await tx.entry.findMany({
+        where: { roundId: currentRound.id },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+      const entriesHash = calculateEntriesHash(
+        this.toFairnessEntries(lockedEntries),
+      );
 
       const updatedRound = await tx.round.update({
         where: { id: currentRound.id },
@@ -481,6 +507,8 @@ export class RoundsService {
           totalEntryAmount: finalTotal,
           houseFeeAmount: 0n,
           payoutAmount: finalTotal,
+          fairnessAlgorithm: FAIRNESS_ALGORITHM,
+          entriesHash,
           updatedAt: new Date(),
         },
       });
@@ -576,6 +604,25 @@ export class RoundsService {
     }
 
     const ticketRanges = this.toTicketRangesFromEntries(entries);
+    const entriesHash = calculateEntriesHash(this.toFairnessEntries(entries));
+
+    if (
+      currentRound.entriesHash &&
+      currentRound.entriesHash.toLowerCase() !== entriesHash
+    ) {
+      throw new BadRequestException(
+        'Finalized entry commitment changed before draw. Manual review required.',
+      );
+    }
+
+    if (
+      currentRound.fairnessAlgorithm &&
+      currentRound.fairnessAlgorithm !== FAIRNESS_ALGORITHM
+    ) {
+      throw new BadRequestException(
+        'Round fairness algorithm is unsupported. Manual review required.',
+      );
+    }
 
     const winnerSelection = selectWinner({
       ranges: ticketRanges,
@@ -583,6 +630,7 @@ export class RoundsService {
       roundId: currentRound.id,
       roundNumber: currentRound.roundNumber,
       totalEntryAmount: currentRound.totalEntryAmount,
+      entriesHash,
     });
 
     const winningTicket = winnerSelection.winningTicket;
@@ -611,6 +659,10 @@ export class RoundsService {
         data: {
           status: RoundStatus.DRAWING,
           drawingAt: new Date(),
+          fairnessAlgorithm: FAIRNESS_ALGORITHM,
+          entriesHash,
+          drawHash: winnerSelection.drawHash,
+          drawNonce: winnerSelection.nonceUsed,
           winningTicket,
           winnerEntryId: winnerEntry.id,
           winnerUserId: winnerEntry.userId,
@@ -1207,6 +1259,7 @@ export class RoundsService {
             "payoutAmount",
             "serverSeedHash",
             "serverSeedReveal",
+            "fairnessAlgorithm",
             "idempotencyKey",
             "createdAt",
             "updatedAt"
@@ -1223,6 +1276,7 @@ export class RoundsService {
             0,
             ${serverSeedHash},
             ${serverSeed},
+            ${FAIRNESS_ALGORITHM},
             'round:start:' || ${roomId} || ':' || latest."roundNumber"::text,
             ${openedAt},
             ${openedAt}
@@ -1249,6 +1303,8 @@ export class RoundsService {
           c."completedAt" AS "cancelledCompletedAt",
           c."cancelledAt" AS "cancelledCancelledAt",
           c."serverSeedHash" AS "cancelledServerSeedHash",
+          c."fairnessAlgorithm" AS "cancelledFairnessAlgorithm",
+          c."entriesHash" AS "cancelledEntriesHash",
           c."winningTicket" AS "cancelledWinningTicket",
           c."winnerUserId" AS "cancelledWinnerUserId",
           c."winnerEntryId" AS "cancelledWinnerEntryId",
@@ -1269,6 +1325,8 @@ export class RoundsService {
           n."completedAt" AS "nextCompletedAt",
           n."cancelledAt" AS "nextCancelledAt",
           n."serverSeedHash" AS "nextServerSeedHash",
+          n."fairnessAlgorithm" AS "nextFairnessAlgorithm",
+          n."entriesHash" AS "nextEntriesHash",
           n."winningTicket" AS "nextWinningTicket",
           n."winnerUserId" AS "nextWinnerUserId",
           n."winnerEntryId" AS "nextWinnerEntryId",
@@ -1796,6 +1854,8 @@ export class RoundsService {
         completedAt: row.cancelledCompletedAt,
         cancelledAt: row.cancelledCancelledAt,
         serverSeedHash: row.cancelledServerSeedHash,
+        fairnessAlgorithm: row.cancelledFairnessAlgorithm,
+        entriesHash: row.cancelledEntriesHash,
         winningTicket: row.cancelledWinningTicket,
         winnerUserId: row.cancelledWinnerUserId,
         winnerEntryId: row.cancelledWinnerEntryId,
@@ -1820,6 +1880,8 @@ export class RoundsService {
       completedAt: row.nextCompletedAt,
       cancelledAt: row.nextCancelledAt,
       serverSeedHash: row.nextServerSeedHash,
+      fairnessAlgorithm: row.nextFairnessAlgorithm,
+      entriesHash: row.nextEntriesHash,
       winningTicket: row.nextWinningTicket,
       winnerUserId: row.nextWinnerUserId,
       winnerEntryId: row.nextWinnerEntryId,
@@ -1967,6 +2029,10 @@ export class RoundsService {
           ro."payoutAmount",
           ro."serverSeedHash",
           ro."serverSeedReveal",
+          ro."fairnessAlgorithm",
+          ro."entriesHash",
+          ro."drawHash",
+          ro."drawNonce",
           ro."winningTicket",
           ro."winnerUserId",
           ro."winnerEntryId",
@@ -1995,6 +2061,10 @@ export class RoundsService {
         lr."payoutAmount" AS "roundPayoutAmount",
         lr."serverSeedHash" AS "roundServerSeedHash",
         lr."serverSeedReveal" AS "roundServerSeedReveal",
+        lr."fairnessAlgorithm" AS "roundFairnessAlgorithm",
+        lr."entriesHash" AS "roundEntriesHash",
+        lr."drawHash" AS "roundDrawHash",
+        lr."drawNonce" AS "roundDrawNonce",
         lr."winningTicket" AS "roundWinningTicket",
         lr."winnerUserId" AS "roundWinnerUserId",
         lr."winnerEntryId" AS "roundWinnerEntryId",
@@ -2045,6 +2115,10 @@ export class RoundsService {
       payoutAmount: first.roundPayoutAmount,
       serverSeedHash: first.roundServerSeedHash,
       serverSeedReveal: first.roundServerSeedReveal,
+      fairnessAlgorithm: first.roundFairnessAlgorithm,
+      entriesHash: first.roundEntriesHash,
+      drawHash: first.roundDrawHash,
+      drawNonce: first.roundDrawNonce,
       winningTicket: first.roundWinningTicket,
       winnerUserId: first.roundWinnerUserId,
       winnerEntryId: first.roundWinnerEntryId,
@@ -2078,66 +2152,48 @@ export class RoundsService {
       ? (entries.find((entry) => entry.id === round.winnerEntryId) ?? null)
       : null;
 
-    const serverSeedReveal = round.serverSeedReveal;
-    const serverSeedHash = round.serverSeedHash;
-
-    const recomputedServerSeedHash = serverSeedReveal
-      ? createHash('sha256').update(serverSeedReveal).digest('hex')
-      : null;
-
-    const seedHashMatches =
-      !!serverSeedReveal &&
-      !!serverSeedHash &&
-      recomputedServerSeedHash === serverSeedHash;
-
-    const drawInput =
-      serverSeedReveal && round.totalEntryAmount > 0n
+    const serverSeedReveal =
+      round.status === RoundStatus.COMPLETED ? round.serverSeedReveal : null;
+    const fairnessEntries = entries.flatMap((entry) =>
+      entry.ticketStart !== null && entry.ticketEnd !== null
         ? [
-            serverSeedReveal,
-            round.id,
-            round.roundNumber.toString(),
-            round.totalEntryAmount.toString(),
-          ].join(':')
-        : null;
-
-    const drawHash = drawInput
-      ? createHash('sha256').update(drawInput).digest('hex')
-      : null;
-
-    const recomputedWinningTicket =
-      drawHash && round.totalEntryAmount > 0n
-        ? BigInt(`0x${drawHash}`) % round.totalEntryAmount
-        : null;
-
-    const winningTicketMatches =
-      recomputedWinningTicket !== null &&
-      round.winningTicket !== null &&
-      recomputedWinningTicket === round.winningTicket;
-
-    const winnerTicketInsideRange =
-      !!winnerEntry &&
-      round.winningTicket !== null &&
-      winnerEntry.ticketStart !== null &&
-      winnerEntry.ticketEnd !== null &&
-      round.winningTicket >= winnerEntry.ticketStart &&
-      round.winningTicket <= winnerEntry.ticketEnd;
-
-    const rangesCheck = this.verifyEntryRanges(entries, round.totalEntryAmount);
+            {
+              entryId: entry.id,
+              userId: entry.userId,
+              amount: entry.amount,
+              ticketStart: entry.ticketStart,
+              ticketEnd: entry.ticketEnd,
+              roundId: entry.roundId,
+            },
+          ]
+        : [],
+    );
+    const proof = verifyFairnessProof({
+      algorithm: round.fairnessAlgorithm ?? null,
+      serverSeedReveal,
+      serverSeedHash: round.serverSeedHash,
+      entriesHash: round.entriesHash ?? null,
+      entries: fairnessEntries,
+      winningTicket: round.winningTicket,
+      drawHash: round.drawHash,
+      nonceUsed: round.drawNonce,
+      winnerEntryId: round.winnerEntryId,
+      drawParts: {
+        roundId: round.id,
+        roundNumber: round.roundNumber,
+        totalEntryAmount: round.totalEntryAmount,
+      },
+    });
 
     return {
       round: this.toRoundSnapshot(round),
       serverSeedReveal,
       fairness: {
-        serverSeedHash,
-        recomputedServerSeedHash,
-        seedHashMatches,
-        drawInput,
-        drawHash,
-        recomputedWinningTicket: recomputedWinningTicket?.toString() ?? null,
-        winningTicketMatches,
-        winnerTicketInsideRange,
-        rangesCoverTotal: rangesCheck.rangesCoverTotal,
-        rangeError: rangesCheck.rangeError,
+        ...proof,
+        totalEntryAmount: proof.totalEntryAmount.toString(),
+        winningTicket: proof.winningTicket?.toString() ?? null,
+        recomputedWinningTicket:
+          proof.recomputedWinningTicket?.toString() ?? null,
       },
       winnerEntry: winnerEntry
         ? this.toEntryWithPlayerSnapshot(winnerEntry)
@@ -2164,6 +2220,8 @@ export class RoundsService {
       completedAt: round.completedAt?.toISOString() ?? null,
       cancelledAt: round.cancelledAt?.toISOString() ?? null,
       serverSeedHash: round.serverSeedHash,
+      fairnessAlgorithm: round.fairnessAlgorithm ?? null,
+      entriesHash: round.entriesHash ?? null,
       winningTicket: round.winningTicket?.toString() ?? null,
       winnerUserId: round.winnerUserId,
       winnerEntryId: round.winnerEntryId,
@@ -2275,15 +2333,28 @@ export class RoundsService {
       };
     });
   }
-  private verifyEntryRanges(
+
+  private toFairnessEntries(
     entries: TicketRangeEntrySource[],
-    expectedTotal: bigint,
-  ) {
-    return verifyTicketRanges(
-      this.toTicketRangesFromEntries(entries),
-      expectedTotal,
-    );
+  ): FairnessEntry[] {
+    return entries.map((entry) => {
+      if (entry.ticketStart === null || entry.ticketEnd === null) {
+        throw new BadRequestException(
+          `Entry ${entry.id} is missing ticket range.`,
+        );
+      }
+
+      return {
+        entryId: entry.id,
+        userId: entry.userId,
+        amount: entry.amount,
+        ticketStart: entry.ticketStart,
+        ticketEnd: entry.ticketEnd,
+        roundId: entry.roundId,
+      };
+    });
   }
+
   private calculateSpinAngle(winningTicket: bigint, totalTickets: bigint) {
     return calculateGameSpinAngle(winningTicket, totalTickets);
   }

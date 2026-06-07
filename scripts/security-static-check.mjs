@@ -43,7 +43,9 @@ function assertDoesNotContain(files, patterns, label) {
 
     for (const pattern of patterns) {
       const matched =
-        typeof pattern === "string" ? source.includes(pattern) : pattern.test(source);
+        typeof pattern === "string"
+          ? source.includes(pattern)
+          : pattern.test(source);
 
       if (matched) {
         fail(`${label}: ${file} matched ${pattern.toString()}`);
@@ -52,8 +54,9 @@ function assertDoesNotContain(files, patterns, label) {
   }
 }
 
-const frontendFiles = collectFiles("apps/web", (file) =>
-  /\.(ts|tsx|js|jsx|mjs)$/.test(file) && !file.includes("/scripts/"),
+const frontendFiles = collectFiles(
+  "apps/web",
+  (file) => /\.(ts|tsx|js|jsx|mjs)$/.test(file) && !file.includes("/scripts/"),
 );
 const apiPublicFiles = collectFiles("apps/api/src", (file) => {
   if (!/\.(ts|js)$/.test(file)) return false;
@@ -64,7 +67,13 @@ const apiPublicFiles = collectFiles("apps/api/src", (file) => {
 });
 const sourceFiles = [
   ...collectFiles("apps", (file) => /\.(ts|tsx|js|jsx|mjs)$/.test(file)),
-  ...collectFiles("packages", (file) => /\.(ts|tsx|js|jsx|mjs|prisma)$/.test(file)),
+  ...collectFiles("packages", (file) =>
+    /\.(ts|tsx|js|jsx|mjs|prisma)$/.test(file),
+  ),
+];
+const winnerSelectionFiles = [
+  "packages/game-engine/src/winner-selection.ts",
+  "apps/api/src/modules/rounds/rounds.service.ts",
 ];
 
 assertDoesNotContain(
@@ -75,7 +84,12 @@ assertDoesNotContain(
 
 assertDoesNotContain(
   apiPublicFiles,
-  ['@Controller("dev', "@Controller('dev", '@Post("dev-place")', "@Post('dev-place')"],
+  [
+    '@Controller("dev',
+    "@Controller('dev",
+    '@Post("dev-place")',
+    "@Post('dev-place')",
+  ],
   "API public modules must not expose dev identity routes",
 );
 
@@ -96,6 +110,18 @@ assertDoesNotContain(
   "Source must not contain obvious hardcoded secrets",
 );
 
+assertDoesNotContain(
+  winnerSelectionFiles,
+  ["Math.random"],
+  "Winner selection must use cryptographic randomness",
+);
+
+assertDoesNotContain(
+  frontendFiles,
+  ["selectWinner(", "selectWinningTicket(", "@kingspin/game-engine"],
+  "Frontend must not perform winner selection",
+);
+
 const apiClient = read("apps/web/lib/api-client.ts");
 const placeEntryMatch = apiClient.match(
   /placeEntry\(roomId: string, input: PlaceEntryInput\) \{[\s\S]*?\n\s{2}\},/,
@@ -106,7 +132,13 @@ if (!placeEntryMatch) {
 } else {
   const placeEntrySource = placeEntryMatch[0];
 
-  for (const forbidden of ["userId", "walletId", "playerKey", "role", "balance"]) {
+  for (const forbidden of [
+    "userId",
+    "walletId",
+    "playerKey",
+    "role",
+    "balance",
+  ]) {
     if (placeEntrySource.includes(forbidden)) {
       fail(`apiClient.placeEntry includes forbidden field: ${forbidden}`);
     }

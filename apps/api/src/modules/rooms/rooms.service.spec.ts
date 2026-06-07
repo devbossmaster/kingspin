@@ -443,6 +443,8 @@ describe('RoomsService', () => {
         completedAt: null,
         cancelledAt: null,
         serverSeedHash: 'hash-new',
+        fairnessAlgorithm: 'HMAC_SHA256_REJECTION_SAMPLING_V1',
+        entriesHash: null,
         winningTicket: null,
         winnerUserId: null,
         winnerEntryId: null,

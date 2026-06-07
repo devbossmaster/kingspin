@@ -348,12 +348,16 @@ model Round {
   houseFeeAmount   BigInt @default(0)
   payoutAmount     BigInt @default(0)
 
-  serverSeedHash   String?
-  serverSeedReveal String?
-  winningTicket    BigInt?
-  winnerUserId     String?
-  winnerEntryId    String?
-  spinAngle        Float?
+  serverSeedHash    String?
+  serverSeedReveal  String?
+  fairnessAlgorithm String?
+  entriesHash       String?
+  drawHash          String?
+  drawNonce         Int?
+  winningTicket     BigInt?
+  winnerUserId      String?
+  winnerEntryId     String?
+  spinAngle         Float?
 
   idempotencyKey String?  @unique
   createdAt      DateTime @default(now())

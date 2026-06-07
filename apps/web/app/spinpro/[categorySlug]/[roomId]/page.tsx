@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 import { ConnectionPill } from "../../../../components/layout/connection-pill";
 import { EntryPanel } from "../../../../components/spinpro/entry-panel";
+import { FairnessStrip } from "../../../../components/spinpro/fairness-strip";
 import { PlayersList } from "../../../../components/spinpro/players-list";
 import {
   ArenaHeroCard,
@@ -182,6 +183,11 @@ export default function LiveRoomPage() {
               winnerEntryId={visibleWinnerEntryId}
             />
           </section>
+
+          <FairnessStrip
+            currentRound={currentRound}
+            latestResult={latestResult}
+          />
 
           {error ? (
             <div className="mt-3 rounded-2xl border border-red-400/40 bg-red-500/10 p-3 text-sm font-semibold text-red-200">

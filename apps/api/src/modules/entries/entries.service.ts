@@ -124,6 +124,10 @@ type EntryPlacementRow = {
   roundPayoutAmount: bigint | null;
   roundServerSeedHash: string | null;
   roundServerSeedReveal: string | null;
+  roundFairnessAlgorithm: string | null;
+  roundEntriesHash: string | null;
+  roundDrawHash: string | null;
+  roundDrawNonce: number | null;
   roundWinningTicket: bigint | null;
   roundWinnerUserId: string | null;
   roundWinnerEntryId: string | null;
@@ -988,6 +992,10 @@ export class EntriesService {
         END AS "roundPayoutAmount",
         final_round."serverSeedHash" AS "roundServerSeedHash",
         final_round."serverSeedReveal" AS "roundServerSeedReveal",
+        final_round."fairnessAlgorithm" AS "roundFairnessAlgorithm",
+        final_round."entriesHash" AS "roundEntriesHash",
+        final_round."drawHash" AS "roundDrawHash",
+        final_round."drawNonce" AS "roundDrawNonce",
         final_round."winningTicket" AS "roundWinningTicket",
         final_round."winnerUserId" AS "roundWinnerUserId",
         final_round."winnerEntryId" AS "roundWinnerEntryId",
@@ -1295,6 +1303,10 @@ export class EntriesService {
       payoutAmount: row.roundPayoutAmount,
       serverSeedHash: row.roundServerSeedHash,
       serverSeedReveal: row.roundServerSeedReveal,
+      fairnessAlgorithm: row.roundFairnessAlgorithm,
+      entriesHash: row.roundEntriesHash,
+      drawHash: row.roundDrawHash,
+      drawNonce: row.roundDrawNonce,
       winningTicket: row.roundWinningTicket,
       winnerUserId: row.roundWinnerUserId,
       winnerEntryId: row.roundWinnerEntryId,

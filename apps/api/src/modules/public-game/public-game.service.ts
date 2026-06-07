@@ -75,6 +75,8 @@ type RoomLiveStateSnapshot = {
     completedAt: string | null;
     cancelledAt: string | null;
     serverSeedHash: string | null;
+    fairnessAlgorithm: string | null;
+    entriesHash: string | null;
     winningTicket: string | null;
     winnerUserId: string | null;
     winnerEntryId: string | null;
@@ -148,6 +150,8 @@ type RoomLiveStateRow = {
   roundCompletedAt: Date | null;
   roundCancelledAt: Date | null;
   roundServerSeedHash: string | null;
+  roundFairnessAlgorithm: string | null;
+  roundEntriesHash: string | null;
   roundWinningTicket: bigint | null;
   roundWinnerUserId: string | null;
   roundWinnerEntryId: string | null;
@@ -479,6 +483,8 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
         cr."completedAt" AS "roundCompletedAt",
         cr."cancelledAt" AS "roundCancelledAt",
         cr."serverSeedHash" AS "roundServerSeedHash",
+        cr."fairnessAlgorithm" AS "roundFairnessAlgorithm",
+        cr."entriesHash" AS "roundEntriesHash",
         cr."winningTicket" AS "roundWinningTicket",
         cr."winnerUserId" AS "roundWinnerUserId",
         cr."winnerEntryId" AS "roundWinnerEntryId",
@@ -515,6 +521,8 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
           ro."completedAt",
           ro."cancelledAt",
           ro."serverSeedHash",
+          ro."fairnessAlgorithm",
+          ro."entriesHash",
           ro."winningTicket",
           ro."winnerUserId",
           ro."winnerEntryId",
@@ -658,6 +666,8 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
 
             // Safe to expose before draw.
             serverSeedHash: room.roundServerSeedHash,
+            fairnessAlgorithm: room.roundFairnessAlgorithm,
+            entriesHash: room.roundEntriesHash,
 
             // Do NOT expose serverSeedReveal here.
             winningTicket: room.roundWinningTicket?.toString() ?? null,

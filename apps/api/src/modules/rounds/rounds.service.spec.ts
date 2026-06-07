@@ -1,11 +1,16 @@
 import { createHash } from 'node:crypto';
 import { RoundStatus } from '@kingspin/db';
+import { FAIRNESS_ALGORITHM } from '@kingspin/game-engine';
 import { RoundsService } from './rounds.service';
 
 const now = new Date('2026-05-26T12:00:00.000Z');
 const serverSeed =
   '375df2fced0138cb84f1f923827afb2b538c525d88b7183d529d62e3c82c855d';
 const serverSeedHash = createHash('sha256').update(serverSeed).digest('hex');
+const entriesHash =
+  '425d3f746b8c9858ea14a98433ecffbe7eaae92305781c636a80be6e96097850';
+const drawHash =
+  '7f7cd80fcc95aef291cb43f849ace4dfb4a1cd15ff2e84f41d6fd041ec6cbc20';
 
 function buildRound(overrides: Record<string, unknown> = {}) {
   return {
@@ -26,6 +31,10 @@ function buildRound(overrides: Record<string, unknown> = {}) {
     payoutAmount: 3_500n,
     serverSeedHash,
     serverSeedReveal: serverSeed,
+    fairnessAlgorithm: FAIRNESS_ALGORITHM,
+    entriesHash: null,
+    drawHash: null,
+    drawNonce: null,
     winningTicket: null,
     winnerUserId: null,
     winnerEntryId: null,
@@ -77,6 +86,10 @@ function buildLatestResultRows(round: any, entries: any[]) {
         roundPayoutAmount: round.payoutAmount,
         roundServerSeedHash: round.serverSeedHash,
         roundServerSeedReveal: round.serverSeedReveal,
+        roundFairnessAlgorithm: round.fairnessAlgorithm,
+        roundEntriesHash: round.entriesHash,
+        roundDrawHash: round.drawHash,
+        roundDrawNonce: round.drawNonce,
         roundWinningTicket: round.winningTicket,
         roundWinnerUserId: round.winnerUserId,
         roundWinnerEntryId: round.winnerEntryId,
@@ -115,6 +128,10 @@ function buildLatestResultRows(round: any, entries: any[]) {
     roundPayoutAmount: round.payoutAmount,
     roundServerSeedHash: round.serverSeedHash,
     roundServerSeedReveal: round.serverSeedReveal,
+    roundFairnessAlgorithm: round.fairnessAlgorithm,
+    roundEntriesHash: round.entriesHash,
+    roundDrawHash: round.drawHash,
+    roundDrawNonce: round.drawNonce,
     roundWinningTicket: round.winningTicket,
     roundWinnerUserId: round.winnerUserId,
     roundWinnerEntryId: round.winnerEntryId,
@@ -137,6 +154,17 @@ function buildLatestResultRows(round: any, entries: any[]) {
 describe('RoundsService', () => {
   afterEach(() => {
     jest.useRealTimers();
+  });
+
+  it('never exposes the active round server seed reveal', () => {
+    const service = new RoundsService({} as any, {} as any);
+    const snapshot = service.toRoundSnapshot(buildRound());
+
+    expect(snapshot).toMatchObject({
+      serverSeedHash,
+      fairnessAlgorithm: FAIRNESS_ALGORITHM,
+    });
+    expect(snapshot).not.toHaveProperty('serverSeedReveal');
   });
 
   it('assigns proportional ticket ranges when locking the current round', async () => {
@@ -164,7 +192,11 @@ describe('RoundsService', () => {
           lockedAt: now,
           totalEntryAmount: 3_500n,
           payoutAmount: 3_500n,
+          entriesHash,
         }),
+      },
+      entry: {
+        findMany: jest.fn().mockResolvedValue(finalEntries),
       },
     };
     const prisma = {
@@ -190,6 +222,8 @@ describe('RoundsService', () => {
         totalEntryAmount: 3_500n,
         houseFeeAmount: 0n,
         payoutAmount: 3_500n,
+        fairnessAlgorithm: FAIRNESS_ALGORITHM,
+        entriesHash,
       }),
     });
     expect(prisma.entry.findMany).toHaveBeenCalledWith({
@@ -211,6 +245,7 @@ describe('RoundsService', () => {
     const lockedRound = buildRound({
       status: RoundStatus.LOCKED,
       lockedAt: now,
+      entriesHash,
     });
     const entries = [
       buildEntry('a', 1_500n, { ticketStart: 0n, ticketEnd: 1_499n }),
@@ -219,10 +254,13 @@ describe('RoundsService', () => {
     const drawnRound = buildRound({
       status: RoundStatus.DRAWING,
       drawingAt: now,
-      winningTicket: 1_968n,
+      entriesHash,
+      drawHash,
+      drawNonce: 0,
+      winningTicket: 2_696n,
       winnerEntryId: 'b',
       winnerUserId: 'user-b',
-      spinAngle: 202.4228,
+      spinAngle: 277.3028,
     });
     const finalEntries = [
       entries[0],
@@ -260,14 +298,18 @@ describe('RoundsService', () => {
     expect(tx.round.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
-          winningTicket: 1_968n,
+          winningTicket: 2_696n,
+          fairnessAlgorithm: FAIRNESS_ALGORITHM,
+          entriesHash,
+          drawHash,
+          drawNonce: 0,
           winnerEntryId: 'b',
           winnerUserId: 'user-b',
-          spinAngle: 202.4228,
+          spinAngle: 277.3028,
         }),
       }),
     );
-    expect(result.winningTicket).toBe('1968');
+    expect(result.winningTicket).toBe('2696');
     expect(result.winnerEntry).toEqual(
       expect.objectContaining({
         id: 'b',
@@ -564,11 +606,10 @@ describe('RoundsService', () => {
     };
     const service = new RoundsService(prisma as any, walletsService as any);
 
-    const result =
-      await service.cancelExpiredEmptyOpenRoundAndStartNextForRoom(
-        'room-1',
-        expiredRound.id,
-      );
+    const result = await service.cancelExpiredEmptyOpenRoundAndStartNextForRoom(
+      'room-1',
+      expiredRound.id,
+    );
 
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     expect(walletsService.refundEntryHolds).not.toHaveBeenCalled();
@@ -883,10 +924,13 @@ describe('RoundsService', () => {
     const completedRound = buildRound({
       status: RoundStatus.COMPLETED,
       completedAt: now,
-      winningTicket: 1_968n,
+      entriesHash,
+      drawHash,
+      drawNonce: 0,
+      winningTicket: 2_696n,
       winnerEntryId: 'b',
       winnerUserId: 'user-b',
-      spinAngle: 202.4228,
+      spinAngle: 277.3028,
     });
     const entries = [
       buildEntry('a', 1_500n, {
@@ -926,9 +970,13 @@ describe('RoundsService', () => {
         winnerTicketInsideRange: true,
         rangesCoverTotal: true,
         rangeError: null,
-        recomputedWinningTicket: '1968',
+        entriesHashMatches: true,
+        drawHashMatches: true,
+        verificationPassed: true,
+        recomputedWinningTicket: '2696',
       }),
     );
+    expect(result.serverSeedReveal).toBe(serverSeed);
     expect(result.winnerEntry).toEqual(
       expect.objectContaining({
         id: 'b',

@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   AdminAuditAction,
   DepositStatus,
@@ -9,13 +13,14 @@ import {
   Role,
   RoundStatus,
   WithdrawalStatus,
-} from "@kingspin/db";
-import { getApiEnv } from "../../config/api-env";
-import { PrismaService } from "../../prisma/prisma.service";
-import { AuditService } from "../audit/audit.service";
-import { FraudService } from "../fraud/fraud.service";
-import { RedisService } from "../redis/redis.service";
-import { RoundMachineService } from "../rounds/round-machine.service";
+} from '@kingspin/db';
+import { verifyFairnessProof } from '@kingspin/game-engine';
+import { getApiEnv } from '../../config/api-env';
+import { PrismaService } from '../../prisma/prisma.service';
+import { AuditService } from '../audit/audit.service';
+import { FraudService } from '../fraud/fraud.service';
+import { RedisService } from '../redis/redis.service';
+import { RoundMachineService } from '../rounds/round-machine.service';
 
 type ListQuery = {
   page?: string | number;
@@ -54,10 +59,10 @@ export class AdminOperationsService {
         rounds: [],
         audit: [],
         risk: [],
-        warning: "Recent activity unavailable.",
+        warning: 'Recent activity unavailable.',
       })),
       this.getSystemHealth().catch(() =>
-        this.degradedSystemHealth("System health snapshot unavailable."),
+        this.degradedSystemHealth('System health snapshot unavailable.'),
       ),
     ]);
 
@@ -93,7 +98,7 @@ export class AdminOperationsService {
       rapidEntryBlocksToday,
       duplicateReceiptAttemptsToday,
     ] = await Promise.all([
-      this.prisma.room.count({ where: { status: "ACTIVE" } }),
+      this.prisma.room.count({ where: { status: 'ACTIVE' } }),
       this.prisma.round.count({ where: { status: RoundStatus.OPEN } }),
       this.prisma.round.count({
         where: {
@@ -138,10 +143,10 @@ export class AdminOperationsService {
           createdAt: { gte: today },
           status: {
             in: [
-              "REJECTED",
-              "FETCH_FAILED",
-              "PARSE_FAILED",
-              "NEEDS_MANUAL_REVIEW",
+              'REJECTED',
+              'FETCH_FAILED',
+              'PARSE_FAILED',
+              'NEEDS_MANUAL_REVIEW',
             ],
           },
         },
@@ -178,7 +183,7 @@ export class AdminOperationsService {
       this.prisma.user.count({ where: { createdAt: { gte: today } } }),
       this.prisma.entry.findMany({
         where: { createdAt: { gte: today } },
-        distinct: ["userId"],
+        distinct: ['userId'],
         select: { userId: true },
       }),
       this.prisma.user.count({ where: { bannedAt: { not: null } } }),
@@ -218,7 +223,7 @@ export class AdminOperationsService {
         pendingDeposits,
         creditedDepositsToday,
         creditedDepositAmountToday:
-          creditedDepositAmountToday._sum.expectedAmount?.toString() ?? "0",
+          creditedDepositAmountToday._sum.expectedAmount?.toString() ?? '0',
         failedDepositAttemptsToday,
         pendingWithdrawals,
         completedWithdrawalsToday,
@@ -251,17 +256,17 @@ export class AdminOperationsService {
       try {
         return map(await query);
       } catch {
-        warnings[key] = `${key.replaceAll("_", " ")} unavailable.`;
+        warnings[key] = `${key.replaceAll('_', ' ')} unavailable.`;
         return [];
       }
     };
     const [entries, deposits, withdrawals, rounds, audit, risk] =
       await Promise.all([
         safePanel(
-          "entries",
+          'entries',
           this.prisma.entry.findMany({
             take: 6,
-            orderBy: { createdAt: "desc" },
+            orderBy: { createdAt: 'desc' },
             select: {
               id: true,
               amount: true,
@@ -286,10 +291,10 @@ export class AdminOperationsService {
             })),
         ),
         safePanel(
-          "deposits",
+          'deposits',
           this.prisma.depositIntent.findMany({
             take: 6,
-            orderBy: { createdAt: "desc" },
+            orderBy: { createdAt: 'desc' },
             select: {
               id: true,
               expectedAmount: true,
@@ -310,10 +315,10 @@ export class AdminOperationsService {
             })),
         ),
         safePanel(
-          "withdrawals",
+          'withdrawals',
           this.prisma.withdrawal.findMany({
             take: 6,
-            orderBy: { requestedAt: "desc" },
+            orderBy: { requestedAt: 'desc' },
             select: {
               id: true,
               amount: true,
@@ -334,11 +339,11 @@ export class AdminOperationsService {
             })),
         ),
         safePanel(
-          "rounds",
+          'rounds',
           this.prisma.round.findMany({
             where: { status: RoundStatus.COMPLETED },
             take: 6,
-            orderBy: { completedAt: "desc" },
+            orderBy: { completedAt: 'desc' },
             select: {
               id: true,
               roundNumber: true,
@@ -357,10 +362,10 @@ export class AdminOperationsService {
             })),
         ),
         safePanel(
-          "audit",
+          'audit',
           this.prisma.adminAuditLog.findMany({
             take: 6,
-            orderBy: { createdAt: "desc" },
+            orderBy: { createdAt: 'desc' },
             select: {
               id: true,
               action: true,
@@ -373,7 +378,7 @@ export class AdminOperationsService {
           (recentAudit) =>
             recentAudit.map((log) => ({
               id: log.id,
-              actor: log.actor ? this.userLabel(log.actor) : "System",
+              actor: log.actor ? this.userLabel(log.actor) : 'System',
               action: log.action,
               targetType: log.targetType,
               targetId: log.targetId,
@@ -381,11 +386,11 @@ export class AdminOperationsService {
             })),
         ),
         safePanel(
-          "risk",
+          'risk',
           this.prisma.riskEvent.findMany({
             where: { status: RiskEventStatus.OPEN },
             take: 6,
-            orderBy: [{ severity: "desc" }, { createdAt: "desc" }],
+            orderBy: [{ severity: 'desc' }, { createdAt: 'desc' }],
             select: {
               id: true,
               type: true,
@@ -426,17 +431,17 @@ export class AdminOperationsService {
       ...(search
         ? {
             OR: [
-              { username: { contains: search, mode: "insensitive" } },
-              { displayUsername: { contains: search, mode: "insensitive" } },
-              { fullName: { contains: search, mode: "insensitive" } },
-              { email: { contains: search, mode: "insensitive" } },
+              { username: { contains: search, mode: 'insensitive' } },
+              { displayUsername: { contains: search, mode: 'insensitive' } },
+              { fullName: { contains: search, mode: 'insensitive' } },
+              { email: { contains: search, mode: 'insensitive' } },
               { id: search },
             ],
           }
         : {}),
-      ...(status === "SUSPENDED"
+      ...(status === 'SUSPENDED'
         ? { bannedAt: { not: null } }
-        : status === "ACTIVE"
+        : status === 'ACTIVE'
           ? { bannedAt: null }
           : {}),
       createdAt: this.dateRange(query),
@@ -448,7 +453,7 @@ export class AdminOperationsService {
         where,
         skip: page.skip,
         take: page.pageSize,
-        orderBy: { createdAt: "desc" },
+        orderBy: { createdAt: 'desc' },
         select: {
           id: true,
           email: true,
@@ -459,7 +464,7 @@ export class AdminOperationsService {
           bannedAt: true,
           createdAt: true,
           walletAccounts: {
-            where: { type: "MAIN" },
+            where: { type: 'MAIN' },
             select: { balanceSnapshot: true },
             take: 1,
           },
@@ -483,17 +488,17 @@ export class AdminOperationsService {
       userIds.length > 0
         ? await Promise.all([
             this.prisma.deposit.groupBy({
-              by: ["userId"],
+              by: ['userId'],
               where: { userId: { in: userIds } },
               _sum: { amount: true },
             }),
             this.prisma.depositIntent.groupBy({
-              by: ["userId"],
+              by: ['userId'],
               where: { userId: { in: userIds } },
               _sum: { expectedAmount: true },
             }),
             this.prisma.withdrawal.groupBy({
-              by: ["userId"],
+              by: ['userId'],
               where: { userId: { in: userIds } },
               _sum: { amount: true },
             }),
@@ -511,10 +516,7 @@ export class AdminOperationsService {
       ]),
     );
     const withdrawalByUser = new Map(
-      withdrawalTotals.map((item) => [
-        item.userId,
-        item._sum.amount ?? 0n,
-      ]),
+      withdrawalTotals.map((item) => [item.userId, item._sum.amount ?? 0n]),
     );
 
     return this.pageResult(
@@ -524,28 +526,25 @@ export class AdminOperationsService {
         fullName: user.fullName,
         email: this.maskEmail(user.email),
         role: user.role,
-        accountStatus: user.bannedAt ? "SUSPENDED" : "ACTIVE",
+        accountStatus: user.bannedAt ? 'SUSPENDED' : 'ACTIVE',
         joinedAt: user.createdAt.toISOString(),
         balance: (user.walletAccounts[0]?.balanceSnapshot ?? 0n).toString(),
         entriesCount: user._count.entries,
         depositsCount: user._count.deposits + user._count.depositIntents,
         depositsAmount: (
-          (depositByUser.get(user.id) ?? 0n) +
-          (intentByUser.get(user.id) ?? 0n)
+          (depositByUser.get(user.id) ?? 0n) + (intentByUser.get(user.id) ?? 0n)
         ).toString(),
         withdrawalsCount: user._count.withdrawals,
-        withdrawalsAmount: (
-          withdrawalByUser.get(user.id) ?? 0n
-        ).toString(),
+        withdrawalsAmount: (withdrawalByUser.get(user.id) ?? 0n).toString(),
         riskStatus: user.riskEvents.some(
           (event) =>
             event.severity === RiskEventSeverity.HIGH ||
             event.severity === RiskEventSeverity.CRITICAL,
         )
-          ? "HIGH"
+          ? 'HIGH'
           : user.riskEvents.length > 0
-            ? "OPEN"
-            : "CLEAR",
+            ? 'OPEN'
+            : 'CLEAR',
       })),
       page,
       total,
@@ -565,7 +564,7 @@ export class AdminOperationsService {
         bannedAt: true,
         createdAt: true,
         walletAccounts: {
-          where: { type: "MAIN" },
+          where: { type: 'MAIN' },
           select: { balanceSnapshot: true },
           take: 1,
         },
@@ -573,7 +572,7 @@ export class AdminOperationsService {
     });
 
     if (!user) {
-      throw new NotFoundException("User not found.");
+      throw new NotFoundException('User not found.');
     }
 
     return {
@@ -582,7 +581,7 @@ export class AdminOperationsService {
       fullName: user.fullName,
       email: this.maskEmail(user.email),
       role: user.role,
-      accountStatus: user.bannedAt ? "SUSPENDED" : "ACTIVE",
+      accountStatus: user.bannedAt ? 'SUSPENDED' : 'ACTIVE',
       joinedAt: user.createdAt.toISOString(),
       balance: (user.walletAccounts[0]?.balanceSnapshot ?? 0n).toString(),
     };
@@ -601,9 +600,9 @@ export class AdminOperationsService {
     const search = query.q?.trim();
     const where: Prisma.EntryWhereInput = {
       createdAt: this.dateRange(query),
-      ...(query.status === "WINNER"
+      ...(query.status === 'WINNER'
         ? { isWinner: true }
-        : query.status === "NON_WINNER"
+        : query.status === 'NON_WINNER'
           ? { isWinner: false }
           : {}),
       ...(search
@@ -613,11 +612,11 @@ export class AdminOperationsService {
               {
                 user: {
                   OR: [
-                    { username: { contains: search, mode: "insensitive" } },
+                    { username: { contains: search, mode: 'insensitive' } },
                     {
                       displayUsername: {
                         contains: search,
-                        mode: "insensitive",
+                        mode: 'insensitive',
                       },
                     },
                   ],
@@ -626,7 +625,7 @@ export class AdminOperationsService {
               {
                 round: {
                   room: {
-                    code: { contains: search, mode: "insensitive" },
+                    code: { contains: search, mode: 'insensitive' },
                   },
                 },
               },
@@ -640,7 +639,7 @@ export class AdminOperationsService {
         where,
         skip: page.skip,
         take: page.pageSize,
-        orderBy: { createdAt: "desc" },
+        orderBy: { createdAt: 'desc' },
         select: {
           id: true,
           amount: true,
@@ -661,7 +660,7 @@ export class AdminOperationsService {
       }),
     ]);
     const riskByEntry = await this.openRiskByRelated(
-      "ENTRY",
+      'ENTRY',
       entries.map((entry) => entry.id),
     );
 
@@ -681,7 +680,7 @@ export class AdminOperationsService {
         ticketEnd: entry.ticketEnd?.toString() ?? null,
         status: entry.round.status,
         isWinner: entry.isWinner,
-        riskStatus: riskByEntry.get(entry.id) ?? "CLEAR",
+        riskStatus: riskByEntry.get(entry.id) ?? 'CLEAR',
       })),
       page,
       total,
@@ -702,8 +701,8 @@ export class AdminOperationsService {
               {
                 room: {
                   OR: [
-                    { code: { contains: search, mode: "insensitive" } },
-                    { name: { contains: search, mode: "insensitive" } },
+                    { code: { contains: search, mode: 'insensitive' } },
+                    { name: { contains: search, mode: 'insensitive' } },
                   ],
                 },
               },
@@ -717,7 +716,7 @@ export class AdminOperationsService {
         where,
         skip: page.skip,
         take: page.pageSize,
-        orderBy: { openedAt: "desc" },
+        orderBy: { openedAt: 'desc' },
         select: {
           id: true,
           roundNumber: true,
@@ -735,54 +734,128 @@ export class AdminOperationsService {
           cancelledAt: true,
           serverSeedHash: true,
           serverSeedReveal: true,
+          fairnessAlgorithm: true,
+          entriesHash: true,
+          drawHash: true,
+          drawNonce: true,
+          winningTicket: true,
+          winnerEntryId: true,
+          entries: {
+            select: {
+              id: true,
+              roundId: true,
+              userId: true,
+              amount: true,
+              ticketStart: true,
+              ticketEnd: true,
+            },
+          },
           room: { select: { id: true, code: true, name: true } },
           _count: { select: { entries: true } },
         },
       }),
     ]);
     const riskByRound = await this.openRiskByRelated(
-      "ROUND",
+      'ROUND',
       rounds.map((round) => round.id),
     );
 
     return this.pageResult(
-      rounds.map((round) => ({
-        id: round.id,
-        roundNumber: round.roundNumber,
-        roomId: round.room.id,
-        room: round.room.code,
-        roomName: round.room.name,
-        status: round.status,
-        totalEntryAmount: round.totalEntryAmount.toString(),
-        payoutAmount: round.payoutAmount.toString(),
-        winnerUserId: round.winnerUserId,
-        entryCount: round._count.entries,
-        openedAt: round.openedAt.toISOString(),
-        locksAt: round.locksAt?.toISOString() ?? null,
-        lockedAt: round.lockedAt?.toISOString() ?? null,
-        drawingAt: round.drawingAt?.toISOString() ?? null,
-        spinningAt: round.spinningAt?.toISOString() ?? null,
-        settlingAt: round.settlingAt?.toISOString() ?? null,
-        completedAt: round.completedAt?.toISOString() ?? null,
-        cancelledAt: round.cancelledAt?.toISOString() ?? null,
-        durationMs: round.completedAt
-          ? round.completedAt.getTime() - round.openedAt.getTime()
-          : null,
-        serverSeedHash: round.serverSeedHash,
-        revealStatus:
-          round.status === RoundStatus.COMPLETED && round.serverSeedReveal
-            ? "REVEALED"
-            : "HIDDEN",
-        serverSeedReveal:
-          round.status === RoundStatus.COMPLETED ? round.serverSeedReveal : null,
-        riskStatus: riskByRound.get(round.id) ?? "CLEAR",
-      })),
+      rounds.map((round) => {
+        const serverSeedReveal =
+          round.status === RoundStatus.COMPLETED
+            ? round.serverSeedReveal
+            : null;
+        const fairnessEntries = (round.entries ?? []).flatMap((entry) =>
+          entry.ticketStart !== null && entry.ticketEnd !== null
+            ? [
+                {
+                  entryId: entry.id,
+                  roundId: entry.roundId,
+                  userId: entry.userId,
+                  amount: entry.amount,
+                  ticketStart: entry.ticketStart,
+                  ticketEnd: entry.ticketEnd,
+                },
+              ]
+            : [],
+        );
+        const proof =
+          round.status === RoundStatus.COMPLETED
+            ? verifyFairnessProof({
+                algorithm: round.fairnessAlgorithm,
+                serverSeedReveal,
+                serverSeedHash: round.serverSeedHash,
+                entriesHash: round.entriesHash,
+                entries: fairnessEntries,
+                winningTicket: round.winningTicket,
+                drawHash: round.drawHash,
+                nonceUsed: round.drawNonce,
+                winnerEntryId: round.winnerEntryId,
+                drawParts: {
+                  roundId: round.id,
+                  roundNumber: round.roundNumber,
+                  totalEntryAmount: round.totalEntryAmount,
+                },
+              })
+            : null;
+
+        return {
+          id: round.id,
+          roundNumber: round.roundNumber,
+          roomId: round.room.id,
+          room: round.room.code,
+          roomName: round.room.name,
+          status: round.status,
+          totalEntryAmount: round.totalEntryAmount.toString(),
+          payoutAmount: round.payoutAmount.toString(),
+          winningTicket: round.winningTicket?.toString() ?? null,
+          winnerEntryId: round.winnerEntryId,
+          winnerUserId: round.winnerUserId,
+          entryCount: round._count.entries,
+          openedAt: round.openedAt.toISOString(),
+          locksAt: round.locksAt?.toISOString() ?? null,
+          lockedAt: round.lockedAt?.toISOString() ?? null,
+          drawingAt: round.drawingAt?.toISOString() ?? null,
+          spinningAt: round.spinningAt?.toISOString() ?? null,
+          settlingAt: round.settlingAt?.toISOString() ?? null,
+          completedAt: round.completedAt?.toISOString() ?? null,
+          cancelledAt: round.cancelledAt?.toISOString() ?? null,
+          durationMs: round.completedAt
+            ? round.completedAt.getTime() - round.openedAt.getTime()
+            : null,
+          fairnessAlgorithm: round.fairnessAlgorithm,
+          serverSeedHash: round.serverSeedHash,
+          entriesHash: round.entriesHash,
+          drawHash: round.drawHash,
+          drawNonce: round.drawNonce,
+          revealStatus:
+            round.status === RoundStatus.COMPLETED && serverSeedReveal
+              ? 'REVEALED'
+              : 'HIDDEN',
+          serverSeedReveal,
+          verificationStatus:
+            round.status !== RoundStatus.COMPLETED
+              ? 'PENDING'
+              : proof?.verificationPassed
+                ? 'VERIFIED'
+                : 'FAILED',
+          verificationWarning:
+            round.status === RoundStatus.COMPLETED && !proof?.verificationPassed
+              ? (proof?.rangeError ??
+                'Stored fairness proof did not pass recomputation.')
+              : null,
+          riskStatus: riskByRound.get(round.id) ?? 'CLEAR',
+        };
+      }),
       page,
       total,
     );
   }
 
-  async listRiskEvents(query: ListQuery & { severity?: string; type?: string }) {
+  async listRiskEvents(
+    query: ListQuery & { severity?: string; type?: string },
+  ) {
     const page = this.parsePage(query);
     const status = this.enumValue(RiskEventStatus, query.status);
     const severity = this.enumValue(RiskEventSeverity, query.severity);
@@ -800,11 +873,11 @@ export class AdminOperationsService {
               {
                 user: {
                   OR: [
-                    { username: { contains: search, mode: "insensitive" } },
+                    { username: { contains: search, mode: 'insensitive' } },
                     {
                       displayUsername: {
                         contains: search,
-                        mode: "insensitive",
+                        mode: 'insensitive',
                       },
                     },
                   ],
@@ -820,7 +893,7 @@ export class AdminOperationsService {
         where,
         skip: page.skip,
         take: page.pageSize,
-        orderBy: { createdAt: "desc" },
+        orderBy: { createdAt: 'desc' },
         select: {
           id: true,
           userId: true,
@@ -856,10 +929,7 @@ export class AdminOperationsService {
         relatedType: event.relatedType,
         relatedId: event.relatedId,
         relatedEntity:
-          event.relatedId ??
-          event.roundId ??
-          event.roomId ??
-          event.userId,
+          event.relatedId ?? event.roundId ?? event.roomId ?? event.userId,
         status: event.status,
         summary: event.summary || this.riskSummary(event.type, event.metadata),
         reason: event.reason,
@@ -886,15 +956,15 @@ export class AdminOperationsService {
             OR: [
               { id: search },
               { targetId: search },
-              { targetType: { contains: search, mode: "insensitive" } },
+              { targetType: { contains: search, mode: 'insensitive' } },
               {
                 actor: {
                   OR: [
-                    { username: { contains: search, mode: "insensitive" } },
+                    { username: { contains: search, mode: 'insensitive' } },
                     {
                       displayUsername: {
                         contains: search,
-                        mode: "insensitive",
+                        mode: 'insensitive',
                       },
                     },
                   ],
@@ -910,7 +980,7 @@ export class AdminOperationsService {
         where,
         skip: page.skip,
         take: page.pageSize,
-        orderBy: { createdAt: "desc" },
+        orderBy: { createdAt: 'desc' },
         select: {
           id: true,
           action: true,
@@ -934,13 +1004,13 @@ export class AdminOperationsService {
       logs.map((log) => ({
         id: log.id,
         createdAt: log.createdAt.toISOString(),
-        actor: log.actor ? this.userLabel(log.actor) : "System",
+        actor: log.actor ? this.userLabel(log.actor) : 'System',
         actorId: log.actor?.id ?? null,
         actorEmail: log.actor ? this.maskEmail(log.actor.email) : null,
         action: log.action,
         targetType: log.targetType,
         targetId: log.targetId,
-        summary: `${log.action.replaceAll("_", " ")} on ${log.targetType.toLowerCase()}`,
+        summary: `${log.action.replaceAll('_', ' ')} on ${log.targetType.toLowerCase()}`,
         metadata: this.sanitizeMetadata(log.metadata),
       })),
       page,
@@ -954,10 +1024,10 @@ export class AdminOperationsService {
       ...system,
       deployment: {
         checklist: [
-          "Apply pending Prisma migrations before enabling payment review.",
-          "Confirm Redis is available in staging and production.",
-          "Confirm round-machine auto-start matches deployment policy.",
-          "Verify Sentry alerts and backup recovery procedures.",
+          'Apply pending Prisma migrations before enabling payment review.',
+          'Confirm Redis is available in staging and production.',
+          'Confirm round-machine auto-start matches deployment policy.',
+          'Verify Sentry alerts and backup recovery procedures.',
         ],
       },
     };
@@ -976,7 +1046,7 @@ export class AdminOperationsService {
       trustedProxyHeaders: env.TRUST_PROXY_HEADERS === true,
       sentryConfigured: Boolean(env.SENTRY_DSN),
       localDevAuthEnabled:
-        env.APP_ENV === "local" && env.ENABLE_LOCAL_DEV_AUTH === true,
+        env.APP_ENV === 'local' && env.ENABLE_LOCAL_DEV_AUTH === true,
       roundMachineAutoStart: env.ROUND_MACHINE_AUTO_START === true,
       readOnly: true,
     };
@@ -994,7 +1064,7 @@ export class AdminOperationsService {
         referenceId: query.referenceId,
       },
       take,
-      orderBy: { createdAt: "desc" },
+      orderBy: { createdAt: 'desc' },
       select: {
         id: true,
         type: true,
@@ -1014,7 +1084,7 @@ export class AdminOperationsService {
     const safeTake = Math.max(1, Math.min(take, 100));
     return this.prisma.workerJobLog.findMany({
       take: safeTake,
-      orderBy: { createdAt: "desc" },
+      orderBy: { createdAt: 'desc' },
       select: {
         id: true,
         queue: true,
@@ -1036,15 +1106,15 @@ export class AdminOperationsService {
         .ping()
         .then((result) => ({
           status: result.available
-            ? ("ok" as const)
+            ? ('ok' as const)
             : result.enabled
-              ? ("down" as const)
-              : ("unknown" as const),
+              ? ('down' as const)
+              : ('unknown' as const),
           enabled: result.enabled,
           latencyMs: result.latencyMs,
         }))
         .catch(() => ({
-          status: "down" as const,
+          status: 'down' as const,
           enabled: this.redisService.isEnabled(),
           latencyMs: null,
         })),
@@ -1056,10 +1126,10 @@ export class AdminOperationsService {
 
     return {
       api:
-        database.status === "ok" &&
-        (redis.status === "ok" || redis.status === "unknown")
-          ? ("ok" as const)
-          : ("degraded" as const),
+        database.status === 'ok' &&
+        (redis.status === 'ok' || redis.status === 'unknown')
+          ? ('ok' as const)
+          : ('degraded' as const),
       database,
       redis,
       roundMachine: {
@@ -1085,25 +1155,25 @@ export class AdminOperationsService {
     const startedAt = Date.now();
     try {
       await this.prisma.$queryRaw`SELECT 1`;
-      return { status: "ok" as const, latencyMs: Date.now() - startedAt };
+      return { status: 'ok' as const, latencyMs: Date.now() - startedAt };
     } catch {
-      return { status: "down" as const, latencyMs: Date.now() - startedAt };
+      return { status: 'down' as const, latencyMs: Date.now() - startedAt };
     }
   }
 
   private degradedSystemHealth(warning: string) {
     return {
-      api: "degraded" as const,
-      database: { status: "unknown" as const, latencyMs: null },
+      api: 'degraded' as const,
+      database: { status: 'unknown' as const, latencyMs: null },
       redis: {
-        status: "unknown" as const,
+        status: 'unknown' as const,
         enabled: this.redisService.isEnabled(),
         latencyMs: null,
       },
       roundMachine: {
         running: false,
         enabled: false,
-        startupMode: "unknown",
+        startupMode: 'unknown',
         lastTickAt: null,
         nextTickAt: null,
         staleCompletedRounds: 0,
@@ -1126,7 +1196,7 @@ export class AdminOperationsService {
     suspend: boolean,
   ) {
     if (!userId) {
-      throw new BadRequestException("userId is required.");
+      throw new BadRequestException('userId is required.');
     }
 
     const before = await this.prisma.user.findUnique({
@@ -1135,11 +1205,11 @@ export class AdminOperationsService {
     });
 
     if (!before) {
-      throw new NotFoundException("User not found.");
+      throw new NotFoundException('User not found.');
     }
 
     if (before.role === Role.OWNER || before.role === Role.SUPER_ADMIN) {
-      throw new BadRequestException("Owner accounts cannot be suspended here.");
+      throw new BadRequestException('Owner accounts cannot be suspended here.');
     }
 
     const user = await this.prisma.user.update({
@@ -1159,7 +1229,7 @@ export class AdminOperationsService {
       action: suspend
         ? AdminAuditAction.USER_SUSPENDED
         : AdminAuditAction.USER_UNSUSPENDED,
-      targetType: "USER",
+      targetType: 'USER',
       targetId: userId,
       before: {
         id: before.id,
@@ -1175,7 +1245,7 @@ export class AdminOperationsService {
       id: user.id,
       username: user.displayUsername ?? user.username,
       role: user.role,
-      accountStatus: user.bannedAt ? "SUSPENDED" : "ACTIVE",
+      accountStatus: user.bannedAt ? 'SUSPENDED' : 'ACTIVE',
     };
   }
 
@@ -1236,30 +1306,30 @@ export class AdminOperationsService {
   }
 
   private maskEmail(email: string) {
-    const [local, domain] = email.split("@");
-    if (!domain) return "***";
-    const visible = local?.slice(0, 2) ?? "";
-    return `${visible}${"*".repeat(Math.max(2, (local?.length ?? 2) - 2))}@${domain}`;
+    const [local, domain] = email.split('@');
+    if (!domain) return '***';
+    const visible = local?.slice(0, 2) ?? '';
+    return `${visible}${'*'.repeat(Math.max(2, (local?.length ?? 2) - 2))}@${domain}`;
   }
 
   private riskSummary(type: RiskEventType, metadata: Prisma.JsonValue | null) {
     const record =
-      metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      metadata && typeof metadata === 'object' && !Array.isArray(metadata)
         ? (metadata as Prisma.JsonObject)
         : {};
-    const reason = typeof record.reason === "string" ? record.reason : null;
-    return reason ?? type.replaceAll("_", " ").toLowerCase();
+    const reason = typeof record.reason === 'string' ? record.reason : null;
+    return reason ?? type.replaceAll('_', ' ').toLowerCase();
   }
 
   private riskEvidenceCount(metadata: Prisma.JsonValue | null) {
-    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
       return 0;
     }
 
     const record = metadata as Prisma.JsonObject;
     const value = record.evidenceCount;
 
-    if (typeof value === "number") {
+    if (typeof value === 'number') {
       return value;
     }
 
@@ -1318,27 +1388,29 @@ export class AdminOperationsService {
     }
   }
 
-  private sanitizeMetadata(value: Prisma.JsonValue | null): Prisma.JsonValue | null {
-    if (value === null || typeof value !== "object") return value;
+  private sanitizeMetadata(
+    value: Prisma.JsonValue | null,
+  ): Prisma.JsonValue | null {
+    if (value === null || typeof value !== 'object') return value;
     if (Array.isArray(value)) {
       return value.map((item) => this.sanitizeMetadata(item));
     }
 
     const blocked = [
-      "password",
-      "token",
-      "secret",
-      "serverseed",
-      "rawhtml",
-      "receiptHtml",
-      "ipHash",
-      "ipAddress",
-      "userAgent",
-      "userAgentHash",
-      "deviceHash",
-      "fingerprint",
-      "session",
-      "authorization",
+      'password',
+      'token',
+      'secret',
+      'serverseed',
+      'rawhtml',
+      'receiptHtml',
+      'ipHash',
+      'ipAddress',
+      'userAgent',
+      'userAgentHash',
+      'deviceHash',
+      'fingerprint',
+      'session',
+      'authorization',
     ];
     return Object.fromEntries(
       Object.entries(value)

@@ -13,7 +13,6 @@ import {
   getCategoryDisplayName,
   getCategoryMode,
   getCategoryRingLabel,
-  getModeTitle,
   isBaselinePlayerCategory,
   type PlayerMode,
   sortPlayerCategories,
@@ -27,7 +26,7 @@ function getModeAmountLabel(
     (item) => getCategoryMode(item) === mode,
   );
 
-  return category ? getCategoryAmountLabel(category) : "Loading stakes";
+  return category ? getCategoryAmountLabel(category) : "በመጫን ላይ...";
 }
 
 function getBattleAmountLabel(category: CategoryListItem) {
@@ -51,7 +50,6 @@ function ModeCard({
 }) {
   const Icon = mode === "fixed" ? Equal : BadgeDollarSign;
 
-  // Mode cards: safe visual styling zone.
   return (
     <button
       type="button"
@@ -95,7 +93,7 @@ function ModeCard({
           {subtitle}
         </p>
         <span className="mt-auto inline-flex min-h-9 w-fit items-center gap-2 rounded-md bg-gold px-3 text-xs font-black text-[var(--bg-void)]">
-          Battles
+          ወደ ውድድሮች
           <ArrowRight
             className="h-4 w-4 transition group-hover:translate-x-0.5"
             aria-hidden="true"
@@ -116,7 +114,6 @@ function CategoryBattleRow({
   const amountLabel = getBattleAmountLabel(category);
   const artworkOffset = ["-left-7", "-left-10", "-left-12"][index % 3];
 
-  // Category/tier cards: safe visual styling zone; routing stays on category slug.
   return (
     <Link
       href={`/spinpro/${category.slug}`}
@@ -149,7 +146,7 @@ function CategoryBattleRow({
           {getCategoryDisplayName(category)}
         </h3>
         <p className="mt-1 truncate text-xs font-bold text-zinc-400">
-          Rings: {amountLabel}
+          ክበቦች (Rings): {amountLabel}
         </p>
       </div>
 
@@ -166,11 +163,9 @@ function CategoryBattleRow({
 }
 
 export default function SpinBattleRoomsPage() {
-  // Category fetch: this page only needs category metadata.
   const { categories, loading, error } = useCategories();
   const [selectedMode, setSelectedMode] = useState<PlayerMode | null>(null);
 
-  // Category/tier grouping: keep baseline filtering and sorting behavior unchanged.
   const sortedCategories = useMemo(() => {
     const baseline = sortPlayerCategories(
       categories.filter(isBaselinePlayerCategory),
@@ -192,7 +187,7 @@ export default function SpinBattleRoomsPage() {
   return (
     <GameShell backHref="/">
       <div className="mx-auto w-full max-w-6xl px-4 py-6 md:px-8 md:py-10">
-        {/* Safe visual section: page hero. */}
+        {/* Page Hero */}
         <section>
           <div className="relative overflow-hidden rounded-lg border border-blue-300/15 bg-[radial-gradient(circle_at_28%_18%,rgba(37,99,235,0.36),transparent_34%),linear-gradient(145deg,#07142c_0%,#050816_48%,#02030a_100%)] p-5 shadow-[0_24px_62px_rgba(0,0,0,0.44)] md:p-7">
             <div className="absolute right-0 top-0 h-full w-1/2 opacity-35">
@@ -207,57 +202,56 @@ export default function SpinBattleRoomsPage() {
             </div>
             <div className="relative z-10 max-w-2xl">
               <StatusPill tone="teal" className="rounded-full">
-                Spin Battle rooms
+                የስፒን ባትል ክፍሎች
               </StatusPill>
               <h1 className="mt-5 font-display text-4xl font-black leading-tight text-white md:text-6xl">
-                Choose how you want to clash.
+                የመጫወቻ ምርጫዎን ይምረጡ።
               </h1>
               <p className="mt-4 max-w-xl text-sm font-semibold leading-6 text-zinc-400 md:text-base">
-                Pick a mode first, then choose an arena tier.
-                Flexible favors bigger ticket ranges, Fixed gives everyone the
-                same shot.
+                በመጀመሪያ የጨዋታ ሁነታን ይምረጡ፣ በመቀጠል የውድድር ደረጃዎን ይወስኑ።
+                ተለዋዋጭ ሁነታ ሰፊ የዕድል ክልል ሲሰጥዎት፣ ቋሚ ሁነታ ደግሞ ለሁሉም እኩል ዕድል ያረጋግጣል።
               </p>
             </div>
           </div>
         </section>
 
-        {/* Loading/empty/error states: category fetch error. */}
+        {/* Error State */}
         {error ? (
           <div className="mt-5 rounded-xl border border-red-400/35 bg-red-500/10 px-4 py-3 text-sm font-semibold text-red-200">
             {error}
           </div>
         ) : null}
 
-        {/* Mode cards */}
+        {/* Mode Cards Section */}
         <section className="mt-6">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
               <p className="text-xs font-black uppercase tracking-[0.18em] text-sky-300/80">
-                Categories
+                ደረጃዎች
               </p>
               <h2 className="mt-1 font-display text-2xl font-black text-white">
-                Select your mode
+                የጨዋታ ሁነታ ይምረጡ
               </h2>
             </div>
             {loading ? (
               <span className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 text-xs font-black text-zinc-400">
-                Loading
+                በመጫን ላይ...
               </span>
             ) : null}
           </div>
 
           <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 md:gap-4">
             <ModeCard
-              title="Flexible Battle"
-              subtitle="Choose any allowed amount. Bigger entries receive a bigger ticket range for the round."
+              title="ተለዋዋጭ ባትል (Flexible)"
+              subtitle="የፈለጉትን መጠን ይምረጡ። ትልቅ መግቢያዎች ለዙሩ ሰፊ የቲኬት ዕድል ክልል ያስገኛሉ።"
               amount={getModeAmountLabel(sortedCategories, "pro")}
               mode="pro"
               selected={selectedMode === "pro"}
               onSelect={() => setSelectedMode("pro")}
             />
             <ModeCard
-              title="Fixed Battle"
-              subtitle="Enter once at the fixed amount. Every accepted player has one equal chance."
+              title="ቋሚ ባትል (Fixed)"
+              subtitle="በተወሰነ ቋሚ መጠን ብቻ ይግቡ። የሚሳተፍ እያንዳንዱ ተጫዋች አንድ እኩል የማሸነፍ ዕድል ይኖረዋል።"
               amount={getModeAmountLabel(sortedCategories, "fixed")}
               mode="fixed"
               selected={selectedMode === "fixed"}
@@ -267,19 +261,19 @@ export default function SpinBattleRoomsPage() {
         </section>
 
         {selectedMode ? (
-          /* Category/tier cards */
+          /* Arena Tiers Section */
           <section className="mx-auto mt-7 w-full max-w-xl">
             <div className="flex items-end justify-between gap-3">
               <div>
                 <p className="text-xs font-black uppercase tracking-[0.18em] text-gold/85">
-                  {getModeTitle(selectedMode)}
+                  የተመረጠው ሁነታ
                 </p>
                 <h2 className="mt-1 font-display text-3xl font-black text-white">
-                  Battles
+                  ውድድሮች
                 </h2>
               </div>
               <StatusPill tone={loading ? "muted" : "teal"}>
-                {loading ? "Loading" : `${selectedCategories.length} live`}
+                {loading ? "በመጫን ላይ..." : `${selectedCategories.length} የቀጥታ`}
               </StatusPill>
             </div>
 

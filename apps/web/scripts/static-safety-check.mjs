@@ -155,8 +155,33 @@ for (const socketEvent of [
 }
 
 const winnerReveal = read("components/spinpro/winner-reveal.tsx");
-if (!winnerReveal.includes("fairness")) {
-  fail("WinnerReveal must render latest-result fairness proof details.");
+if (winnerReveal.toLowerCase().includes("fairness")) {
+  fail("WinnerReveal must stay compact and omit fairness proof details.");
+}
+
+const fairnessStrip = read("components/spinpro/fairness-strip.tsx");
+const roomPage = read("app/spinpro/[categorySlug]/[roomId]/page.tsx");
+
+if (!roomPage.includes("<FairnessStrip")) {
+  fail("The live room page must mount the external fairness panel.");
+}
+
+if (
+  !fairnessStrip.includes("Provably fair") ||
+  !fairnessStrip.includes("verifyCompletedFairness") ||
+  !fairnessStrip.includes("Verify completed result")
+) {
+  fail("FairnessStrip must expose completed-result verification.");
+}
+
+for (const forbidden of [
+  "selectWinner(",
+  "selectWinningTicket(",
+  "@kingspin/game-engine",
+]) {
+  if (allSource.includes(forbidden)) {
+    fail(`Frontend must not perform winner selection: ${forbidden}`);
+  }
 }
 
 if (failures.length > 0) {

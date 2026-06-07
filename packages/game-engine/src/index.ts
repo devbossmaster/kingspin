@@ -1,4 +1,5 @@
 export * from "./ticket-ranges";
+export * from "./entries-hash";
 export * from "./winner-selection";
 export * from "./spin-angle";
 export * from "./fairness-proof";

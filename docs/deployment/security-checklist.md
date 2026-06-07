@@ -168,6 +168,33 @@ Future improvement: move session validation to the initial Socket.IO handshake
 if private rooms, user-specific socket events, or moderation actions move onto
 sockets.
 
+## Provably Fair Randomness
+
+Status: versioned cryptographic draw and completed-result verification in
+place.
+
+- A fresh 32-byte seed is generated with `crypto.randomBytes(32)` per round.
+- `SHA256(serverSeed)` is committed before entries open.
+- Public and admin active-round responses never include the seed reveal.
+- Finalized 0-based ticket ranges are committed by `entriesHash` at lock.
+- New draws use `HMAC_SHA256_REJECTION_SAMPLING_V1`.
+- Rejection sampling removes modulo bias and uses BigInt arithmetic.
+- Completed results expose the seed, entry commitment, draw hash, nonce,
+  winning ticket, and range checks.
+- Winner selection remains backend-only; the frontend can only verify a
+  completed result.
+- `Math.random()` is forbidden in the winner-selection path.
+
+Verify:
+
+```bash
+pnpm --filter @kingspin/game-engine test
+pnpm security:static
+```
+
+See `docs/game/provably-fair-randomness.md` for the canonical payload and
+manual verification procedure.
+
 ## Static Checks
 
 Run before deployment:

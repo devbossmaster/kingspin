@@ -129,57 +129,57 @@ export default function SignUpPage() {
   }
 
   return (
-    <AuthShell
-      eyebrow="Create player"
-      title="Create your account"
-      subtitle="Register your Spin Battle player profile before you enter live rooms."
+  <AuthShell
+      eyebrow="ተጫዋች ይፍጠሩ"
+      title="አካውንትዎን ይፍጠሩ"
+      subtitle="ወደ ቀጥታ ክፍሎች ከመግባትዎ በፊት የ Spin Battle የተጫዋች ፕሮፋይልዎን ይመዝገቡ።"
       footer={
         <>
-          Already have an account?{" "}
+          አካውንት አልዎት?{" "}
           <Link
-            className="font-black"
+            className="font-black underline text-lg hover:text-sky-300 transition"
             href={`/sign-in?callbackURL=${encodeURIComponent(getSafeCallbackUrl())}`}
           >
-            Sign in
+            ይግቡ
           </Link>
         </>
       }
     >
-      <form onSubmit={handleSubmit} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-4">
         {error ? <FormMessage tone="error">{error}</FormMessage> : null}
         {success ? <FormMessage tone="success">{success}</FormMessage> : null}
 
         <label className="block text-sm font-semibold text-slate-200">
-          Username
+          የተጠቃሚ ስም
           <input
             className={authInputClass}
             name="username"
             autoComplete="username"
-            placeholder="Choose a username"
+            placeholder="የተጠቃሚ ስም ይምረጡ / username"
             minLength={3}
             required
           />
         </label>
 
         <label className="block text-sm font-semibold text-slate-200">
-          Full name
+          ሙሉ ስም
           <input
             className={authInputClass}
             name="fullName"
             autoComplete="name"
-            placeholder="Your full name"
+            placeholder="የእርስዎን ሙሉ ስም ያስገቡ / full name"
             required
           />
         </label>
 
         <label className="block text-sm font-semibold text-slate-200">
-          Phone number
+          የስልክ ቁጥር
           <div className="grid grid-cols-[116px_minmax(0,1fr)] gap-2">
             <select
               className={`${phoneFieldClass} cursor-pointer appearance-none`}
               name="phoneCountryCode"
               defaultValue="+251"
-              aria-label="Country code"
+              aria-label="የሀገር መለያ ኮድ"
               required
             >
               <option value="+251">+251 ET</option>
@@ -199,25 +199,25 @@ export default function SignUpPage() {
         </label>
 
         <label className="block text-sm font-semibold text-slate-200">
-          Email
+          ኢሜይል
           <input
             className={authInputClass}
             name="email"
             type="email"
             autoComplete="email"
-            placeholder="Enter your email"
+            placeholder="ኢሜይልዎን ያስገቡ / email address"
             required
           />
         </label>
 
         <label className="block text-sm font-semibold text-slate-200">
-          Password
+          የይለፍ ቃል
           <input
             className={authInputClass}
             name="password"
             type="password"
             autoComplete="new-password"
-            placeholder="Create a password"
+            placeholder="የይለፍ ቃል ይፍጠሩ / create password"
             minLength={8}
             value={password}
             onChange={(event) => setPassword(event.target.value)}
@@ -228,13 +228,13 @@ export default function SignUpPage() {
         <PasswordStrengthMeter password={password} />
 
         <label className="block text-sm font-semibold text-slate-200">
-          Confirm password
+          የይለፍ ቃል ያረጋግጡ
           <input
             className={authInputClass}
             name="confirmPassword"
             type="password"
             autoComplete="new-password"
-            placeholder="Confirm your password"
+            placeholder="የይለፍ ቃልዎን ያረጋግጡ / confirm password"
             required
           />
         </label>
@@ -244,7 +244,7 @@ export default function SignUpPage() {
           type="submit"
           disabled={isSubmitting}
         >
-          {isSubmitting ? "Creating account..." : "Create account"}
+          {isSubmitting ? "አካውንት በመፈጠር ላይ..." : "አካውንት ፍጠር"}
         </button>
       </form>
     </AuthShell>

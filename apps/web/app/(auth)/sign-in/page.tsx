@@ -64,18 +64,18 @@ export default function SignInPage() {
   }
 
   return (
-    <AuthShell
-      eyebrow="Welcome back!"
-      title="Sign in to your account"
-      subtitle="Sign in to your Spin Battle account, sync your wallet, and return to your selected room."
+   <AuthShell
+      eyebrow="እንኳን ደህና ተመለሱ!"
+      title="ወደ አካውንትዎ ይግቡ"
+      subtitle="ወደ Spin Battle አካውንትዎ ይግቡ፣ ዋሌትዎን ያገናኙ እና ወደ መረጡት ክፍል ይመለሱ።"
       footer={
         <>
-          Don&apos;t have an account?{" "}
+          አካውንት የለዎትም?{" "}
           <Link
-            className="font-black"
+            className="font-black underline text-lg hover:text-sky-300 transition" 
             href={`/sign-up?callbackURL=${encodeURIComponent(callbackURL)}`}
           >
-            Register now
+            አሁን ይመዝገቡ
           </Link>
         </>
       }
@@ -84,24 +84,24 @@ export default function SignInPage() {
         {error ? <FormMessage tone="error">{error}</FormMessage> : null}
 
         <label className="block text-sm font-semibold text-slate-200">
-          Username or email
+          የተጠቃሚ ስም ወይም ኢሜይል
           <input
             className={authInputClass}
             name="login"
             autoComplete="username"
-            placeholder="Enter username or email"
+            placeholder="የተጠቃሚ ስምዎን ወይም ኢሜይልዎን ያስገቡ"
             required
           />
         </label>
 
         <label className="block text-sm font-semibold text-slate-200">
-          Password
+          የይለፍ ቃል
           <input
             className={authInputClass}
             name="password"
             type="password"
             autoComplete="current-password"
-            placeholder="Enter your password"
+            placeholder="የይለፍ ቃልዎን ያስገቡ"
             required
           />
         </label>
@@ -110,7 +110,7 @@ export default function SignInPage() {
             href="/forgot-password"
             className="text-xs font-bold text-sky-300 transition hover:text-white"
           >
-            Forgot password?
+            የይለፍ ቃል ረሱ?
           </Link>
         </div>
 
@@ -119,7 +119,7 @@ export default function SignInPage() {
           type="submit"
           disabled={isSubmitting}
         >
-          {isSubmitting ? "Signing in..." : "Sign in"}
+          {isSubmitting ? "በመግባት ላይ..." : "ይግቡ"}
         </button>
       </form>
     </AuthShell>

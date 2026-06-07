@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
 import { CreateRoomSchema } from "@kingspin/contracts";
-import { GameMode, Prisma } from "@kingspin/db";
+import { GameMode, Prisma, RoomStatus } from "@kingspin/db";
 import { PrismaService } from "../../../prisma/prisma.service";
 
 type RoomNextStatus = "ACTIVE" | "PAUSED" | "CLOSED" | "ARCHIVED";
@@ -9,15 +9,117 @@ type RoomNextStatus = "ACTIVE" | "PAUSED" | "CLOSED" | "ARCHIVED";
 export class AdminRoomsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async listRooms() {
-    const rooms = await this.prisma.room.findMany({
-      orderBy: [{ status: "asc" }, { code: "asc" }],
-    });
+  async listRooms(query: {
+    page?: string;
+    pageSize?: string;
+    q?: string;
+    status?: string;
+  } = {}) {
+    const parsedPage = Number(query.page ?? 1);
+    const parsedPageSize = Number(query.pageSize ?? 25);
+    const page =
+      Number.isSafeInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const pageSize =
+      Number.isSafeInteger(parsedPageSize) && parsedPageSize > 0
+        ? Math.min(parsedPageSize, 100)
+        : 25;
+    const search = query.q?.trim();
+    const normalizedStatus = query.status?.trim().toUpperCase();
+    const status = Object.values(RoomStatus).includes(
+      normalizedStatus as RoomStatus,
+    )
+      ? (normalizedStatus as RoomStatus)
+      : undefined;
+    const where: Prisma.RoomWhereInput = {
+      status,
+      ...(search
+        ? {
+            OR: [
+              { id: search },
+              { code: { contains: search, mode: "insensitive" } },
+              { name: { contains: search, mode: "insensitive" } },
+              {
+                category: {
+                  name: { contains: search, mode: "insensitive" },
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+    const [total, rooms] = await Promise.all([
+      this.prisma.room.count({ where }),
+      this.prisma.room.findMany({
+        where,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        orderBy: [{ status: "asc" }, { code: "asc" }],
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          status: true,
+          gameMode: true,
+          isPermanent: true,
+          maxPlayers: true,
+          roundDurationMs: true,
+          updatedAt: true,
+          activatedAt: true,
+          pausedAt: true,
+          category: { select: { name: true, slug: true } },
+          rounds: {
+            take: 1,
+            orderBy: { roundNumber: "desc" },
+            select: {
+              id: true,
+              roundNumber: true,
+              status: true,
+              totalEntryAmount: true,
+              locksAt: true,
+              updatedAt: true,
+              _count: { select: { entries: true } },
+            },
+          },
+        },
+      }),
+    ]);
 
-    return rooms.map((room) => ({
-      ...room,
-      fixedEntryAmount: room.fixedEntryAmount?.toString() ?? null,
-    }));
+    return {
+      items: rooms.map((room) => {
+        const currentRound = room.rounds[0] ?? null;
+        return {
+          id: room.id,
+          code: room.code,
+          name: room.name,
+          category: room.category,
+          status: room.status,
+          gameMode: room.gameMode,
+          isPermanent: room.isPermanent,
+          maxPlayers: room.maxPlayers,
+          roundDurationMs: room.roundDurationMs,
+          currentRound: currentRound
+            ? {
+                id: currentRound.id,
+                roundNumber: currentRound.roundNumber,
+                status: currentRound.status,
+                playersCount: currentRound._count.entries,
+                poolAmount: currentRound.totalEntryAmount.toString(),
+                locksAt: currentRound.locksAt?.toISOString() ?? null,
+                updatedAt: currentRound.updatedAt.toISOString(),
+              }
+            : null,
+          lastActivityAt: (
+            currentRound?.updatedAt ?? room.updatedAt
+          ).toISOString(),
+          activatedAt: room.activatedAt?.toISOString() ?? null,
+          pausedAt: room.pausedAt?.toISOString() ?? null,
+        };
+      }),
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    };
   }
 
   async createRoom(body: unknown) {

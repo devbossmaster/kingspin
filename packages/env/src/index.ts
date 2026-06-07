@@ -166,7 +166,7 @@ const ApiEnvBaseSchema = z
         "STRIPE",
         "CUSTOM",
       ])
-      .default("MOCK"),
+      .optional(),
     TELEBIRR_RECEIPT_VERIFICATION_ENABLED: BooleanStringSchema.default(false),
     TELEBIRR_RECEIPT_BASE_URL: z
       .string()
@@ -205,13 +205,19 @@ const ApiEnvBaseSchema = z
     CSRF_SECRET: OptionalStringSchema,
   })
   .passthrough()
-  .transform((env) => ({
-    ...env,
-    APP_ENV: resolveAppEnv(env),
-    API_CORS_ORIGIN: env.API_CORS_ORIGIN ?? env.CORS_ORIGIN ?? env.WEB_URL,
-    BETTER_AUTH_URL: env.BETTER_AUTH_URL ?? env.WEB_URL,
-    ENABLE_LOCAL_DEV_AUTH: env.ENABLE_LOCAL_DEV_AUTH ?? env.ENABLE_DEV_AUTH,
-  }));
+  .transform((env) => {
+    const appEnv = resolveAppEnv(env);
+
+    return {
+      ...env,
+      APP_ENV: appEnv,
+      API_CORS_ORIGIN: env.API_CORS_ORIGIN ?? env.CORS_ORIGIN ?? env.WEB_URL,
+      BETTER_AUTH_URL: env.BETTER_AUTH_URL ?? env.WEB_URL,
+      ENABLE_LOCAL_DEV_AUTH: env.ENABLE_LOCAL_DEV_AUTH ?? env.ENABLE_DEV_AUTH,
+      PAYMENT_PROVIDER:
+        env.PAYMENT_PROVIDER ?? (appEnv === "local" ? "MOCK" : "MANUAL"),
+    };
+  });
 
 export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
   if (env.DEPLOY_ENV && env.APP_ENV !== env.DEPLOY_ENV) {
@@ -248,12 +254,12 @@ export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
     });
   }
 
-  if (env.APP_ENV === "production" && env.PAYMENT_PROVIDER === "MOCK") {
+  if (env.APP_ENV !== "local" && env.PAYMENT_PROVIDER === "MOCK") {
     context.addIssue({
       code: "custom",
       path: ["PAYMENT_PROVIDER"],
       message:
-        "PAYMENT_PROVIDER=MOCK is local-only. Use MANUAL or a configured real adapter stub in production.",
+        "PAYMENT_PROVIDER=MOCK is local-only. Use MANUAL or a configured real adapter stub outside local development.",
     });
   }
 
@@ -312,19 +318,36 @@ export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
     });
   }
 
-  if (
-    env.APP_ENV === "production" &&
-    env.TELEBIRR_RECEIPT_VERIFICATION_ENABLED &&
-    !env.TELEBIRR_EXPECTED_RECEIVER_NAME &&
-    !env.TELEBIRR_EXPECTED_RECEIVER_ACCOUNT &&
-    !env.TELEBIRR_EXPECTED_SHORT_CODE
-  ) {
-    context.addIssue({
-      code: "custom",
-      path: ["TELEBIRR_EXPECTED_RECEIVER_NAME"],
-      message:
-        "At least one Telebirr receiver identity field is required in production when receipt verification is enabled.",
-    });
+  if (env.APP_ENV !== "local") {
+    const telebirrReceiptDepositsEnabled =
+      env.TELEBIRR_RECEIPT_VERIFICATION_ENABLED ||
+      env.PAYMENT_PROVIDER === "TELEBIRR_RECEIPT";
+
+    if (
+      env.PAYMENT_PROVIDER === "TELEBIRR_RECEIPT" &&
+      !env.TELEBIRR_RECEIPT_VERIFICATION_ENABLED
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["TELEBIRR_RECEIPT_VERIFICATION_ENABLED"],
+        message:
+          "TELEBIRR_RECEIPT_VERIFICATION_ENABLED=true is required outside local development when PAYMENT_PROVIDER=TELEBIRR_RECEIPT.",
+      });
+    }
+
+    if (
+      telebirrReceiptDepositsEnabled &&
+      !env.TELEBIRR_EXPECTED_RECEIVER_NAME &&
+      !env.TELEBIRR_EXPECTED_RECEIVER_ACCOUNT &&
+      !env.TELEBIRR_EXPECTED_SHORT_CODE
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["TELEBIRR_EXPECTED_RECEIVER_NAME"],
+        message:
+          "At least one Telebirr receiver identity field is required outside local development when receipt deposits are enabled.",
+      });
+    }
   }
 
   if (env.APP_ENV !== "local" && env.ADMIN_DEV_KEY) {

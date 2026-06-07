@@ -148,10 +148,18 @@ enum RiskEventType {
   ENTRY_RATE_LIMIT_HIT
   INSUFFICIENT_BALANCE_SPAM
   DUPLICATE_IP_DEVICE
+  DUPLICATE_IP_BETTING
+  SAME_DEVICE_MULTI_ACCOUNT
   DEPOSIT_WEBHOOK_MISMATCH
+  DUPLICATE_PAYMENT_RECEIPT
+  MANY_FAILED_RECEIPTS
   WITHDRAWAL_AMOUNT_SPIKE
   FAST_DEPOSIT_WITHDRAWAL
+  SUSPICIOUS_WITHDRAWAL
+  WITHDRAWAL_AFTER_NEW_DEPOSIT
   ABNORMAL_WIN_PATTERN
+  REPEATED_WINNER_ANOMALY
+  MULTI_ACCOUNT_PATTERN
   ADMIN_ROUND_INTERVENTION
   PAYMENT_FAILURE_PATTERN
   MANUAL_FLAG
@@ -169,6 +177,7 @@ enum RiskEventStatus {
   REVIEWED
   DISMISSED
   ACTIONED
+  RESOLVED
 }
 
 enum WorkerJobStatus {
@@ -202,6 +211,7 @@ model User {
   reviewedWithdrawals Withdrawal[]    @relation("WithdrawalReviewedByAdmin")
   riskEvents          RiskEvent[]     @relation("RiskEventUser")
   reviewedRiskEvents  RiskEvent[]     @relation("RiskEventReviewedByAdmin")
+  riskSignals         RiskSignal[]    @relation("RiskSignalUser")
   sessions            Session[]
   accounts            Account[]
   createdRooms        Room[]          @relation("RoomCreatedByAdmin")
@@ -266,7 +276,7 @@ model Category {
   slug            String   @unique
   minEntryAmount  BigInt
   maxEntryAmount  BigInt
-  maxPlayers      Int      @default(15)
+  maxPlayers      Int      @default(30)
   roundDurationMs Int      @default(45000)
   isActive        Boolean  @default(true)
   sortOrder       Int      @default(0)
@@ -288,7 +298,7 @@ model Room {
   gameMode         GameMode   @default(FLEXIBLE_PROPORTIONAL)
   fixedEntryAmount BigInt?
   isPermanent      Boolean    @default(false)
-  maxPlayers       Int        @default(15)
+  maxPlayers       Int        @default(30)
   roundDurationMs  Int        @default(45000)
   createdByAdminId String?
   activatedAt      DateTime?
@@ -540,20 +550,66 @@ model RiskEvent {
   type              RiskEventType
   severity          RiskEventSeverity
   status            RiskEventStatus   @default(OPEN)
+  score             Int               @default(0)
+  summary           String            @default("Risk event requires review.")
+  reason            String?
+  relatedType       String?
+  relatedId         String?
+  ipHash            String?
+  userAgentHash     String?
+  deviceHash        String?
   metadata          Json?
   createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
   reviewedByAdminId String?
   reviewedAt        DateTime?
+  reviewNote        String?
+  dismissedAt       DateTime?
+  dismissedBy       String?
 
   user            User? @relation("RiskEventUser", fields: [userId], references: [id])
   reviewedByAdmin User? @relation("RiskEventReviewedByAdmin", fields: [reviewedByAdminId], references: [id])
 
   @@index([userId, createdAt])
+  @@index([userId, status])
   @@index([roomId, createdAt])
   @@index([roundId, createdAt])
   @@index([type, createdAt])
+  @@index([type, status])
+  @@index([severity, status])
   @@index([severity, status, createdAt])
+  @@index([relatedType, relatedId])
+  @@index([ipHash, createdAt])
+  @@index([deviceHash, createdAt])
+  @@index([createdAt])
   @@map("risk_events")
+}
+
+model RiskSignal {
+  id            String   @id @default(cuid())
+  userId        String?
+  type          String
+  action        String
+  roomId        String?
+  roundId       String?
+  relatedType   String?
+  relatedId     String?
+  ipHash        String?
+  userAgentHash String?
+  deviceHash    String?
+  metadata      Json?
+  createdAt     DateTime @default(now())
+
+  user User? @relation("RiskSignalUser", fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+  @@index([roomId, roundId])
+  @@index([relatedType, relatedId])
+  @@index([ipHash, roundId, createdAt])
+  @@index([deviceHash, roundId, createdAt])
+  @@index([createdAt])
+  @@map("risk_signals")
 }
 
 model WorkerJobLog {

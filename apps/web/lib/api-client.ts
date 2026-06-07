@@ -140,7 +140,7 @@ function isMutatingRequest(init?: RequestInit) {
   return CSRF_MUTATING_METHODS.has(method);
 }
 
-async function requestJson<TResponse>(
+export async function requestJson<TResponse>(
   path: string,
   init?: RequestInit,
 ): Promise<TResponse> {
@@ -210,10 +210,10 @@ export const apiClient = {
     );
   },
 
-  getWinnerFeed(scope: WinnerFeedScope, limit = 30) {
+  getWinnerFeed(scope: WinnerFeedScope, limit = 15) {
     const params = new URLSearchParams({
       scope,
-      limit: String(Math.min(30, Math.max(1, Math.floor(limit)))),
+      limit: String(Math.min(15, Math.max(1, Math.floor(limit)))),
     });
 
     return requestJson<WinnerFeedResponse>(

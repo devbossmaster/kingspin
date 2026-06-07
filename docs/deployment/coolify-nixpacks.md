@@ -13,7 +13,7 @@ No Dockerfile, Compose file, or custom image is required for the current repo.
 - Root directory: repository root
 - Build pack: Nixpacks
 - Install command: `pnpm install --frozen-lockfile`
-- Build command: `pnpm --filter @kingspin/db db:generate && pnpm --filter api build`
+- Build command: `pnpm --filter @kingspin/db db:generate && pnpm turbo run build --filter=api`
 - Start command: `pnpm --filter api start:prod`
 - Port: `4000`
 - Health check path: `/health`
@@ -22,7 +22,7 @@ If your Coolify UI has a single build command field instead of separate install
 and build commands, use:
 
 ```bash
-pnpm install --frozen-lockfile && pnpm --filter @kingspin/db db:generate && pnpm --filter api build
+pnpm install --frozen-lockfile && pnpm --filter @kingspin/db db:generate && pnpm turbo run build --filter=api
 ```
 
 Required API environment variables:
@@ -42,6 +42,7 @@ ENABLE_LOCAL_DEV_AUTH=false
 ENABLE_REDIS=true
 REDIS_URL=redis://default:PASSWORD@redis:6379
 TRUST_PROXY_HEADERS=false
+PAYMENT_PROVIDER=MANUAL
 RESEND_API_KEY=replace-with-resend-key
 RESEND_FROM_EMAIL=SpinPro <auth@example.com>
 RATE_LIMIT_WINDOW_MS=60000
@@ -49,6 +50,10 @@ RATE_LIMIT_MAX=120
 LOG_LEVEL=info
 SENTRY_DSN=
 ```
+
+Use `API_CORS_ORIGIN` or `CORS_ORIGIN` for the deployed web origin. Do not use
+wildcard CORS. Keep `ENABLE_REDIS=true` and `REDIS_URL` set for every
+staging/production API deployment.
 
 Do not configure `ADMIN_DEV_KEY` in Coolify/staging/production. The
 `x-admin-dev-key` routes are local development helpers only.
@@ -58,12 +63,32 @@ Coolify/Nginx/proxy infrastructure that controls the forwarded client IP
 headers. `SENTRY_DSN` is optional, but recommended for production error
 visibility.
 
+Payment environment variables for Telebirr receipt deposits:
+
+```bash
+TELEBIRR_RECEIPT_VERIFICATION_ENABLED=true
+TELEBIRR_RECEIPT_BASE_URL=https://transactioninfo.ethiotelecom.et/receipt
+TELEBIRR_EXPECTED_RECEIVER_NAME=replace-with-merchant-name
+TELEBIRR_EXPECTED_RECEIVER_ACCOUNT=replace-with-merchant-account
+TELEBIRR_EXPECTED_SHORT_CODE=replace-with-merchant-short-code
+TELEBIRR_DEPOSIT_MIN=10
+TELEBIRR_DEPOSIT_MAX=10000
+TELEBIRR_DEPOSIT_INTENT_TTL_MINUTES=15
+TELEBIRR_RECEIPT_HTTP_TIMEOUT_MS=8000
+TELEBIRR_RECEIPT_MAX_HTML_BYTES=200000
+```
+
+At least one receiver identity field is required outside local development when
+Telebirr receipt deposits are enabled. The backend fetches and verifies the
+official receipt page; frontend-submitted amount, receiver, status, and payer
+fields are never trusted.
+
 ### Web Service
 
 - Root directory: repository root
 - Build pack: Nixpacks
 - Install command: `pnpm install --frozen-lockfile`
-- Build command: `pnpm --filter @kingspin/db db:generate && pnpm --filter web build`
+- Build command: `pnpm --filter @kingspin/db db:generate && pnpm turbo run build --filter=web`
 - Start command: `pnpm --filter web start`
 - Port: `3000`
 - Health check path: `/`
@@ -72,7 +97,7 @@ If your Coolify UI has a single build command field instead of separate install
 and build commands, use:
 
 ```bash
-pnpm install --frozen-lockfile && pnpm --filter @kingspin/db db:generate && pnpm --filter web build
+pnpm install --frozen-lockfile && pnpm --filter @kingspin/db db:generate && pnpm turbo run build --filter=web
 ```
 
 Required web environment variables:
@@ -150,15 +175,18 @@ Staging/production:
 pnpm --filter @kingspin/db db:generate
 pnpm --filter @kingspin/db migrate:status
 pnpm --filter @kingspin/db migrate:deploy
+pnpm --filter @kingspin/db migrate:status
 ```
 
-Do not run `prisma migrate dev` or `prisma db push` against staging or
-production. Do not run migrations automatically on every app start.
+Before running `migrate:deploy`, confirm the target database is the intended
+staging/production database, inspect pending migrations, and back up the
+database if it contains real data. Do not run `prisma migrate reset`, `prisma
+migrate dev`, or `prisma db push` against staging or production. Do not run
+migrations automatically on every app start.
 
-The migration included in this repo is an initial schema migration intended for
-a fresh staging/closed-alpha database. If you already have a database created by
-`db push`, baseline it deliberately before using `migrate deploy`; do not point
-this initial migration at an unreviewed live database.
+If you already have a database created by `db push`, baseline it deliberately
+before using `migrate deploy`; do not point reviewed migrations at an unreviewed
+live database.
 
 ## Redis and Socket.IO
 
@@ -228,12 +256,24 @@ Expected results:
 
 - `/health` returns ok.
 - `/health/db` returns database ok.
+- `/health/redis` returns Redis available.
 - `/health/round-machine` reports the round machine enabled, running for active
-  permanent rooms, and no stale completed/current rounds.
+  permanent rooms, a recent `lastTickAt`, Redis availability, and no stale
+  completed/current rounds.
 - `/categories` returns an array.
 - anonymous `/me` returns 401.
 - web home returns 2xx.
 - optional room live-state returns the requested room.
+
+Coolify log checks:
+
+- API boot has no environment validation errors and no production dev-auth
+  warnings.
+- Web boot succeeds with the same Better Auth secret and deployed auth URL.
+- Redis connection logs show the API connected for realtime cache, locks, and
+  rate limits.
+- Round-machine startup logs show active permanent rooms started.
+- Sentry initialization logs appear when `SENTRY_DSN` is configured.
 
 For the full manual smoke runbook, see
 `docs/deployment/closed-alpha-smoke-test.md`.

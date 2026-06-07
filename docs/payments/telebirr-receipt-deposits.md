@@ -53,6 +53,14 @@ Admin finance users can read deposit details and attempts, manually approve only
 `NEEDS_MANUAL_REVIEW` intents with a note, or reject with a reason. Manual
 approval still uses the same ledger credit path and idempotency key discipline.
 
+## Withdrawals
+
+Telebirr receipt deposits do not provide automatic payouts. Withdrawals remain a
+manual operations flow in this phase: the user requests a withdrawal, an admin
+performs the external payout outside the app, records the payout reference when
+completing the withdrawal, or rejects the request with a reason. The wallet
+reserve/refund ledger path must remain idempotent.
+
 ## Failure Modes
 
 - Receipt site unavailable: intent goes to manual review.
@@ -62,4 +70,6 @@ approval still uses the same ledger credit path and idempotency key discipline.
 - Too many attempts: manual review required.
 
 Official Telebirr API integration remains recommended before accepting real
-money at scale.
+money at scale. Legal/compliance review, provider approval, reconciliation,
+monitoring, support operations, and an independent security review are required
+before any public real-money launch.

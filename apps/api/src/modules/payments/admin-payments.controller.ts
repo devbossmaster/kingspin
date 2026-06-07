@@ -37,8 +37,21 @@ export class AdminPaymentsController {
   listDeposits(
     @Query('status') status?: DepositStatus,
     @Query('userId') userId?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('q') q?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
-    return this.depositsService.listDeposits({ status, userId });
+    return this.depositsService.listAdminDeposits({
+      status,
+      userId,
+      page,
+      pageSize,
+      q,
+      from,
+      to,
+    });
   }
 
   @Get('deposits/:id')
@@ -54,9 +67,13 @@ export class AdminPaymentsController {
     @Param('id') id: string,
     @Body() body: { adminNote?: string },
   ) {
+    if (!body?.adminNote?.trim()) {
+      throw new BadRequestException('adminNote is required.');
+    }
+
     const result = await this.depositsService.approveReviewedDeposit(
       id,
-      body?.adminNote ?? '',
+      body.adminNote.trim(),
     );
 
     await this.auditService.recordAdminAction({
@@ -66,7 +83,7 @@ export class AdminPaymentsController {
       targetId: id,
       after: result.deposit,
       metadata: {
-        adminNote: body?.adminNote ?? null,
+        adminNote: body.adminNote.trim(),
       },
     });
 
@@ -80,9 +97,13 @@ export class AdminPaymentsController {
     @Param('id') id: string,
     @Body() body: { reason?: string },
   ) {
+    if (!body?.reason?.trim()) {
+      throw new BadRequestException('reason is required.');
+    }
+
     const result = await this.depositsService.rejectDeposit(
       id,
-      body?.reason ?? '',
+      body.reason.trim(),
     );
 
     await this.auditService.recordAdminAction({
@@ -92,7 +113,7 @@ export class AdminPaymentsController {
       targetId: id,
       after: result.deposit,
       metadata: {
-        reason: body?.reason ?? null,
+        reason: body.reason.trim(),
       },
     });
 
@@ -123,8 +144,27 @@ export class AdminPaymentsController {
   listWithdrawals(
     @Query('status') status?: WithdrawalStatus,
     @Query('userId') userId?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('q') q?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
   ) {
-    return this.withdrawalsService.listWithdrawals({ status, userId });
+    return this.withdrawalsService.listAdminWithdrawals({
+      status,
+      userId,
+      page,
+      pageSize,
+      q,
+      from,
+      to,
+    });
+  }
+
+  @Get('withdrawals/:id')
+  @AdminRoles(Role.ADMIN, Role.FINANCE, Role.SUPPORT, Role.VIEWER)
+  getWithdrawal(@Param('id') id: string) {
+    return this.withdrawalsService.getAdminWithdrawal(id);
   }
 
   @Patch('withdrawals/:id/approve')
@@ -230,10 +270,14 @@ export class AdminPaymentsController {
     @Param('id') id: string,
     @Body() body: { reason?: string },
   ) {
+    if (!body?.reason?.trim()) {
+      throw new BadRequestException('reason is required.');
+    }
+
     const result = await this.withdrawalsService.rejectWithdrawal(
       id,
       admin.id,
-      body?.reason ?? 'Rejected by finance review.',
+      body.reason.trim(),
     );
 
     await this.auditService.recordAdminAction({
@@ -242,6 +286,9 @@ export class AdminPaymentsController {
       targetType: 'WITHDRAWAL',
       targetId: id,
       after: result.withdrawal,
+      metadata: {
+        reason: body.reason.trim(),
+      },
     });
 
     return result;

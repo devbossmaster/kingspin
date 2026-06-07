@@ -13,11 +13,11 @@ describe('API environment validation', () => {
     ).toThrow(EnvValidationError);
   });
 
-  it('rejects local-only payment providers in production', () => {
+  it('rejects local-only payment providers outside local development', () => {
     expect(() =>
       parseApiEnv({
         NODE_ENV: 'production',
-        APP_ENV: 'production',
+        APP_ENV: 'staging',
         DATABASE_URL: 'postgresql://user:pass@db.example.com:5432/app',
         WEB_URL: 'https://kingspin.example.com',
         API_CORS_ORIGIN: 'https://kingspin.example.com',
@@ -29,6 +29,23 @@ describe('API environment validation', () => {
         REDIS_URL: 'redis://redis.example.com:6379',
       }),
     ).toThrow(EnvValidationError);
+  });
+
+  it('defaults deployed payment provider to manual when omitted', () => {
+    expect(
+      parseApiEnv({
+        NODE_ENV: 'production',
+        APP_ENV: 'staging',
+        DATABASE_URL: 'postgresql://user:pass@db.example.com:5432/app',
+        WEB_URL: 'https://kingspin.example.com',
+        API_CORS_ORIGIN: 'https://kingspin.example.com',
+        BETTER_AUTH_SECRET: 'production-secret',
+        RESEND_API_KEY: 'resend-production',
+        RESEND_FROM_EMAIL: 'SpinPro <noreply@kingspin.io>',
+        ENABLE_REDIS: 'true',
+        REDIS_URL: 'redis://redis.example.com:6379',
+      }).PAYMENT_PROVIDER,
+    ).toBe('MANUAL');
   });
 
   it('requires production Node runtime outside local development', () => {
@@ -187,11 +204,11 @@ describe('API environment validation', () => {
     ).toThrow(EnvValidationError);
   });
 
-  it('requires receiver identity when production Telebirr receipt verification is enabled', () => {
+  it('requires receiver identity when deployed Telebirr receipt verification is enabled', () => {
     expect(() =>
       parseApiEnv({
         NODE_ENV: 'production',
-        APP_ENV: 'production',
+        APP_ENV: 'staging',
         DATABASE_URL: 'postgresql://user:pass@db.example.com:5432/app',
         WEB_URL: 'https://kingspin.example.com',
         API_CORS_ORIGIN: 'https://kingspin.example.com',
@@ -204,5 +221,42 @@ describe('API environment validation', () => {
         TELEBIRR_RECEIPT_VERIFICATION_ENABLED: 'true',
       }),
     ).toThrow(EnvValidationError);
+  });
+
+  it('requires Telebirr receipt verification when it is the deployed payment provider', () => {
+    expect(() =>
+      parseApiEnv({
+        NODE_ENV: 'production',
+        APP_ENV: 'staging',
+        DATABASE_URL: 'postgresql://user:pass@db.example.com:5432/app',
+        WEB_URL: 'https://kingspin.example.com',
+        API_CORS_ORIGIN: 'https://kingspin.example.com',
+        BETTER_AUTH_SECRET: 'production-secret',
+        RESEND_API_KEY: 'resend-production',
+        RESEND_FROM_EMAIL: 'SpinPro <noreply@kingspin.io>',
+        PAYMENT_PROVIDER: 'TELEBIRR_RECEIPT',
+        ENABLE_REDIS: 'true',
+        REDIS_URL: 'redis://redis.example.com:6379',
+        TELEBIRR_EXPECTED_RECEIVER_ACCOUNT: '251900000000',
+      }),
+    ).toThrow(EnvValidationError);
+
+    expect(
+      parseApiEnv({
+        NODE_ENV: 'production',
+        APP_ENV: 'staging',
+        DATABASE_URL: 'postgresql://user:pass@db.example.com:5432/app',
+        WEB_URL: 'https://kingspin.example.com',
+        API_CORS_ORIGIN: 'https://kingspin.example.com',
+        BETTER_AUTH_SECRET: 'production-secret',
+        RESEND_API_KEY: 'resend-production',
+        RESEND_FROM_EMAIL: 'SpinPro <noreply@kingspin.io>',
+        PAYMENT_PROVIDER: 'TELEBIRR_RECEIPT',
+        ENABLE_REDIS: 'true',
+        REDIS_URL: 'redis://redis.example.com:6379',
+        TELEBIRR_RECEIPT_VERIFICATION_ENABLED: 'true',
+        TELEBIRR_EXPECTED_RECEIVER_ACCOUNT: '251900000000',
+      }).PAYMENT_PROVIDER,
+    ).toBe('TELEBIRR_RECEIPT');
   });
 });

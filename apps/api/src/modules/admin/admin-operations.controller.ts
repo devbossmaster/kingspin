@@ -17,6 +17,18 @@ export class AdminOperationsController {
     private readonly auditService: AuditService,
   ) {}
 
+  @Get("dashboard/summary")
+  @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.FINANCE, Role.RISK, Role.VIEWER)
+  dashboardSummary() {
+    return this.adminOperationsService.getDashboardSummary();
+  }
+
+  @Get("dashboard/recent")
+  @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.FINANCE, Role.RISK, Role.VIEWER)
+  dashboardRecent() {
+    return this.adminOperationsService.getDashboardRecentActivity();
+  }
+
   @Get("dashboard")
   @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.FINANCE, Role.RISK, Role.VIEWER)
   dashboard() {
@@ -25,8 +37,43 @@ export class AdminOperationsController {
 
   @Get("users")
   @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.RISK, Role.VIEWER)
-  users(@Query("search") search?: string) {
-    return this.adminOperationsService.listUsers({ search });
+  users(
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+    @Query("q") q?: string,
+    @Query("search") search?: string,
+    @Query("status") status?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+  ) {
+    return this.adminOperationsService.listUsers({
+      page,
+      pageSize,
+      q: q ?? search,
+      status,
+      from,
+      to,
+    });
+  }
+
+  @Get("players")
+  @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.RISK, Role.VIEWER)
+  players(
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+    @Query("q") q?: string,
+    @Query("status") status?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+  ) {
+    return this.adminOperationsService.listUsers({
+      page,
+      pageSize,
+      q,
+      status,
+      from,
+      to,
+    });
   }
 
   @Get("users/:id")
@@ -53,16 +100,44 @@ export class AdminOperationsController {
     return this.adminOperationsService.unsuspendUser(id, admin.id);
   }
 
-  @Get("rooms")
-  @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.VIEWER)
-  rooms() {
-    return this.adminOperationsService.listRooms();
-  }
-
   @Get("rounds")
   @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.RISK, Role.VIEWER)
-  rounds() {
-    return this.adminOperationsService.listRounds();
+  rounds(
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+    @Query("q") q?: string,
+    @Query("status") status?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+  ) {
+    return this.adminOperationsService.listRounds({
+      page,
+      pageSize,
+      q,
+      status,
+      from,
+      to,
+    });
+  }
+
+  @Get("entries")
+  @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.RISK, Role.VIEWER)
+  entries(
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+    @Query("q") q?: string,
+    @Query("status") status?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+  ) {
+    return this.adminOperationsService.listEntries({
+      page,
+      pageSize,
+      q,
+      status,
+      from,
+      to,
+    });
   }
 
   @Get("ledger")
@@ -76,8 +151,26 @@ export class AdminOperationsController {
 
   @Get("risk")
   @AdminRoles(Role.ADMIN, Role.RISK, Role.SUPPORT, Role.VIEWER)
-  risk(@Query("status") status?: RiskEventStatus) {
-    return this.fraudService.listRiskEvents({ status });
+  risk(
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+    @Query("q") q?: string,
+    @Query("status") status?: string,
+    @Query("severity") severity?: string,
+    @Query("type") type?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+  ) {
+    return this.adminOperationsService.listRiskEvents({
+      page,
+      pageSize,
+      q,
+      status,
+      severity,
+      type,
+      from,
+      to,
+    });
   }
 
   @Patch("risk/:id/review")
@@ -85,14 +178,20 @@ export class AdminOperationsController {
   async reviewRisk(
     @CurrentAdmin() admin: AdminBridgeUser,
     @Param("id") id: string,
-    @Body() body: { status?: RiskEventStatus },
+    @Body() body: { status?: RiskEventStatus; note?: string },
   ) {
     const status = body?.status ?? RiskEventStatus.REVIEWED;
-    const event = await this.fraudService.reviewRiskEvent(id, admin.id, status);
+    const event = await this.fraudService.reviewRiskEvent(
+      id,
+      admin.id,
+      status,
+      body?.note,
+    );
     const action =
       status === RiskEventStatus.DISMISSED
         ? AdminAuditAction.RISK_EVENT_DISMISSED
-        : status === RiskEventStatus.ACTIONED
+        : status === RiskEventStatus.ACTIONED ||
+            status === RiskEventStatus.RESOLVED
           ? AdminAuditAction.RISK_EVENT_ACTIONED
           : AdminAuditAction.RISK_EVENT_REVIEWED;
 
@@ -109,8 +208,34 @@ export class AdminOperationsController {
 
   @Get("audit")
   @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.FINANCE, Role.RISK, Role.VIEWER)
-  audit() {
-    return this.adminOperationsService.listAuditLogs();
+  audit(
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+    @Query("q") q?: string,
+    @Query("action") action?: string,
+    @Query("from") from?: string,
+    @Query("to") to?: string,
+  ) {
+    return this.adminOperationsService.listAuditLogs({
+      page,
+      pageSize,
+      q,
+      action,
+      from,
+      to,
+    });
+  }
+
+  @Get("health/summary")
+  @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.VIEWER)
+  healthSummary() {
+    return this.adminOperationsService.getHealthSummary();
+  }
+
+  @Get("settings")
+  @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.FINANCE, Role.RISK, Role.VIEWER)
+  settings() {
+    return this.adminOperationsService.getSettingsSummary();
   }
 
   @Get("jobs")

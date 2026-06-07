@@ -78,18 +78,18 @@ export default function ResetPasswordPage() {
   }
 
   return (
-    <AuthShell
-      eyebrow="Secure reset"
-      title="Reset password"
-      subtitle="Set a new password for your Spin Battle account."
+   <AuthShell
+      eyebrow="ደህንነቱ የተጠበቀ ማደሻ"
+      title="የይለፍ ቃል ያድሱ"
+      subtitle="ለ Spin Battle አካውንትዎ አዲስ የይለፍ ቃል ያዘጋጁ።"
       footer={
         <>
-          Back to{" "}
+          ወደ{" "}
           <Link
-            className="font-bold text-yellow-200 hover:text-yellow-100"
+            className="font-bold underline text-lg text-yellow-200 hover:text-yellow-100 transition"
             href="/sign-in"
           >
-            sign in
+            መግቢያ ይመለሱ
           </Link>
         </>
       }
@@ -99,7 +99,7 @@ export default function ResetPasswordPage() {
         {success ? <FormMessage tone="success">{success}</FormMessage> : null}
 
         <label className="block text-sm font-semibold text-slate-200">
-          New password
+          አዲስ የይለፍ ቃል
           <input
             className={authInputClass}
             name="password"
@@ -115,7 +115,7 @@ export default function ResetPasswordPage() {
         <PasswordStrengthMeter password={password} />
 
         <label className="block text-sm font-semibold text-slate-200">
-          Confirm password
+          የይለፍ ቃል ያረጋግጡ
           <input
             className={authInputClass}
             name="confirmPassword"
@@ -130,7 +130,7 @@ export default function ResetPasswordPage() {
           type="submit"
           disabled={isSubmitting}
         >
-          {isSubmitting ? "Updating..." : "Update password"}
+          {isSubmitting ? "በማደስ ላይ..." : "የይለፍ ቃል ያድሱ"}
         </button>
       </form>
     </AuthShell>

@@ -11,6 +11,7 @@ import {
 import { PlaceEntrySchema, type PlaceEntryInput } from '@kingspin/contracts';
 import { createHash } from 'node:crypto';
 import { RoomGateway } from '../../gateways/room.gateway';
+import { getApiEnv } from '../../config/api-env';
 import { AuthGuard } from '../auth-bridge/auth.guard';
 import { CurrentUser } from '../auth-bridge/current-user.decorator';
 import type { AuthBridgeUser } from '../auth-bridge/auth.types';
@@ -23,10 +24,43 @@ const ENTRY_HTTP_WARN_THRESHOLD_MS = 300;
 
 type EntryHttpRequest = {
   requestId?: string;
+  ip?: string;
+  headers?: Record<string, string | string[] | undefined>;
+  socket?: { remoteAddress?: string };
 };
 
 function hashUserId(userId: string) {
   return createHash('sha256').update(userId).digest('hex').slice(0, 12);
+}
+
+function firstHeader(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function normalizeClientValue(value: string | undefined) {
+  const normalized = value?.trim();
+  return normalized && normalized.length > 0 ? normalized : null;
+}
+
+function clientIpFromRequest(request: EntryHttpRequest | undefined) {
+  const env = getApiEnv();
+
+  if (env.TRUST_PROXY_HEADERS) {
+    const forwarded = firstHeader(request?.headers?.['x-forwarded-for']);
+    const firstForwarded = forwarded
+      ?.split(',')
+      .map((part) => part.trim())
+      .find(Boolean);
+
+    if (firstForwarded) {
+      return normalizeClientValue(firstForwarded);
+    }
+  }
+
+  return (
+    normalizeClientValue(request?.ip) ??
+    normalizeClientValue(request?.socket?.remoteAddress)
+  );
 }
 
 @Controller('rooms/:roomId/entries')
@@ -97,6 +131,8 @@ export class EntriesController {
         idempotencyKey: body.idempotencyKey,
         requestId,
         requestReceivedAtMs,
+        ipAddress: clientIpFromRequest(request),
+        userAgent: firstHeader(request?.headers?.['user-agent']) ?? null,
       });
       record('entry-service', serviceStartedAt);
 

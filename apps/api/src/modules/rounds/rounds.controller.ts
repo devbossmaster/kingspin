@@ -11,7 +11,7 @@ function parseWinnerFeedScope(value: string | undefined): WinnerFeedScope {
 function parseWinnerFeedLimit(value: string | undefined) {
   const parsed = Number(value);
 
-  return Number.isFinite(parsed) ? parsed : 30;
+  return Number.isFinite(parsed) ? parsed : 15;
 }
 
 @Controller('rooms')

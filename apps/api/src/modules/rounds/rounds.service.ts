@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma, RoundStatus, type Entry } from '@kingspin/db';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
@@ -18,6 +19,7 @@ import {
   WalletsService,
   type EntryRefundResult,
 } from '../wallets/wallets.service';
+import { FraudService } from '../fraud/fraud.service';
 import { buildPublicRoundPhaseView } from './public-round-phase';
 import type {
   PublicRoundPhase,
@@ -39,6 +41,7 @@ const CANCELLABLE_ROUND_STATUSES: RoundStatus[] = [
 
 const LATEST_RESULT_TIMING_WARN_THRESHOLD_MS = 1_000;
 const ROUND_TRANSACTION_TIMING_WARN_THRESHOLD_MS = 300;
+const PUBLIC_WINNER_FEED_LIMIT = 15;
 
 export type RoundSnapshot = {
   id: string;
@@ -247,6 +250,7 @@ export class RoundsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly walletsService: WalletsService,
+    @Optional() private readonly fraudService?: FraudService,
   ) {}
 
   async startOpenRoundForRoom(roomId: string) {
@@ -975,6 +979,16 @@ export class RoundsService {
     const finalWinnerEntry = await this.prisma.entry.findUniqueOrThrow({
       where: { id: winnerEntryId },
     });
+
+    void this.fraudService
+      ?.evaluateRoundWinner(completedRound.id)
+      .catch((error: unknown) => {
+        this.logger.warn(
+          `Round winner risk scoring failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      });
 
     return {
       currentRound: this.toRoundSnapshot(completedRound),
@@ -1832,8 +1846,14 @@ export class RoundsService {
     );
   }
 
-  async getPublicWinnerFeed(scope: WinnerFeedScope, limit = 30) {
-    const safeLimit = Math.max(1, Math.min(30, Math.floor(limit)));
+  async getPublicWinnerFeed(
+    scope: WinnerFeedScope,
+    limit = PUBLIC_WINNER_FEED_LIMIT,
+  ) {
+    const safeLimit = Math.max(
+      1,
+      Math.min(PUBLIC_WINNER_FEED_LIMIT, Math.floor(limit)),
+    );
     const since =
       scope === 'week'
         ? new Date(Date.now() - 7 * 24 * 60 * 60 * 1_000)

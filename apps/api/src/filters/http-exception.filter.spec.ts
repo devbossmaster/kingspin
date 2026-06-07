@@ -77,6 +77,22 @@ describe('HttpExceptionFilter', () => {
     );
   });
 
+  it('hides unexpected error details outside production responses', () => {
+    const filter = new HttpExceptionFilter();
+    const { host, response } = buildHost();
+
+    filter.catch(new Error('local database path leaked'), host);
+
+    expect(response.status).toHaveBeenCalledWith(500);
+    expect(response.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        statusCode: 500,
+        message: 'Internal server error.',
+        error: 'Internal Server Error',
+      }),
+    );
+  });
+
   it('hides unexpected error details in production responses', () => {
     process.env = {
       ...originalEnv,

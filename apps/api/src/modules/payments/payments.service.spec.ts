@@ -80,6 +80,24 @@ function buildWithdrawal(overrides = {}) {
   };
 }
 
+function buildParsedTelebirrReceipt(overrides = {}) {
+  return {
+    receiptNo: 'ABC123XYZ',
+    transactionStatus: 'Completed',
+    paidAt: new Date(),
+    settledAmount: '500.00',
+    totalAmountPaid: '500.00',
+    currency: 'ETB',
+    creditedPartyName: 'SpinPro Test Merchant',
+    creditedPartyAccount: '123456',
+    payerName: 'Sample Player',
+    payerPhoneMasked: '091***1234',
+    paymentReason: 'Wallet deposit',
+    paymentMode: 'Telebirr',
+    ...overrides,
+  };
+}
+
 describe('Payment money safety foundation', () => {
   it('creates a Telebirr deposit intent with payment instructions', async () => {
     const intent = buildDepositIntent();
@@ -177,7 +195,7 @@ describe('Payment money safety foundation', () => {
       expiresAt,
     });
     const tx = {
-      $queryRaw: jest.fn(),
+      $executeRaw: jest.fn(),
       depositIntent: {
         findUnique: jest.fn().mockResolvedValue(verifyingIntent),
         update: jest.fn().mockResolvedValue(creditedIntent),
@@ -234,7 +252,7 @@ describe('Payment money safety foundation', () => {
       prisma as never,
       wallets as never,
       {} as never,
-      { createRiskEvent: jest.fn() } as never,
+      { createRiskEvent: jest.fn(), evaluateDepositAttempt: jest.fn() } as never,
       telebirr as never,
     );
 
@@ -262,6 +280,252 @@ describe('Payment money safety foundation', () => {
         }),
       }),
     );
+    expect(result.deposit.status).toBe(DepositStatus.CREDITED);
+  });
+
+  it('rejects a Telebirr receipt already used by another deposit intent', async () => {
+    const createdAt = new Date();
+    const intent = buildDepositIntent({
+      createdAt,
+      expiresAt: new Date(createdAt.getTime() + 15 * 60_000),
+    });
+    const rejected = buildDepositIntent({
+      ...intent,
+      status: DepositStatus.REJECTED,
+      rejectionReason: 'Receipt number has already been used.',
+    });
+    const prisma = {
+      depositIntent: {
+        findUnique: jest.fn().mockResolvedValue(intent),
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'intent-existing',
+          userId: 'user-2',
+        }),
+        update: jest.fn().mockResolvedValue(rejected),
+      },
+      paymentVerificationAttempt: {
+        count: jest.fn().mockResolvedValue(0),
+        create: jest.fn().mockResolvedValue({ id: 'attempt-duplicate' }),
+      },
+    };
+    const fraud = {
+      createRiskEvent: jest.fn().mockResolvedValue({ id: 'risk-duplicate' }),
+      evaluateDepositAttempt: jest
+        .fn()
+        .mockResolvedValue({ id: 'risk-duplicate' }),
+    };
+    const telebirr = {
+      normalizeReceiptInput: jest.fn().mockReturnValue('ABC123XYZ'),
+      fetchAndParseReceipt: jest.fn(),
+    };
+    const service = new DepositsService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      fraud as never,
+      telebirr as never,
+    );
+
+    const result = await service.submitTelebirrReceipt('user-1', 'intent-1', {
+      receiptInput: 'ABC123XYZ',
+    });
+
+    expect(result.deposit.status).toBe(DepositStatus.REJECTED);
+    expect(telebirr.fetchAndParseReceipt).not.toHaveBeenCalled();
+    expect(fraud.evaluateDepositAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'DUPLICATE_RECEIPT',
+        receiptNo: 'ABC123XYZ',
+        metadata: expect.objectContaining({
+          existingDepositIntentId: 'intent-existing',
+          existingUserId: 'user-2',
+        }),
+      }),
+    );
+  });
+
+  it('routes an inconclusive Telebirr receipt to manual review without crediting', async () => {
+    const createdAt = new Date();
+    const intent = buildDepositIntent({
+      createdAt,
+      expiresAt: new Date(createdAt.getTime() + 15 * 60_000),
+    });
+    const verifying = buildDepositIntent({
+      ...intent,
+      status: DepositStatus.VERIFYING,
+    });
+    const reviewed = buildDepositIntent({
+      ...intent,
+      status: DepositStatus.NEEDS_MANUAL_REVIEW,
+      receiptNo: 'ABC123XYZ',
+      providerRef: 'ABC123XYZ',
+      reviewReason: 'Official receipt status was missing.',
+      rawProviderHash: 'hash-review',
+      verifiedAt: new Date(),
+    });
+    const prisma = {
+      depositIntent: {
+        findUnique: jest.fn().mockResolvedValue(intent),
+        findFirst: jest.fn().mockResolvedValue(null),
+        update: jest
+          .fn()
+          .mockResolvedValueOnce(verifying)
+          .mockResolvedValueOnce(reviewed),
+      },
+      paymentVerificationAttempt: {
+        count: jest.fn().mockResolvedValue(0),
+        create: jest.fn().mockResolvedValue({ id: 'attempt-review' }),
+      },
+    };
+    const wallets = {
+      creditDepositInTransaction: jest.fn(),
+    };
+    const telebirr = {
+      normalizeReceiptInput: jest.fn().mockReturnValue('ABC123XYZ'),
+      fetchAndParseReceipt: jest.fn().mockResolvedValue({
+        receiptNo: 'ABC123XYZ',
+        httpStatus: 200,
+        providerStatus: null,
+        rawProviderHash: 'hash-review',
+        parsed: buildParsedTelebirrReceipt({ transactionStatus: null }),
+      }),
+    };
+    const service = new DepositsService(
+      prisma as never,
+      wallets as never,
+      {} as never,
+      { evaluateDepositAttempt: jest.fn() } as never,
+      telebirr as never,
+    );
+
+    const result = await service.submitTelebirrReceipt('user-1', 'intent-1', {
+      receiptInput: 'ABC123XYZ',
+    });
+
+    expect(result.deposit.status).toBe(DepositStatus.NEEDS_MANUAL_REVIEW);
+    expect(wallets.creditDepositInTransaction).not.toHaveBeenCalled();
+    expect(prisma.paymentVerificationAttempt.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: VerificationAttemptStatus.NEEDS_MANUAL_REVIEW,
+          normalizedRef: 'ABC123XYZ',
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    {
+      label: 'amount mismatch',
+      parsed: buildParsedTelebirrReceipt({ settledAmount: '499.00' }),
+      status: 'REJECT',
+      reason: 'Receipt amount does not match the deposit intent.',
+    },
+    {
+      label: 'receiver mismatch',
+      parsed: buildParsedTelebirrReceipt({
+        creditedPartyName: 'Different Merchant',
+      }),
+      status: 'REJECT',
+      reason: 'Receipt receiver name does not match configured merchant.',
+    },
+    {
+      label: 'missing status',
+      parsed: buildParsedTelebirrReceipt({ transactionStatus: null }),
+      status: 'REVIEW',
+      reason: 'Official receipt status was missing.',
+    },
+    {
+      label: 'missing amount',
+      parsed: buildParsedTelebirrReceipt({
+        settledAmount: null,
+        totalAmountPaid: null,
+      }),
+      status: 'REVIEW',
+      reason: 'Official receipt amount was missing.',
+    },
+    {
+      label: 'missing receiver',
+      parsed: buildParsedTelebirrReceipt({ creditedPartyName: null }),
+      status: 'REVIEW',
+      reason: 'Official receipt receiver name was missing.',
+    },
+  ])('classifies Telebirr $label safely', ({ parsed, status, reason }) => {
+    const createdAt = new Date();
+    const intent = buildDepositIntent({
+      createdAt,
+      expiresAt: new Date(createdAt.getTime() + 15 * 60_000),
+    });
+    const service = new DepositsService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const evaluate = (
+      service as unknown as {
+        evaluateTelebirrReceipt: (
+          depositIntent: ReturnType<typeof buildDepositIntent>,
+          receiptNo: string,
+          receipt: ReturnType<typeof buildParsedTelebirrReceipt>,
+        ) => { status: string; reason: string };
+      }
+    ).evaluateTelebirrReceipt.bind(service);
+
+    expect(evaluate(intent, 'ABC123XYZ', parsed)).toEqual({
+      status,
+      reason,
+    });
+  });
+
+  it('replays a manually approved Telebirr credit without double-crediting', async () => {
+    const credited = buildDepositIntent({
+      status: DepositStatus.CREDITED,
+      receiptNo: 'ABC123XYZ',
+      providerRef: 'ABC123XYZ',
+      creditedAt: now,
+      verifiedAt: now,
+    });
+    const tx = {
+      $executeRaw: jest.fn(),
+      depositIntent: {
+        findUnique: jest.fn().mockResolvedValue(credited),
+      },
+    };
+    const prisma = {
+      depositIntent: {
+        findUnique: jest.fn().mockResolvedValue(credited),
+      },
+      $transaction: jest.fn((callback: (txClient: typeof tx) => unknown) =>
+        callback(tx),
+      ),
+    };
+    const wallets = {
+      creditDepositInTransaction: jest.fn().mockResolvedValue({
+        wallet: { id: 'wallet-1', balanceSnapshot: '500' },
+        transaction: {
+          id: 'ledger-1',
+          entries: [{ id: 'ledger-entry-1' }],
+        },
+        reused: true,
+      }),
+    };
+    const service = new DepositsService(
+      prisma as never,
+      wallets as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    const result = await service.approveReviewedDeposit(
+      'intent-1',
+      'Receipt checked manually.',
+    );
+
+    expect(wallets.creditDepositInTransaction).toHaveBeenCalledTimes(1);
+    expect(result.reused).toBe(true);
     expect(result.deposit.status).toBe(DepositStatus.CREDITED);
   });
 

@@ -73,25 +73,25 @@ export default function VerifyEmailPage() {
   const verified = Boolean(session?.user.emailVerified);
 
   return (
-    <AuthShell
-      eyebrow="Email verification"
-      title={verified ? "Email verified" : "Verify email"}
-      subtitle="Verified email is required before protected player actions can create a session."
+   <AuthShell
+      eyebrow="ኢሜይል ማረጋገጫ"
+      title={verified ? "ኢሜይል ተረጋግጧል" : "ኢሜይል ያረጋግጡ"}
+      subtitle="የተጠበቁ የተጫዋች ተግባራት ሴሽን ከመፍጠራቸው በፊት የተረጋገጠ ኢሜይል ያስፈልጋል።"
       footer={
         <>
           {verified ? (
             <Link
-              className="font-bold text-yellow-200 hover:text-yellow-100"
+              className="font-bold text-lg text-yellow-200 hover:text-yellow-100 underline transition"
               href="/spinpro"
             >
-              Continue to Spin Battle
+              ወደ Spin Battle ይቀጥሉ
             </Link>
           ) : (
             <Link
-              className="font-bold text-yellow-200 hover:text-yellow-100"
+              className="font-bold underline  text-yellow-200 hover:text-yellow-100 underline transition"
               href="/sign-in"
             >
-              Sign in
+              ይግቡ
             </Link>
           )}
         </>
@@ -101,11 +101,11 @@ export default function VerifyEmailPage() {
         {error ? <FormMessage tone="error">{error}</FormMessage> : null}
         {success ? <FormMessage tone="success">{success}</FormMessage> : null}
         {isPending ? (
-          <FormMessage tone="info">Checking session...</FormMessage>
+          <FormMessage tone="info">ሴሽን በመፈተሽ ላይ...</FormMessage>
         ) : null}
 
         <label className="block text-sm font-semibold text-slate-200">
-          Email
+          ኢሜይል
           <input
             className={authInputClass}
             name="email"
@@ -123,12 +123,12 @@ export default function VerifyEmailPage() {
           disabled={isSubmitting || cooldown > 0 || verified}
         >
           {verified
-            ? "Verified"
+            ? "ተረጋግጧል"
             : cooldown > 0
-              ? `Resend in ${cooldown}s`
+              ? `በ ${cooldown} ሰከንድ ውስጥ እንደገና ይላኩ`
               : isSubmitting
-                ? "Sending..."
-                : "Send verification email"}
+                ? "በመላክ ላይ..."
+                : "የማረጋገጫ ኢሜይል ይላኩ"}
         </button>
       </form>
     </AuthShell>

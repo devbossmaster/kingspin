@@ -937,6 +937,46 @@ describe('RoundsService', () => {
     );
   });
 
+  it('caps each public winner feed at 15 while preserving room capacity', async () => {
+    const prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([
+        {
+          roundId: 'round-1',
+          roomId: 'room-1',
+          roomCode: 'PRO-A',
+          roomName: 'A01',
+          roomMaxPlayers: 30,
+          roomGameMode: 'FLEXIBLE_PROPORTIONAL',
+          categorySlug: 'pro-10-100',
+          categoryName: 'Jemaw 1',
+          roundNumber: 4,
+          completedAt: now,
+          totalEntryAmount: 300n,
+          payoutAmount: 270n,
+          winnerUserId: 'user-a',
+          winnerEntryId: 'entry-a',
+          winnerEntryAmount: 10n,
+          winnerUsername: 'player-a',
+          playerCount: 30n,
+          entryCount: 30n,
+        },
+      ]),
+    };
+    const service = new RoundsService(prisma as any, {} as any);
+
+    const result = await service.getPublicWinnerFeed('latest', 30);
+
+    expect(result.limit).toBe(15);
+    expect(result.winners).toEqual([
+      expect.objectContaining({
+        rank: 1,
+        winnerUsername: 'player-a',
+        playerCount: 30,
+        roomMaxPlayers: 30,
+      }),
+    ]);
+  });
+
   it('deduplicates in-flight latest-result generation per room', async () => {
     const completedRound = buildRound({
       status: RoundStatus.COMPLETED,

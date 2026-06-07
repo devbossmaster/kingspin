@@ -48,16 +48,16 @@ export function AuthShell({
 
         <div className="w-full rounded-[22px] border border-blue-300/[0.12] bg-[#050917]/80 p-5 shadow-[0_24px_70px_rgba(0,0,0,0.52)] backdrop-blur-xl sm:p-7">
           <div className="mb-6 text-center">
-            <p className="text-[11px] font-black uppercase tracking-[0.22em] text-blue-200/70">
+            <p className="text-[15px] font-black uppercase tracking-[0.22em] text-blue-200/70">
               {eyebrow}
             </p>
             <h1 className="mt-2 text-2xl font-black uppercase tracking-normal text-white sm:text-3xl">
               {title}
             </h1>
-            <p className="mx-auto mt-2 max-w-sm text-xs font-semibold leading-5 text-slate-400">
+            <p className="mt-3 text-sm font-semibold leading-6 text-slate-400">
               {subtitle}
             </p>
-            <div className="mt-3 text-xs font-semibold text-slate-400 [&_a]:!text-sky-300 hover:[&_a]:!text-white">
+            <div className="mt-3 text-sm font-semibold text-slate-400 [&_a]:!text-sky-300 hover:[&_a]:!text-white">
               {footer}
             </div>
           </div>

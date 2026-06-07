@@ -35,6 +35,9 @@ export type PlaceEntryForUserArgs = {
   idempotencyKey?: unknown;
   requestId?: string;
   requestReceivedAtMs?: number;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  deviceId?: string | null;
 };
 
 type EntrySnapshot = {
@@ -174,6 +177,9 @@ export class EntriesService {
       {
         requestId: args.requestId,
         requestReceivedAtMs: args.requestReceivedAtMs,
+        ipAddress: args.ipAddress,
+        userAgent: args.userAgent,
+        deviceId: args.deviceId,
       },
     );
   }
@@ -186,6 +192,9 @@ export class EntriesService {
     telemetry?: {
       requestId?: string;
       requestReceivedAtMs?: number;
+      ipAddress?: string | null;
+      userAgent?: string | null;
+      deviceId?: string | null;
     },
   ) {
     if (!roomId) {
@@ -328,6 +337,29 @@ export class EntriesService {
         'entry-timing',
         `post-commit response shaping duration=${Date.now() - responseStartedAt}ms`,
       );
+
+      if (!result.reused) {
+        void this.fraudService
+          ?.evaluateEntryPlacement({
+            roomId,
+            userId,
+            entryId: result.entry.id,
+            roundId: result.entry.roundId,
+            amount: addAmount,
+            requestId: telemetry?.requestId,
+            ipAddress: telemetry?.ipAddress,
+            userAgent: telemetry?.userAgent,
+            deviceId: telemetry?.deviceId,
+          })
+          .catch((error: unknown) => {
+            this.logger.warn(
+              `Entry risk scoring failed after placement: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          });
+      }
+
       flushTimingIfSlow();
 
       return response;
@@ -396,7 +428,7 @@ export class EntriesService {
           ${args.roomId}::text AS room_id,
           ${args.amount}::bigint AS amount,
           ${args.idempotencyKey}::text AS idempotency_key,
-          ${args.requestAcceptedAt}::timestamp AS request_accepted_at,
+          (${args.requestAcceptedAt}::timestamptz AT TIME ZONE 'UTC')::timestamp(3) AS request_accepted_at,
           ${args.entryId}::text AS new_entry_id,
           ${args.ledgerTransactionId}::text AS ledger_transaction_id,
           ${args.ledgerEntryId}::text AS ledger_entry_id

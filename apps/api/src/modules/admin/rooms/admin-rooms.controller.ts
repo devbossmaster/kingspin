@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { AdminAuditAction, Role } from "@kingspin/db";
 import { AdminRbacGuard, AdminRoles } from "../../auth-bridge/admin-rbac.guard";
 import { AuthGuard } from "../../auth-bridge/auth.guard";
@@ -17,8 +17,13 @@ export class AdminRoomsController {
 
   @Get()
   @AdminRoles(Role.ADMIN, Role.SUPPORT, Role.VIEWER)
-  listRooms() {
-    return this.adminRoomsService.listRooms();
+  listRooms(
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+    @Query("q") q?: string,
+    @Query("status") status?: string,
+  ) {
+    return this.adminRoomsService.listRooms({ page, pageSize, q, status });
   }
 
   @Post()

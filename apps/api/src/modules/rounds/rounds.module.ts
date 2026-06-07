@@ -1,6 +1,7 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { RoomGateway } from '../../gateways/room.gateway';
 import { AuthBridgeModule } from '../auth-bridge/auth-bridge.module';
+import { FraudModule } from '../fraud/fraud.module';
 import { PublicGameModule } from '../public-game/public-game.module';
 import { RoomsModule } from '../rooms/rooms.module';
 import { WalletsModule } from '../wallets/wallets.module';
@@ -17,6 +18,7 @@ import { RoundsService } from './rounds.service';
   imports: [
     WalletsModule,
     AuthBridgeModule,
+    FraudModule,
     PublicGameModule,
     forwardRef(() => RoomsModule),
   ],

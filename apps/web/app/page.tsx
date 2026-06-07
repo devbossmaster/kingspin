@@ -71,7 +71,7 @@ const WINNER_FEED_TABS: Array<{ scope: WinnerFeedScope; label: string }> = [
   { scope: "month", label: "Top of the month" },
 ];
 
-const HOMEPAGE_FEED_MAX_PLAYERS = 15;
+const WINNER_FEED_LIMIT = 15;
 
 function MoneyIcon() {
   return (
@@ -101,7 +101,7 @@ function winnerRoomLabel(winner: WinnerFeedItem) {
 }
 
 function winnerPlayerCountLabel(winner: WinnerFeedItem) {
-  return `${winner.playerCount}/${HOMEPAGE_FEED_MAX_PLAYERS}`;
+  return `${winner.playerCount}/${winner.roomMaxPlayers}`;
 }
 
 function winnerCompletedLabel(completedAt: string | null) {
@@ -379,7 +379,10 @@ export default function SpinBattleHomePage() {
       }
 
       try {
-        const feed = await apiClient.getWinnerFeed(winnerScope, 30);
+        const feed = await apiClient.getWinnerFeed(
+          winnerScope,
+          WINNER_FEED_LIMIT,
+        );
 
         setWinnerFeed(feed.winners);
         setWinnerFeedError(null);
@@ -561,13 +564,13 @@ export default function SpinBattleHomePage() {
               </div>
             </div>
 
-            {/* Game cards header: safe visual styling zone. */}
+          {/* Game cards header: safe visual styling zone. */}
             <div id="games" className="mb-3 flex items-center justify-between">
               <h2 className="font-display text-lg font-bold text-white">
-                Play spin battle games
+                የ Spin Battle ጨዋታዎችን ይጫወቱ
               </h2>
               <span className="text-xs font-semibold text-yellow-400/80 cursor-pointer hover:text-yellow-400">
-                See all
+                ሁሉንም ይመልከቱ
               </span>
             </div>
 
@@ -594,7 +597,7 @@ export default function SpinBattleHomePage() {
                         className="h-3 w-3 text-emerald-300"
                         aria-hidden="true"
                       />
-                      {onlinePlayersLabel} online
+                      {onlinePlayersLabel} መስመር ላይ
                     </span>
                   </div>
                 </Link>
@@ -606,10 +609,10 @@ export default function SpinBattleHomePage() {
               <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <h2 className="font-display text-2xl font-black text-white">
-                    Winners
+                    አሸናፊዎች
                   </h2>
                   <p className="mt-1 text-xs font-bold text-zinc-500">
-                    Realtime winner feed, 15 players per room.
+                    በእያንዳንዱ ዝርዝር 15 አሸናፊዎች፣ በአንድ ክፍል 30 ተጫዋቾች።
                   </p>
                 </div>
                 <div className="flex overflow-x-auto rounded-lg border border-white/10 bg-white/[0.04] p-1">
@@ -624,6 +627,7 @@ export default function SpinBattleHomePage() {
                           : "text-zinc-500 hover:bg-white/[0.06] hover:text-zinc-200"
                       }`}
                     >
+                      {/* Note: Translate your WINNER_FEED_TABS definitions separately if needed */}
                       {tab.label}
                     </button>
                   ))}
@@ -634,23 +638,23 @@ export default function SpinBattleHomePage() {
                 <div className="mb-2 flex items-center justify-between rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2">
                   <span className="inline-flex items-center gap-2 text-xs font-black uppercase tracking-[0.14em] text-lime-300">
                     <Radio className="h-3.5 w-3.5" aria-hidden="true" />
-                    Live
+                    ቀጥታ
                   </span>
                   <span className="text-xs font-bold text-zinc-500">
-                    {isWinnerFeedLoading ? "Refreshing..." : "Fast 5s sync"}
+                    {isWinnerFeedLoading ? "በማደስ ላይ..." : "ፈጣን የ5 ሰከንድ ማዘመኛ"}
                   </span>
                 </div>
 
                 <div className="hidden grid-cols-[minmax(0,1.35fr)_minmax(0,1.45fr)_minmax(0,0.75fr)_minmax(0,0.8fr)_minmax(0,0.9fr)] gap-4 border-b border-white/10 px-3 py-3 text-xs font-bold text-zinc-500 md:grid">
-                  <span>Winner</span>
-                  <span>Room</span>
-                  <span>Players</span>
-                  <span>Round</span>
-                  <span>Payout</span>
+                  <span>አሸናፊ</span>
+                  <span>ክፍል</span>
+                  <span>ተጫዋቾች</span>
+                  <span>ዙር</span>
+                  <span>ክፍያ</span>
                 </div>
                 <div className="grid grid-cols-[minmax(0,1fr)_auto] border-b border-white/10 px-3 py-3 text-xs font-bold text-zinc-500 md:hidden">
-                  <span>Winner</span>
-                  <span>Payout</span>
+                  <span>አሸናፊ</span>
+                  <span>ክፍያ</span>
                 </div>
 
                 <div className="flex flex-col gap-1.5">

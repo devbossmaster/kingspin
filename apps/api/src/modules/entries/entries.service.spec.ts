@@ -140,6 +140,7 @@ describe('EntriesService hot path', () => {
       prisma.$queryRaw.mock.calls[0]?.[0]?.strings?.join(' ') ??
       String(prisma.$queryRaw.mock.calls[0]?.[0] ?? '');
     expect(hotPathSql).toContain('pg_advisory_xact_lock_shared');
+    expect(hotPathSql).toContain("AT TIME ZONE 'UTC'");
     expect(hotPathSql).not.toContain('UPDATE rounds r');
   });
 

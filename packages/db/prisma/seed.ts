@@ -5,6 +5,7 @@ import {
   RoomStatus,
   RoundStatus,
 } from "@prisma/client";
+import { seedLocalFixtures } from "./local-fixtures";
 
 const prisma = new PrismaClient();
 
@@ -65,7 +66,7 @@ async function main() {
     },
     {
       slug: "fixed-10",
-      name: "Jemaw 1",
+      name: "Fixed Jemaw 1",
       minEntryAmount: 10n,
       maxEntryAmount: 10n,
       sortOrder: 110,
@@ -76,7 +77,7 @@ async function main() {
     },
     {
       slug: "fixed-20",
-      name: "Jemaw 2",
+      name: "Fixed Jemaw 2",
       minEntryAmount: 20n,
       maxEntryAmount: 20n,
       sortOrder: 120,
@@ -87,7 +88,7 @@ async function main() {
     },
     {
       slug: "fixed-50",
-      name: "Jemaw 3",
+      name: "Fixed Jemaw 3",
       minEntryAmount: 50n,
       maxEntryAmount: 50n,
       sortOrder: 130,
@@ -108,14 +109,14 @@ async function main() {
         name: categoryData.name,
         minEntryAmount: categoryData.minEntryAmount,
         maxEntryAmount: categoryData.maxEntryAmount,
-        maxPlayers: 15,
+        maxPlayers: 30,
         roundDurationMs: 45_000,
         sortOrder: categoryData.sortOrder,
         isActive: true,
       },
       create: {
         ...categoryData,
-        maxPlayers: 15,
+        maxPlayers: 30,
         roundDurationMs: 45_000,
         isActive: true,
       },
@@ -161,6 +162,8 @@ async function main() {
   console.log("Seeded Spin Battle Jemaw categories.");
   console.log("Seeded one ACTIVE permanent A01 room per category.");
   console.log("Ensured an active round exists for each seeded permanent room.");
+
+  await seedLocalFixtures(prisma);
 }
 
 async function ensureCurrentRound(roomId: string, roundDurationMs: number) {

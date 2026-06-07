@@ -5,6 +5,13 @@ not mean KingSpin / SpinPro is real-money ready.
 
 ## Safety Gates
 
+- Inspect pending migrations before admin/payment smoke testing:
+  `pnpm --filter @kingspin/db migrate:status`.
+- Apply pending migrations in local development only with
+  `pnpm --filter @kingspin/db db:migrate`.
+- Apply reviewed migrations in staging/production with
+  `pnpm --filter @kingspin/db migrate:deploy`; never use `migrate dev` or
+  `db push` there.
 - Production env validation fails when `DATABASE_URL`, `BETTER_AUTH_SECRET`,
   production HTTPS origins, auth email settings, or non-mock payment provider
   settings are missing.

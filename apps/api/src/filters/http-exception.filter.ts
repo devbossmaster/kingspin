@@ -7,7 +7,6 @@ import {
   Logger,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
-import { getApiEnv } from '../config/api-env';
 import { captureHttpException } from '../observability/sentry';
 
 type HttpRequest = Request & {
@@ -32,7 +31,6 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const context = host.switchToHttp();
     const request = context.getRequest<HttpRequest>();
     const response = context.getResponse<Response>();
-    const env = getApiEnv();
 
     const status =
       exception instanceof HttpException
@@ -56,10 +54,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
             ? exception.message
             : 'Internal server error';
 
-    const message =
-      status >= 500 && env.NODE_ENV === 'production'
-        ? 'Internal server error.'
-        : rawMessage;
+    const message = status >= 500 ? 'Internal server error.' : rawMessage;
 
     const error =
       responseObject && typeof responseObject.error === 'string'

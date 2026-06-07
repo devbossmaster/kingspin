@@ -34,10 +34,10 @@ const ADMIN_ROLES = new Set([
 ]);
 
 const DRAWER_ITEMS = [
-  { href: "/", label: "Home", icon: Home },
-  { href: "/#live-stats", label: "Betting Table", icon: BarChart3 },
+  { href: "/", label: "ዋና ገጽ", icon: Home },
+  { href: "/#live-stats", label: "የውርርድ ሰንጠረዥ", icon: BarChart3 },
   { href: "/#games", label: "Spin Battle", icon: Gamepad2 },
-  { href: "/wallet", label: "Rewards", icon: BadgeDollarSign },
+  { href: "/wallet", label: "ሽልማቶች", icon: BadgeDollarSign },
 ];
 
 const LOGO_SRC = "/logo.png?v=4";
@@ -135,7 +135,7 @@ export function NavBar({ backHref }: { backHref?: string }) {
               <Link
                 href={backHref}
                 className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-white/10 text-white/60 transition hover:bg-white/5 hover:text-white md:hidden"
-                aria-label="Back"
+                aria-label="ወደ ኋላ"
               >
                 <ChevronLeft className="h-5 w-5" aria-hidden="true" />
               </Link>
@@ -144,7 +144,7 @@ export function NavBar({ backHref }: { backHref?: string }) {
                 type="button"
                 onClick={() => setIsMenuOpen(true)}
                 className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-white/70 transition hover:bg-white/5 hover:text-white md:hidden"
-                aria-label="Open sidebar"
+                aria-label="ማውጫ ክፈት"
               >
                 <Menu className="h-6 w-6" aria-hidden="true" />
               </button>
@@ -169,7 +169,7 @@ export function NavBar({ backHref }: { backHref?: string }) {
               <span className="min-w-0">
                 <BrandTitle />
                 <span className="hidden text-[10px] font-bold uppercase tracking-widest text-sky-300 md:block">
-                  Play & win
+                  ይጫወቱ እና ያሸንፉ
                 </span>
               </span>
             </Link>
@@ -177,7 +177,7 @@ export function NavBar({ backHref }: { backHref?: string }) {
             <button
               type="button"
               className="hidden h-10 w-10 place-items-center rounded-[8px] border border-white/[0.08] bg-[#151827] text-white/70 transition hover:border-sky-400/60 hover:text-white md:grid"
-              aria-label="Search"
+              aria-label="ፈልግ"
             >
               <Search className="h-5 w-5" aria-hidden="true" />
             </button>
@@ -199,7 +199,7 @@ export function NavBar({ backHref }: { backHref?: string }) {
                     className="flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs font-bold text-amber-400 transition hover:bg-amber-500/20"
                   >
                     <Shield className="h-3.5 w-3.5" aria-hidden="true" />
-                    Admin
+                    አስተዳዳሪ
                   </Link>
                 ) : null}
 
@@ -216,10 +216,10 @@ export function NavBar({ backHref }: { backHref?: string }) {
             ) : (
               <>
                 <Link href="/sign-in" className={`${signInButtonClass} w-36`}>
-                  ግባ
+                  ይግቡ
                 </Link>
                 <Link href="/sign-up" className={`${signUpButtonClass} w-36`}>
-                  መዝገብ
+                  ይመዝገቡ
                 </Link>
               </>
             )}
@@ -243,13 +243,13 @@ export function NavBar({ backHref }: { backHref?: string }) {
             ) : (
               <>
                 <Link href="/sign-in" className={mobileSignInButtonClass}>
-                  ግባ
+                  ይግቡ
                 </Link>
                 <Link
                   href="/sign-up"
                   className={`${mobileSignUpButtonClass} hidden min-[360px]:inline-flex`}
                 >
-                  መዝገብ
+                  ይመዝገቡ
                 </Link>
               </>
             )}
@@ -292,7 +292,7 @@ export function NavBar({ backHref }: { backHref?: string }) {
               <span className="min-w-0">
                 <BrandTitle small />
                 <span className="mt-1 block text-[10px] font-black uppercase tracking-[0.16em] text-slate-500">
-                  Player menu
+                  የተጫዋች ማውጫ
                 </span>
               </span>
             </Link>
@@ -301,20 +301,20 @@ export function NavBar({ backHref }: { backHref?: string }) {
               type="button"
               onClick={closeMenu}
               className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-white/[0.06] text-slate-400 transition hover:bg-white/[0.1] hover:text-white"
-              aria-label="Close sidebar"
+              aria-label="ማውጫ ዝጋ"
             >
               <X className="h-5 w-5" aria-hidden="true" />
             </button>
           </div>
 
           <nav className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-            <div className={drawerSectionLabelClass}>Menu</div>
+            <div className={drawerSectionLabelClass}>ማውጫ</div>
 
             <div className="flex flex-col gap-1.5">
               {DRAWER_ITEMS.map((item, index) => {
                 const Icon = item.icon;
                 const isActive = pathname.startsWith("/wallet")
-                  ? item.label === "Rewards"
+                  ? item.label === "ሽልማቶች"
                   : pathname.startsWith("/spinpro")
                     ? item.label === "Spin Battle"
                     : index === 0;
@@ -343,10 +343,10 @@ export function NavBar({ backHref }: { backHref?: string }) {
             </div>
 
             {isPending ? (
-              <div className="mt-5 px-1 text-sm text-slate-500">Loading...</div>
+              <div className="mt-5 px-1 text-sm text-slate-500">በመጫን ላይ...</div>
             ) : session?.user ? (
               <>
-                <div className={drawerSectionLabelClass}>Account</div>
+                <div className={drawerSectionLabelClass}>አካውንት</div>
 
                 <div className="flex flex-col gap-1.5">
                   <Link
@@ -358,7 +358,7 @@ export function NavBar({ backHref }: { backHref?: string }) {
                       className="h-5 w-5 shrink-0 text-slate-500 group-hover:text-white"
                       aria-hidden="true"
                     />
-                    <span className="truncate">Balance</span>
+                    <span className="truncate">ቀሪ ሂሳብ</span>
                     <span className="ml-auto max-w-20 truncate font-mono text-[12px] text-yellow-300">
                       {balanceLabel}
                     </span>
@@ -373,7 +373,7 @@ export function NavBar({ backHref }: { backHref?: string }) {
                       className="h-5 w-5 shrink-0 text-slate-500 group-hover:text-white"
                       aria-hidden="true"
                     />
-                    <span>Profile</span>
+                    <span>ፕሮፋይል</span>
                   </Link>
 
                   {isAdminRole(user?.role) ? (
@@ -383,7 +383,7 @@ export function NavBar({ backHref }: { backHref?: string }) {
                       className={`${drawerItemClass} text-amber-400 hover:bg-amber-500/10`}
                     >
                       <Shield className="h-5 w-5 shrink-0" aria-hidden="true" />
-                      <span>Admin</span>
+                      <span>አስተዳዳሪ</span>
                     </Link>
                   ) : null}
                 </div>
@@ -398,13 +398,13 @@ export function NavBar({ backHref }: { backHref?: string }) {
                       className="h-5 w-5 text-slate-500 group-hover:text-red-300"
                       aria-hidden="true"
                     />
-                    Sign out
+                    ዘግተው ይውጡ
                   </button>
                 </div>
               </>
             ) : (
               <>
-                <div className={drawerSectionLabelClass}>Account</div>
+                <div className={drawerSectionLabelClass}>አካውንት</div>
 
                 <div className="grid grid-cols-2 gap-2">
                   <Link
@@ -412,14 +412,14 @@ export function NavBar({ backHref }: { backHref?: string }) {
                     onClick={closeMenu}
                     className="inline-flex min-h-11 items-center justify-center rounded-xl bg-blue-600 px-3 text-base font-black text-white shadow-[0_10px_24px_rgba(37,99,235,0.3)] transition hover:bg-blue-500 active:scale-[0.98]"
                   >
-                    Log In
+                    ይግቡ
                   </Link>
                   <Link
                     href="/sign-up"
                     onClick={closeMenu}
                     className="inline-flex min-h-11 items-center justify-center rounded-xl bg-green-600 px-3 text-base font-black text-white shadow-[0_10px_24px_rgba(22,163,74,0.3)] transition hover:bg-green-500 active:scale-[0.98]"
                   >
-                    Sign Up
+                    ይመዝገቡ
                   </Link>
                 </div>
 
@@ -428,7 +428,7 @@ export function NavBar({ backHref }: { backHref?: string }) {
                     <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white/[0.06] text-xs text-white">
                       ET
                     </span>
-                    Amharic
+                    አማርኛ
                   </div>
                 </div>
               </>

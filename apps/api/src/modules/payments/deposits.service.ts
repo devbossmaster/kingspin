@@ -8,6 +8,8 @@ import {
   DepositStatus,
   PaymentProvider,
   Prisma,
+  RiskEventSeverity,
+  RiskEventStatus,
   VerificationAttemptStatus,
   type Deposit,
 } from '@kingspin/db';
@@ -209,6 +211,10 @@ export class DepositsService {
         receiptNo,
         id: { not: intent.id },
       },
+      select: {
+        id: true,
+        userId: true,
+      },
     });
 
     if (duplicate) {
@@ -219,15 +225,16 @@ export class DepositsService {
         status: VerificationAttemptStatus.REJECTED,
         reason: 'Receipt number has already been used.',
       });
-      await this.fraudService.createRiskEvent({
+      await this.fraudService.evaluateDepositAttempt({
         userId,
-        type: 'DEPOSIT_WEBHOOK_MISMATCH',
-        severity: 'HIGH',
+        depositIntentId: intent.id,
+        receiptNo,
+        status: 'DUPLICATE_RECEIPT',
+        reason: 'Duplicate Telebirr receipt submission.',
         metadata: {
-          reason: 'Duplicate Telebirr receipt submission.',
-          receiptNo,
           depositIntentId: intent.id,
           existingDepositIntentId: duplicate.id,
+          existingUserId: duplicate.userId,
         },
       });
 
@@ -272,6 +279,13 @@ export class DepositsService {
         submittedValue: parsed.receiptInput,
         receiptNo,
         status: VerificationAttemptStatus.FETCH_FAILED,
+        reason,
+      });
+      await this.fraudService.evaluateDepositAttempt({
+        userId,
+        depositIntentId: intent.id,
+        receiptNo,
+        status: 'FETCH_FAILED',
         reason,
       });
 
@@ -345,6 +359,25 @@ export class DepositsService {
       verification,
     });
 
+    await this.fraudService.evaluateDepositAttempt({
+      userId,
+      depositIntentId: intent.id,
+      receiptNo,
+      status:
+        decision.reason.toLowerCase().includes('receiver')
+          ? 'RECEIVER_MISMATCH'
+          : decision.reason.toLowerCase().includes('amount')
+            ? 'AMOUNT_MISMATCH'
+            : decision.status === 'REJECT'
+              ? 'FAILED_ATTEMPT'
+              : 'PARSE_AMBIGUOUS',
+      reason: decision.reason,
+      metadata: {
+        providerStatus: verification.providerStatus,
+        httpStatus: verification.httpStatus,
+      },
+    });
+
     return {
       deposit: this.toDepositIntentSnapshot(updated),
       reused: false,
@@ -388,6 +421,182 @@ export class DepositsService {
     ]
       .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
       .slice(0, take);
+  }
+
+  async listAdminDeposits(filters: {
+    userId?: string;
+    status?: DepositStatus;
+    page?: string;
+    pageSize?: string;
+    q?: string;
+    from?: string;
+    to?: string;
+  }) {
+    const parsedPage = Number(filters.page ?? 1);
+    const parsedPageSize = Number(filters.pageSize ?? 25);
+    const page =
+      Number.isSafeInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const pageSize =
+      Number.isSafeInteger(parsedPageSize) && parsedPageSize > 0
+        ? Math.min(parsedPageSize, 100)
+        : 25;
+    const take = page * pageSize;
+    const search = filters.q?.trim();
+    const createdAt = this.adminDateRange(filters.from, filters.to);
+    const userWhere = search
+      ? {
+          OR: [
+            { username: { contains: search, mode: 'insensitive' as const } },
+            {
+              displayUsername: {
+                contains: search,
+                mode: 'insensitive' as const,
+              },
+            },
+          ],
+        }
+      : undefined;
+    const depositWhere: Prisma.DepositWhereInput = {
+      userId: filters.userId,
+      status: filters.status,
+      createdAt,
+      ...(search
+        ? {
+            OR: [
+              { id: search },
+              {
+                providerReference: {
+                  contains: search,
+                  mode: 'insensitive',
+                },
+              },
+              { user: userWhere },
+            ],
+          }
+        : {}),
+    };
+    const intentWhere: Prisma.DepositIntentWhereInput = {
+      userId: filters.userId,
+      status: filters.status,
+      createdAt,
+      ...(search
+        ? {
+            OR: [
+              { id: search },
+              { receiptNo: { contains: search, mode: 'insensitive' } },
+              { providerRef: { contains: search, mode: 'insensitive' } },
+              { user: userWhere },
+            ],
+          }
+        : {}),
+    };
+    const [depositCount, intentCount, deposits, intents] = await Promise.all([
+      this.prisma.deposit.count({ where: depositWhere }),
+      this.prisma.depositIntent.count({ where: intentWhere }),
+      this.prisma.deposit.findMany({
+        where: depositWhere,
+        take,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          createdAt: true,
+          userId: true,
+          provider: true,
+          amount: true,
+          currency: true,
+          status: true,
+          providerReference: true,
+          confirmedAt: true,
+          metadata: true,
+          user: {
+            select: { username: true, displayUsername: true, email: true },
+          },
+        },
+      }),
+      this.prisma.depositIntent.findMany({
+        where: intentWhere,
+        take,
+        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          createdAt: true,
+          userId: true,
+          provider: true,
+          expectedAmount: true,
+          currency: true,
+          status: true,
+          providerRef: true,
+          receiptNo: true,
+          verifiedAt: true,
+          creditedAt: true,
+          reviewReason: true,
+          rejectionReason: true,
+          user: {
+            select: { username: true, displayUsername: true, email: true },
+          },
+          _count: { select: { attempts: true } },
+        },
+      }),
+    ]);
+    const items = [
+      ...deposits.map((deposit) => ({
+        id: deposit.id,
+        createdAt: deposit.createdAt.toISOString(),
+        userId: deposit.userId,
+        player: deposit.user.displayUsername ?? deposit.user.username,
+        email: this.maskAdminEmail(deposit.user.email),
+        provider: deposit.provider,
+        expectedAmount: deposit.amount.toString(),
+        currency: deposit.currency,
+        status: deposit.status,
+        providerReference: deposit.providerReference,
+        receiptNo: null,
+        verifiedAt: deposit.confirmedAt?.toISOString() ?? null,
+        creditedAt: deposit.confirmedAt?.toISOString() ?? null,
+        attemptsCount: 0,
+        reviewReason: null,
+        rejectionReason: this.readMetadataString(
+          deposit.metadata,
+          'rejectionReason',
+        ),
+      })),
+      ...intents.map((intent) => ({
+        id: intent.id,
+        createdAt: intent.createdAt.toISOString(),
+        userId: intent.userId,
+        player: intent.user.displayUsername ?? intent.user.username,
+        email: this.maskAdminEmail(intent.user.email),
+        provider: intent.provider,
+        expectedAmount: this.decimalToString(intent.expectedAmount),
+        currency: intent.currency,
+        status: intent.status,
+        providerReference: intent.providerRef,
+        receiptNo: intent.receiptNo,
+        verifiedAt: intent.verifiedAt?.toISOString() ?? null,
+        creditedAt: intent.creditedAt?.toISOString() ?? null,
+        attemptsCount: intent._count.attempts,
+        reviewReason: intent.reviewReason,
+        rejectionReason: intent.rejectionReason,
+      })),
+    ]
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+      .slice((page - 1) * pageSize, page * pageSize);
+    const riskByDeposit = await this.openRiskByRelated(
+      'DEPOSIT_INTENT',
+      items.map((item) => item.id),
+    );
+    const total = depositCount + intentCount;
+
+    return {
+      items: items.map((item) => ({
+        ...item,
+        riskStatus: riskByDeposit.get(item.id) ?? 'CLEAR',
+      })),
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    };
   }
 
   async confirmDepositById(
@@ -512,7 +721,9 @@ export class DepositsService {
           parsedAmount: attempt.parsedAmount?.toString() ?? null,
           parsedCurrency: attempt.parsedCurrency,
           parsedReceiver: attempt.parsedReceiver,
-          parsedPayer: attempt.parsedPayer,
+          parsedPayer: attempt.parsedPayer
+            ? this.maskAdminPayer(attempt.parsedPayer)
+            : null,
           parsedPaidAt: attempt.parsedPaidAt?.toISOString() ?? null,
           rawProviderHash: attempt.rawProviderHash,
           createdAt: attempt.createdAt.toISOString(),
@@ -548,7 +759,7 @@ export class DepositsService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`
+      await tx.$executeRaw`
         SELECT pg_advisory_xact_lock(hashtext(${depositId})::bigint)
       `;
 
@@ -827,6 +1038,87 @@ export class DepositsService {
     };
   }
 
+  private adminDateRange(from?: string, to?: string) {
+    const range: Prisma.DateTimeFilter = {};
+    const fromDate = from ? new Date(from) : null;
+    const toDate = to ? new Date(to) : null;
+    if (fromDate && !Number.isNaN(fromDate.getTime())) range.gte = fromDate;
+    if (toDate && !Number.isNaN(toDate.getTime())) range.lte = toDate;
+    return Object.keys(range).length > 0 ? range : undefined;
+  }
+
+  private maskAdminEmail(email: string) {
+    const [local, domain] = email.split('@');
+    if (!domain) return '***';
+    return `${local?.slice(0, 2) ?? ''}***@${domain}`;
+  }
+
+  private maskAdminPayer(value: string) {
+    if (value.includes('@')) return this.maskAdminEmail(value);
+    const digits = value.replace(/\D/g, '');
+    if (digits.length >= 7) {
+      return `${value.slice(0, 4)}***${value.slice(-3)}`;
+    }
+    return value;
+  }
+
+  private readMetadataString(value: Prisma.JsonValue | null, key: string) {
+    return value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      typeof value[key] === 'string'
+      ? value[key]
+      : null;
+  }
+
+  private async openRiskByRelated(relatedType: string, ids: string[]) {
+    if (ids.length === 0) {
+      return new Map<string, string>();
+    }
+
+    const events = await this.prisma.riskEvent.findMany({
+      where: {
+        status: RiskEventStatus.OPEN,
+        relatedType,
+        relatedId: { in: ids },
+      },
+      select: {
+        relatedId: true,
+        severity: true,
+      },
+    });
+    const map = new Map<string, RiskEventSeverity>();
+
+    for (const event of events) {
+      if (!event.relatedId) continue;
+      const existing = map.get(event.relatedId);
+      if (
+        !existing ||
+        this.riskSeverityRank(event.severity) > this.riskSeverityRank(existing)
+      ) {
+        map.set(event.relatedId, event.severity);
+      }
+    }
+
+    return new Map(
+      [...map.entries()].map(([id, severity]) => [id, severity as string]),
+    );
+  }
+
+  private riskSeverityRank(severity: RiskEventSeverity) {
+    switch (severity) {
+      case RiskEventSeverity.CRITICAL:
+        return 4;
+      case RiskEventSeverity.HIGH:
+        return 3;
+      case RiskEventSeverity.MEDIUM:
+        return 2;
+      case RiskEventSeverity.LOW:
+      default:
+        return 1;
+    }
+  }
+
   private async findDepositIntentForUser(
     userId: string,
     depositIntentId: string,
@@ -1074,7 +1366,7 @@ export class DepositsService {
     rawProviderHash: string;
   }) {
     return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`
+      await tx.$executeRaw`
         SELECT pg_advisory_xact_lock(hashtext(${args.depositIntentId})::bigint)
       `;
 

@@ -56,6 +56,62 @@ addCheck("API database health", async () => {
   }
 });
 
+addCheck("API Redis health", async () => {
+  const response = await get(`${apiUrl}/health/redis`);
+  const body = await readJson(response);
+
+  if (!response.ok || body?.redis?.available !== true) {
+    throw new Error(
+      `Expected /health/redis Redis available, got ${response.status}.`,
+    );
+  }
+});
+
+addCheck("API round machine health", async () => {
+  const response = await get(`${apiUrl}/health/round-machine`);
+  const body = await readJson(response);
+  const roundMachine = body?.roundMachine;
+  const activePermanent = roundMachine?.rooms?.activePermanent ?? 0;
+  const runningPermanent = roundMachine?.rooms?.runningPermanent ?? 0;
+  const staleCompleted =
+    roundMachine?.staleRounds?.staleCompletedOrCurrent ?? 0;
+  const staleWarnings = roundMachine?.staleRounds?.warnings ?? 0;
+
+  if (!response.ok || body?.status !== "ok") {
+    throw new Error(
+      `Expected /health/round-machine status ok, got ${response.status}/${body?.status ?? "unknown"}.`,
+    );
+  }
+
+  if (body?.database?.status !== "ok") {
+    throw new Error("Expected /health/round-machine database ok.");
+  }
+
+  if (body?.redis?.available !== true) {
+    throw new Error("Expected /health/round-machine Redis available.");
+  }
+
+  if (roundMachine?.enabled !== true) {
+    throw new Error("Expected round machine auto-start enabled.");
+  }
+
+  if (activePermanent > 0 && runningPermanent !== activePermanent) {
+    throw new Error(
+      `Expected all active permanent rooms running, got ${runningPermanent}/${activePermanent}.`,
+    );
+  }
+
+  if (activePermanent > 0 && !roundMachine.lastTickAt) {
+    throw new Error("Expected round machine lastTickAt to be present.");
+  }
+
+  if (staleCompleted > 0 || staleWarnings > 0) {
+    throw new Error(
+      `Expected no stale round warnings, got staleCompletedOrCurrent=${staleCompleted}, warnings=${staleWarnings}.`,
+    );
+  }
+});
+
 addCheck("Categories public endpoint", async () => {
   const response = await get(`${apiUrl}/categories`);
   const body = await readJson(response);

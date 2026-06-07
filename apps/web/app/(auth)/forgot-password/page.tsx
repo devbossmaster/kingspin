@@ -59,18 +59,18 @@ export default function ForgotPasswordPage() {
   }
 
   return (
-    <AuthShell
-      eyebrow="Account recovery"
-      title="Forgot password"
-      subtitle="Request a reset link without exposing whether an email exists."
+   <AuthShell
+      eyebrow="አካውንት መልሶ ማግኛ"
+      title="የይለፍ ቃልዎን ረስተዋል?"
+      subtitle="ኢሜይሉ መኖር አለመኖሩን ሳያጋልጡ የይለፍ ቃል ማደሻ ሊንክ ይጠይቁ።"
       footer={
         <>
-          Remembered it?{" "}
+          ትዝ አለዎት?{" "}
           <Link
-            className="font-bold text-yellow-200 hover:text-yellow-100"
+            className="font-bold underline text-lg text-yellow-200 hover:text-yellow-100 underline transition"
             href="/sign-in"
           >
-            Sign in
+            ይግቡ
           </Link>
         </>
       }
@@ -80,7 +80,7 @@ export default function ForgotPasswordPage() {
         {success ? <FormMessage tone="success">{success}</FormMessage> : null}
 
         <label className="block text-sm font-semibold text-slate-200">
-          Email
+          ኢሜይል
           <input
             className={authInputClass}
             name="email"
@@ -96,10 +96,10 @@ export default function ForgotPasswordPage() {
           disabled={isSubmitting || cooldown > 0}
         >
           {cooldown > 0
-            ? `Try again in ${cooldown}s`
+            ? `በ ${cooldown} ሰከንድ ውስጥ እንደገና ይሞክሩ`
             : isSubmitting
-              ? "Sending..."
-              : "Send reset link"}
+              ? "በመላክ ላይ..."
+              : "የማደሻ ሊንክ ይላኩ"}
         </button>
       </form>
     </AuthShell>

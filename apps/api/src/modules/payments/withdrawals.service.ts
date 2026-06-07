@@ -6,6 +6,8 @@ import {
 import {
   PaymentProvider,
   Prisma,
+  RiskEventSeverity,
+  RiskEventStatus,
   WithdrawalStatus,
   type Withdrawal,
 } from "@kingspin/db";
@@ -94,7 +96,16 @@ export class WithdrawalsService {
       };
     }, this.transactionOptions);
 
-    await this.flagWithdrawalSpike(result.withdrawal);
+    await Promise.all([
+      this.flagWithdrawalSpike(result.withdrawal),
+      this.fraudService.evaluateWithdrawalRequest({
+        userId,
+        withdrawalId: result.withdrawal.id,
+        amount: result.withdrawal.amount,
+        destination: result.withdrawal.destination,
+        requestedAt: result.withdrawal.requestedAt,
+      }),
+    ]);
 
     return {
       withdrawal: this.toWithdrawalSnapshot(result.withdrawal),
@@ -122,6 +133,162 @@ export class WithdrawalsService {
     return withdrawals.map((withdrawal) =>
       this.toWithdrawalSnapshot(withdrawal),
     );
+  }
+
+  async listAdminWithdrawals(filters: {
+    userId?: string;
+    status?: WithdrawalStatus;
+    page?: string;
+    pageSize?: string;
+    q?: string;
+    from?: string;
+    to?: string;
+  }) {
+    const parsedPage = Number(filters.page ?? 1);
+    const parsedPageSize = Number(filters.pageSize ?? 25);
+    const page =
+      Number.isSafeInteger(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const pageSize =
+      Number.isSafeInteger(parsedPageSize) && parsedPageSize > 0
+        ? Math.min(parsedPageSize, 100)
+        : 25;
+    const search = filters.q?.trim();
+    const requestedAt = this.adminDateRange(filters.from, filters.to);
+    const where: Prisma.WithdrawalWhereInput = {
+      userId: filters.userId,
+      status: filters.status,
+      requestedAt,
+      ...(search
+        ? {
+            OR: [
+              { id: search },
+              {
+                providerReference: {
+                  contains: search,
+                  mode: 'insensitive',
+                },
+              },
+              {
+                user: {
+                  OR: [
+                    {
+                      username: {
+                        contains: search,
+                        mode: 'insensitive',
+                      },
+                    },
+                    {
+                      displayUsername: {
+                        contains: search,
+                        mode: 'insensitive',
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }
+        : {}),
+    };
+    const [total, withdrawals] = await Promise.all([
+      this.prisma.withdrawal.count({ where }),
+      this.prisma.withdrawal.findMany({
+        where,
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+        orderBy: { requestedAt: 'desc' },
+        select: {
+          id: true,
+          requestedAt: true,
+          userId: true,
+          provider: true,
+          amount: true,
+          currency: true,
+          status: true,
+          destination: true,
+          providerReference: true,
+          paidAt: true,
+          reviewedAt: true,
+          rejectionReason: true,
+          user: {
+            select: { username: true, displayUsername: true, email: true },
+          },
+        },
+      }),
+    ]);
+
+    const riskByWithdrawal = await this.openRiskByRelated(
+      "WITHDRAWAL",
+      withdrawals.map((withdrawal) => withdrawal.id),
+    );
+
+    return {
+      items: withdrawals.map((withdrawal) => ({
+        id: withdrawal.id,
+        createdAt: withdrawal.requestedAt.toISOString(),
+        userId: withdrawal.userId,
+        player:
+          withdrawal.user.displayUsername ?? withdrawal.user.username,
+        email: this.maskAdminEmail(withdrawal.user.email),
+        provider: withdrawal.provider,
+        amount: withdrawal.amount.toString(),
+        currency: withdrawal.currency,
+        status: withdrawal.status,
+        destinationType: this.destinationType(withdrawal.destination),
+        destination: this.maskDestination(withdrawal.destination),
+        externalReference: withdrawal.providerReference,
+        completedAt: withdrawal.paidAt?.toISOString() ?? null,
+        reviewedAt: withdrawal.reviewedAt?.toISOString() ?? null,
+        rejectionReason: withdrawal.rejectionReason,
+        riskStatus: riskByWithdrawal.get(withdrawal.id) ?? "CLEAR",
+      })),
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    };
+  }
+
+  async getAdminWithdrawal(withdrawalId: string) {
+    const withdrawal = await this.prisma.withdrawal.findUnique({
+      where: { id: withdrawalId },
+      select: {
+        id: true,
+        provider: true,
+        amount: true,
+        currency: true,
+        status: true,
+        destination: true,
+        providerReference: true,
+        requestedAt: true,
+        reviewedAt: true,
+        paidAt: true,
+        rejectionReason: true,
+        user: {
+          select: { username: true, displayUsername: true, email: true },
+        },
+      },
+    });
+
+    if (!withdrawal) {
+      throw new NotFoundException('Withdrawal not found.');
+    }
+
+    return {
+      id: withdrawal.id,
+      player: withdrawal.user.displayUsername ?? withdrawal.user.username,
+      email: this.maskAdminEmail(withdrawal.user.email),
+      provider: withdrawal.provider,
+      amount: withdrawal.amount.toString(),
+      currency: withdrawal.currency,
+      status: withdrawal.status,
+      destination: this.maskDestination(withdrawal.destination),
+      externalReference: withdrawal.providerReference,
+      requestedAt: withdrawal.requestedAt.toISOString(),
+      reviewedAt: withdrawal.reviewedAt?.toISOString() ?? null,
+      completedAt: withdrawal.paidAt?.toISOString() ?? null,
+      rejectionReason: withdrawal.rejectionReason,
+    };
   }
 
   async approveWithdrawal(withdrawalId: string, adminId: string) {
@@ -493,12 +660,62 @@ export class WithdrawalsService {
         userId: withdrawal.userId,
         type: "WITHDRAWAL_AMOUNT_SPIKE",
         severity: "MEDIUM",
+        relatedType: "WITHDRAWAL",
+        relatedId: withdrawal.id,
         metadata: {
           withdrawalId: withdrawal.id,
           recentWithdrawalCount: recent._count,
           recentWithdrawalAmount: recentAmount.toString(),
         },
       });
+    }
+  }
+
+  private async openRiskByRelated(relatedType: string, ids: string[]) {
+    if (ids.length === 0) {
+      return new Map<string, string>();
+    }
+
+    const events = await this.prisma.riskEvent.findMany({
+      where: {
+        status: RiskEventStatus.OPEN,
+        relatedType,
+        relatedId: { in: ids },
+      },
+      select: {
+        relatedId: true,
+        severity: true,
+      },
+    });
+    const map = new Map<string, RiskEventSeverity>();
+
+    for (const event of events) {
+      if (!event.relatedId) continue;
+      const existing = map.get(event.relatedId);
+      if (
+        !existing ||
+        this.riskSeverityRank(event.severity) > this.riskSeverityRank(existing)
+      ) {
+        map.set(event.relatedId, event.severity);
+      }
+    }
+
+    return new Map(
+      [...map.entries()].map(([id, severity]) => [id, severity as string]),
+    );
+  }
+
+  private riskSeverityRank(severity: RiskEventSeverity) {
+    switch (severity) {
+      case RiskEventSeverity.CRITICAL:
+        return 4;
+      case RiskEventSeverity.HIGH:
+        return 3;
+      case RiskEventSeverity.MEDIUM:
+        return 2;
+      case RiskEventSeverity.LOW:
+      default:
+        return 1;
     }
   }
 
@@ -520,5 +737,41 @@ export class WithdrawalsService {
         ? next
         : {}),
     };
+  }
+
+  private adminDateRange(from?: string, to?: string) {
+    const range: Prisma.DateTimeFilter = {};
+    const fromDate = from ? new Date(from) : null;
+    const toDate = to ? new Date(to) : null;
+    if (fromDate && !Number.isNaN(fromDate.getTime())) range.gte = fromDate;
+    if (toDate && !Number.isNaN(toDate.getTime())) range.lte = toDate;
+    return Object.keys(range).length > 0 ? range : undefined;
+  }
+
+  private maskAdminEmail(email: string) {
+    const [local, domain] = email.split('@');
+    if (!domain) return '***';
+    return `${local?.slice(0, 2) ?? ''}***@${domain}`;
+  }
+
+  private destinationType(destination: Prisma.JsonValue) {
+    const record = this.toJsonRecord(destination);
+    return typeof record.type === 'string'
+      ? record.type
+      : typeof record.phoneNumber === 'string'
+        ? 'PHONE'
+        : 'MANUAL';
+  }
+
+  private maskDestination(destination: Prisma.JsonValue) {
+    const record = this.toJsonRecord(destination);
+    const masked = { ...record };
+    for (const key of ['phone', 'phoneNumber', 'account', 'accountNumber']) {
+      const value = masked[key];
+      if (typeof value === 'string' && value.length > 6) {
+        masked[key] = `${value.slice(0, 4)}***${value.slice(-3)}`;
+      }
+    }
+    return masked;
   }
 }

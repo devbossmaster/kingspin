@@ -29,6 +29,7 @@ function buildLiveStateRows() {
       roundTotalEntryAmount: 1_000n,
       roundHouseFeeAmount: 0n,
       roundPayoutAmount: 1_000n,
+      roundPlatformFeeBps: 2_000,
       roundOpenedAt: now,
       roundLocksAt: new Date('2026-05-26T12:00:45.000Z'),
       roundLockedAt: null,
@@ -82,7 +83,7 @@ describe('PublicGameService', () => {
     const snapshot = await service.getRoomLiveState('room-1');
 
     expect(snapshot.currentRound?.totalEntryAmount).toBe('1000');
-    expect(snapshot.currentRound?.payoutAmount).toBe('1000');
+    expect(snapshot.currentRound?.payoutAmount).toBe('800');
     expect(snapshot.currentRound).toEqual(
       expect.objectContaining({
         phase: 'ENTRY_OPEN',
@@ -90,6 +91,10 @@ describe('PublicGameService', () => {
         resultReason: null,
         fairnessAlgorithm: 'HMAC_SHA256_REJECTION_SAMPLING_V1',
         entriesHash: null,
+        grossPoolAmount: '1000',
+        platformFeeAmount: '200',
+        netPrizeAmount: '800',
+        platformFeeBps: 2_000,
       }),
     );
     expect(snapshot.currentRound).not.toHaveProperty('serverSeedReveal');
@@ -122,7 +127,7 @@ describe('PublicGameService', () => {
     const snapshot = await service.getRoomLiveState('room-1');
 
     expect(snapshot.currentRound?.totalEntryAmount).toBe('1000');
-    expect(snapshot.currentRound?.payoutAmount).toBe('1000');
+    expect(snapshot.currentRound?.payoutAmount).toBe('800');
   });
 
   it('keeps an active permanent room live-state non-null after a skipped round', async () => {

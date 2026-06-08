@@ -13,6 +13,7 @@ import {
 } from "@kingspin/db";
 import { CreateWithdrawalSchema } from "@kingspin/contracts";
 import { randomUUID } from "node:crypto";
+import { getApiEnv } from "../../config/api-env";
 import { PrismaService } from "../../prisma/prisma.service";
 import { FraudService } from "../fraud/fraud.service";
 import { WalletsService } from "../wallets/wallets.service";
@@ -35,10 +36,21 @@ export class WithdrawalsService {
   async requestWithdrawal(userId: string, body: unknown) {
     const parsed = CreateWithdrawalSchema.parse(body);
     const amount = BigInt(parsed.amount);
+    const env = getApiEnv();
+
+    if (
+      parsed.amount < env.WITHDRAWAL_MIN_ETB ||
+      parsed.amount > env.WITHDRAWAL_MAX_ETB
+    ) {
+      throw new BadRequestException(
+        `Withdrawal amount must be between ${env.WITHDRAWAL_MIN_ETB} and ${env.WITHDRAWAL_MAX_ETB} ETB.`,
+      );
+    }
+
     const provider =
       parsed.provider ?? this.providerRegistry.getDefaultProvider();
     const currency = parsed.currency;
-    const destination = parsed.destination as Prisma.InputJsonObject;
+    const destination = this.normalizeWithdrawalDestination(parsed.destination);
 
     const existing = await this.prisma.withdrawal.findUnique({
       where: { idempotencyKey: parsed.idempotencyKey },
@@ -133,6 +145,40 @@ export class WithdrawalsService {
     return withdrawals.map((withdrawal) =>
       this.toWithdrawalSnapshot(withdrawal),
     );
+  }
+
+  private normalizeWithdrawalDestination(
+    destination: Record<string, unknown>,
+  ): Prisma.InputJsonObject {
+    const rawPhone =
+      typeof destination.phoneNumber === "string"
+        ? destination.phoneNumber
+        : typeof destination.phone === "string"
+          ? destination.phone
+          : "";
+    const compactPhone = rawPhone.replace(/[\s()-]/g, "");
+    const phoneNumber = compactPhone.startsWith("+251")
+      ? compactPhone
+      : compactPhone.startsWith("0")
+        ? `+251${compactPhone.slice(1)}`
+        : compactPhone;
+
+    if (!/^\+251[79]\d{8}$/.test(phoneNumber)) {
+      throw new BadRequestException(
+        "Enter a valid Ethiopian Telebirr phone number such as 09XXXXXXXX.",
+      );
+    }
+
+    const name =
+      typeof destination.name === "string" && destination.name.trim()
+        ? destination.name.trim().slice(0, 120)
+        : undefined;
+
+    return {
+      method: "TELEBIRR",
+      phoneNumber,
+      ...(name ? { name } : {}),
+    };
   }
 
   async listAdminWithdrawals(filters: {
@@ -527,6 +573,9 @@ export class WithdrawalsService {
       currency: withdrawal.currency,
       status: withdrawal.status,
       providerReference: withdrawal.providerReference,
+      destinationDisplay: this.maskWithdrawalDestination(
+        withdrawal.destination,
+      ),
       requestedAt: withdrawal.requestedAt.toISOString(),
       reviewedAt: withdrawal.reviewedAt?.toISOString() ?? null,
       reviewedByAdminId: withdrawal.reviewedByAdminId,
@@ -537,6 +586,24 @@ export class WithdrawalsService {
       createdAt: withdrawal.createdAt.toISOString(),
       updatedAt: withdrawal.updatedAt.toISOString(),
     };
+  }
+
+  private maskWithdrawalDestination(destination: Prisma.JsonValue) {
+    if (
+      !destination ||
+      typeof destination !== "object" ||
+      Array.isArray(destination)
+    ) {
+      return null;
+    }
+
+    const phone = (destination as Record<string, unknown>).phoneNumber;
+
+    if (typeof phone !== "string" || phone.length < 7) {
+      return null;
+    }
+
+    return `${phone.slice(0, 4)}***${phone.slice(-3)}`;
   }
 
   private async refundAndTransition(

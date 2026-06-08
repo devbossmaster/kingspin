@@ -64,6 +64,13 @@ export class SimpleRateLimitGuard implements CanActivate {
         maxRequests: options.isProduction ? 240 : 600,
       },
       {
+        name: 'wallet-transfer',
+        methods: ['POST'],
+        pattern: /^\/wallet\/transfers(?:\/resolve-recipient)?\/?$/,
+        windowMs: 60_000,
+        maxRequests: options.isProduction ? 20 : 60,
+      },
+      {
         name: 'public-live-state',
         methods: ['GET'],
         pattern: /^\/rooms\/[^/]+\/live-state\/?$/,

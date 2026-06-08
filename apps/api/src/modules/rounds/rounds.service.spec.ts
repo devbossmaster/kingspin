@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import { RoundStatus } from '@kingspin/db';
 import { FAIRNESS_ALGORITHM } from '@kingspin/game-engine';
-import { RoundsService } from './rounds.service';
+import {
+  calculatePlatformFeeAmount,
+  RoundsService,
+} from './rounds.service';
 
 const now = new Date('2026-05-26T12:00:00.000Z');
 const serverSeed =
@@ -29,6 +32,7 @@ function buildRound(overrides: Record<string, unknown> = {}) {
     totalEntryAmount: 3_500n,
     houseFeeAmount: 0n,
     payoutAmount: 3_500n,
+    platformFeeBps: 2_000,
     serverSeedHash,
     serverSeedReveal: serverSeed,
     fairnessAlgorithm: FAIRNESS_ALGORITHM,
@@ -156,6 +160,12 @@ describe('RoundsService', () => {
     jest.useRealTimers();
   });
 
+  it('calculates the configured platform fee in basis points', () => {
+    expect(calculatePlatformFeeAmount(1_000n, 2_000)).toBe(200n);
+    expect(calculatePlatformFeeAmount(999n, 2_000)).toBe(199n);
+    expect(calculatePlatformFeeAmount(1_000n, 0)).toBe(0n);
+  });
+
   it('never exposes the active round server seed reveal', () => {
     const service = new RoundsService({} as any, {} as any);
     const snapshot = service.toRoundSnapshot(buildRound());
@@ -163,6 +173,10 @@ describe('RoundsService', () => {
     expect(snapshot).toMatchObject({
       serverSeedHash,
       fairnessAlgorithm: FAIRNESS_ALGORITHM,
+      grossPoolAmount: '3500',
+      platformFeeAmount: '700',
+      netPrizeAmount: '2800',
+      platformFeeBps: 2_000,
     });
     expect(snapshot).not.toHaveProperty('serverSeedReveal');
   });
@@ -191,7 +205,9 @@ describe('RoundsService', () => {
           status: RoundStatus.LOCKED,
           lockedAt: now,
           totalEntryAmount: 3_500n,
-          payoutAmount: 3_500n,
+          houseFeeAmount: 700n,
+          payoutAmount: 2_800n,
+          platformFeeBps: 2_000,
           entriesHash,
         }),
       },
@@ -220,8 +236,9 @@ describe('RoundsService', () => {
       where: { id: openRound.id },
       data: expect.objectContaining({
         totalEntryAmount: 3_500n,
-        houseFeeAmount: 0n,
-        payoutAmount: 3_500n,
+        houseFeeAmount: 700n,
+        payoutAmount: 2_800n,
+        platformFeeBps: 2_000,
         fairnessAlgorithm: FAIRNESS_ALGORITHM,
         entriesHash,
       }),
@@ -453,7 +470,7 @@ describe('RoundsService', () => {
       totalEntryAmount: 0n,
       payoutAmount: 0n,
       openedAt: now,
-      locksAt: new Date('2026-05-26T12:00:45.000Z'),
+      locksAt: new Date('2026-05-26T12:00:43.000Z'),
       idempotencyKey: 'round:start:room-1:3',
     });
     const tx = {
@@ -517,7 +534,8 @@ describe('RoundsService', () => {
           roomId: 'room-1',
           roundNumber: 3,
           status: RoundStatus.OPEN,
-          locksAt: new Date('2026-05-26T12:00:45.000Z'),
+          locksAt: new Date('2026-05-26T12:00:43.000Z'),
+          platformFeeBps: 2_000,
         }),
       }),
     );
@@ -530,7 +548,7 @@ describe('RoundsService', () => {
         currentRound: expect.objectContaining({
           id: 'round-3',
           status: RoundStatus.OPEN,
-          locksAt: '2026-05-26T12:00:45.000Z',
+          locksAt: '2026-05-26T12:00:43.000Z',
         }),
       }),
     );
@@ -823,6 +841,8 @@ describe('RoundsService', () => {
       winningTicket: 1_968n,
       winnerEntryId: 'b',
       winnerUserId: 'user-b',
+      houseFeeAmount: 700n,
+      payoutAmount: 2_800n,
     });
     const completedRound = buildRound({
       ...settlingRound,
@@ -851,6 +871,7 @@ describe('RoundsService', () => {
         reused: true,
         wallet: { id: 'wallet-1', balanceSnapshot: '3500' },
       }),
+      creditPlatformFee: jest.fn().mockResolvedValue(null),
     };
     const service = new RoundsService(prisma as any, walletsService as any);
 
@@ -868,6 +889,15 @@ describe('RoundsService', () => {
       },
     });
     expect(walletsService.creditRoundWin).toHaveBeenCalledTimes(1);
+    expect(walletsService.creditRoundWin).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2_800n }),
+    );
+    expect(walletsService.creditPlatformFee).toHaveBeenCalledTimes(1);
+    expect(walletsService.creditPlatformFee).toHaveBeenCalledWith({
+      roundId: settlingRound.id,
+      amount: 700n,
+      platformFeeBps: 2_000,
+    });
     expect(result).toEqual(
       expect.objectContaining({
         currentRound: expect.objectContaining({

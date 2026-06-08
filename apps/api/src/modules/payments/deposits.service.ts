@@ -48,6 +48,18 @@ export class DepositsService {
 
   async createDeposit(userId: string, body: unknown) {
     const parsed = CreateDepositSchema.parse(body);
+    const configuredAmount = Number(normalizeMoneyAmount(parsed.amount));
+    const env = getApiEnv();
+
+    if (
+      configuredAmount < env.DEPOSIT_MIN_ETB ||
+      configuredAmount > env.DEPOSIT_MAX_ETB
+    ) {
+      throw new BadRequestException(
+        `Deposit amount must be between ${env.DEPOSIT_MIN_ETB} and ${env.DEPOSIT_MAX_ETB} ETB.`,
+      );
+    }
+
     const provider =
       parsed.provider ?? this.providerRegistry.getDefaultProvider();
 

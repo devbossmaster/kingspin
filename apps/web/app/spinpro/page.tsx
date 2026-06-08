@@ -242,7 +242,7 @@ export default function SpinBattleRoomsPage() {
 
           <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 md:gap-4">
             <ModeCard
-              title="ተለዋዋጭ ባትል (Flexible)"
+              title="Flex"
               subtitle="የፈለጉትን መጠን ይምረጡ። ትልቅ መግቢያዎች ለዙሩ ሰፊ የቲኬት ዕድል ክልል ያስገኛሉ።"
               amount={getModeAmountLabel(sortedCategories, "pro")}
               mode="pro"
@@ -250,7 +250,7 @@ export default function SpinBattleRoomsPage() {
               onSelect={() => setSelectedMode("pro")}
             />
             <ModeCard
-              title="ቋሚ ባትል (Fixed)"
+              title="Classic"
               subtitle="በተወሰነ ቋሚ መጠን ብቻ ይግቡ። የሚሳተፍ እያንዳንዱ ተጫዋች አንድ እኩል የማሸነፍ ዕድል ይኖረዋል።"
               amount={getModeAmountLabel(sortedCategories, "fixed")}
               mode="fixed"

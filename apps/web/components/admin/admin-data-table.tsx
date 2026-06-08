@@ -29,7 +29,7 @@ export function AdminDataTable({
   onDetails: (row: AdminRecord) => void;
 }) {
   return (
-    <div className="overflow-x-auto border border-white/10 bg-[#0d1821]">
+    <div className="overflow-x-auto rounded-2xl border border-white/10 bg-[#0d1821] shadow-[0_20px_60px_rgba(0,0,0,0.2)]">
       <table className="w-full min-w-[900px] table-fixed border-collapse text-left">
         <thead className="sticky top-0 z-10 bg-[#111e28]">
           <tr>
@@ -50,7 +50,7 @@ export function AdminDataTable({
           {rows.map((row) => (
             <tr
               key={row.id}
-              className="border-b border-white/[0.06] transition hover:bg-white/[0.035]"
+              className="border-b border-white/[0.06] transition last:border-b-0 hover:bg-white/[0.04]"
             >
               {columns.map((column) => (
                 <td
@@ -69,7 +69,7 @@ export function AdminDataTable({
                     onClick={() => void navigator.clipboard.writeText(row.id)}
                     aria-label={`Copy ${adminShortId(row.id)}`}
                     title="Copy ID"
-                    className="grid h-8 w-8 place-items-center border border-white/10 text-slate-400 hover:border-sky-400/40 hover:text-sky-300"
+                    className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 text-slate-400 hover:border-sky-400/40 hover:text-sky-300"
                   >
                     <Copy className="h-3.5 w-3.5" />
                   </button>
@@ -78,7 +78,7 @@ export function AdminDataTable({
                     onClick={() => onDetails(row)}
                     aria-label="View details"
                     title="View details"
-                    className="grid h-8 w-8 place-items-center border border-white/10 text-slate-400 hover:border-emerald-400/40 hover:text-emerald-300"
+                    className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 text-slate-400 hover:border-emerald-400/40 hover:text-emerald-300"
                   >
                     <Eye className="h-3.5 w-3.5" />
                   </button>
@@ -91,7 +91,7 @@ export function AdminDataTable({
                         onClick={action.onClick}
                         aria-label={action.label}
                         title={action.label}
-                        className={`grid h-8 w-8 place-items-center border ${
+                        className={`grid h-8 w-8 place-items-center rounded-lg border ${
                           action.tone === "danger"
                             ? "border-red-400/20 text-red-300 hover:bg-red-400/10"
                             : "border-white/10 text-slate-400 hover:border-amber-300/40 hover:text-amber-200"

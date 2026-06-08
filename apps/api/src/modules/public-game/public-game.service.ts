@@ -8,6 +8,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { Prisma, RoomStatus, RoundStatus } from '@kingspin/db';
+import { getApiEnv } from '../../config/api-env';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RealtimeMetricsService } from '../redis/realtime-metrics.service';
 import { RedisService } from '../redis/redis.service';
@@ -66,6 +67,10 @@ type RoomLiveStateSnapshot = {
     totalEntryAmount: string;
     houseFeeAmount: string;
     payoutAmount: string;
+    grossPoolAmount: string;
+    platformFeeAmount: string;
+    netPrizeAmount: string;
+    platformFeeBps: number;
     openedAt: string;
     locksAt: string | null;
     lockedAt: string | null;
@@ -141,6 +146,7 @@ type RoomLiveStateRow = {
   roundTotalEntryAmount: bigint | null;
   roundHouseFeeAmount: bigint | null;
   roundPayoutAmount: bigint | null;
+  roundPlatformFeeBps: number | null;
   roundOpenedAt: Date | null;
   roundLocksAt: Date | null;
   roundLockedAt: Date | null;
@@ -474,6 +480,7 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
         cr."totalEntryAmount" AS "roundTotalEntryAmount",
         cr."houseFeeAmount" AS "roundHouseFeeAmount",
         cr."payoutAmount" AS "roundPayoutAmount",
+        cr."platformFeeBps" AS "roundPlatformFeeBps",
         cr."openedAt" AS "roundOpenedAt",
         cr."locksAt" AS "roundLocksAt",
         cr."lockedAt" AS "roundLockedAt",
@@ -512,6 +519,7 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
           ro."totalEntryAmount",
           ro."houseFeeAmount",
           ro."payoutAmount",
+          ro."platformFeeBps",
           ro."openedAt",
           ro."locksAt",
           ro."lockedAt",
@@ -610,6 +618,21 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
       room.roundStatus === RoundStatus.OPEN
         ? rows.reduce((sum, row) => sum + (row.entryAmount ?? 0n), 0n)
         : null;
+    const grossPoolAmount =
+      liveOpenEntryTotal ?? room.roundTotalEntryAmount ?? 0n;
+    const platformFeeBps =
+      room.roundPlatformFeeBps ??
+      (room.roundStatus === RoundStatus.OPEN
+        ? getApiEnv().PLATFORM_FEE_BPS
+        : 0);
+    const platformFeeAmount =
+      room.roundStatus === RoundStatus.OPEN
+        ? (grossPoolAmount * BigInt(platformFeeBps)) / 10_000n
+        : (room.roundHouseFeeAmount ?? 0n);
+    const netPrizeAmount =
+      room.roundStatus === RoundStatus.OPEN
+        ? grossPoolAmount - platformFeeAmount
+        : (room.roundPayoutAmount ?? 0n);
 
     return {
       serverNow: serverNow.toISOString(),
@@ -643,17 +666,13 @@ export class PublicGameService implements OnModuleInit, OnModuleDestroy {
             status: room.roundStatus as RoundStatus,
             phase: publicRoundView.phase,
             phaseLabel: publicRoundView.phaseLabel,
-            totalEntryAmount: (
-              liveOpenEntryTotal ??
-              room.roundTotalEntryAmount ??
-              0n
-            ).toString(),
-            houseFeeAmount: room.roundHouseFeeAmount?.toString() ?? '0',
-            payoutAmount: (
-              liveOpenEntryTotal ??
-              room.roundPayoutAmount ??
-              0n
-            ).toString(),
+            totalEntryAmount: grossPoolAmount.toString(),
+            houseFeeAmount: platformFeeAmount.toString(),
+            payoutAmount: netPrizeAmount.toString(),
+            grossPoolAmount: grossPoolAmount.toString(),
+            platformFeeAmount: platformFeeAmount.toString(),
+            netPrizeAmount: netPrizeAmount.toString(),
+            platformFeeBps,
             openedAt:
               room.roundOpenedAt?.toISOString() ?? serverNow.toISOString(),
             locksAt: room.roundLocksAt?.toISOString() ?? null,

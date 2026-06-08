@@ -122,6 +122,7 @@ type EntryPlacementRow = {
   roundTotalEntryAmount: bigint | null;
   roundHouseFeeAmount: bigint | null;
   roundPayoutAmount: bigint | null;
+  roundPlatformFeeBps: number | null;
   roundServerSeedHash: string | null;
   roundServerSeedReveal: string | null;
   roundFairnessAlgorithm: string | null;
@@ -990,6 +991,7 @@ export class EntriesService {
           )
           ELSE final_round."payoutAmount"
         END AS "roundPayoutAmount",
+        final_round."platformFeeBps" AS "roundPlatformFeeBps",
         final_round."serverSeedHash" AS "roundServerSeedHash",
         final_round."serverSeedReveal" AS "roundServerSeedReveal",
         final_round."fairnessAlgorithm" AS "roundFairnessAlgorithm",
@@ -1301,6 +1303,7 @@ export class EntriesService {
       totalEntryAmount: row.roundTotalEntryAmount,
       houseFeeAmount: row.roundHouseFeeAmount,
       payoutAmount: row.roundPayoutAmount,
+      platformFeeBps: row.roundPlatformFeeBps,
       serverSeedHash: row.roundServerSeedHash,
       serverSeedReveal: row.roundServerSeedReveal,
       fairnessAlgorithm: row.roundFairnessAlgorithm,

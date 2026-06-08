@@ -14,6 +14,10 @@ import type {
   WalletSnapshot,
   WithdrawalSnapshot,
   SubmitTelebirrReceiptInput,
+  CreateWalletTransferInput,
+  ResolveTransferRecipientInput,
+  TransferRecipient,
+  WalletTransferSnapshot,
 } from "@kingspin/contracts";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
@@ -101,6 +105,10 @@ export type CreateWithdrawalResponse = {
   wallet?: WalletSnapshot;
   transaction?: LedgerTransactionSnapshot;
   reused: boolean;
+};
+
+export type ResolveTransferRecipientResponse = {
+  recipient: TransferRecipient;
 };
 
 const inFlightRequests = new Map<string, Promise<unknown>>();
@@ -292,6 +300,33 @@ export const apiClient = {
       {
         method: "PATCH",
       },
+    );
+  },
+
+  resolveTransferRecipient(input: ResolveTransferRecipientInput) {
+    return requestJson<ResolveTransferRecipientResponse>(
+      "/wallet/transfers/resolve-recipient",
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    );
+  },
+
+  createWalletTransfer(input: CreateWalletTransferInput) {
+    return requestJson<WalletTransferSnapshot>("/wallet/transfers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  },
+
+  listWalletTransfers(take = 50) {
+    const params = new URLSearchParams({
+      take: String(Math.min(100, Math.max(1, Math.floor(take)))),
+    });
+
+    return requestJson<WalletTransferSnapshot[]>(
+      `/wallet/transfers?${params.toString()}`,
     );
   },
 

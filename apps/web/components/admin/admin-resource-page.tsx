@@ -212,14 +212,14 @@ export function AdminResourcePage({
           type="button"
           onClick={() => void refresh()}
           disabled={loading}
-          className="inline-flex min-h-10 items-center gap-2 border border-white/10 px-3 text-sm font-black text-slate-300 hover:bg-white/[0.04]"
+          className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-black text-slate-300 hover:bg-white/[0.04]"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           Refresh
         </button>
       </div>
 
-      <div className="mt-5 grid gap-2 border-y border-white/10 bg-[#0b151d] py-3 md:grid-cols-[minmax(220px,1fr)_180px_180px_180px_160px_160px_auto]">
+      <div className="mt-5 grid gap-2 rounded-2xl border border-white/10 bg-[#0b151d] p-3 shadow-[0_16px_40px_rgba(0,0,0,0.16)] md:grid-cols-[minmax(220px,1fr)_180px_180px_180px_160px_160px_auto]">
         <div className="flex min-w-0">
           <label className="relative min-w-0 flex-1">
             <Search className="absolute left-3 top-3 h-4 w-4 text-slate-600" />
@@ -230,7 +230,7 @@ export function AdminResourcePage({
                 if (event.key === "Enter") applySearch();
               }}
               placeholder="Search"
-              className="h-10 w-full border border-white/10 bg-[#071018] pl-10 pr-3 text-sm text-white outline-none focus:border-emerald-400"
+              className="h-10 w-full rounded-l-lg border border-white/10 bg-[#071018] pl-10 pr-3 text-sm text-white outline-none focus:border-emerald-400"
             />
           </label>
           <button
@@ -238,7 +238,7 @@ export function AdminResourcePage({
             onClick={applySearch}
             aria-label="Apply search"
             title="Apply search"
-            className="grid h-10 w-10 place-items-center bg-emerald-400 text-[#071018]"
+            className="grid h-10 w-10 place-items-center rounded-r-lg bg-emerald-400 text-[#071018]"
           >
             <Search className="h-4 w-4" />
           </button>
@@ -249,7 +249,7 @@ export function AdminResourcePage({
             setStatus(event.target.value);
             setPage(1);
           }}
-          className="h-10 border border-white/10 bg-[#071018] px-3 text-sm text-slate-300 outline-none focus:border-emerald-400"
+          className="h-10 rounded-lg border border-white/10 bg-[#071018] px-3 text-sm text-slate-300 outline-none focus:border-emerald-400"
         >
           <option value="">All statuses</option>
           {statuses.map((item) => (
@@ -269,7 +269,7 @@ export function AdminResourcePage({
               }));
               setPage(1);
             }}
-            className="h-10 border border-white/10 bg-[#071018] px-3 text-sm text-slate-300 outline-none focus:border-emerald-400"
+            className="h-10 rounded-lg border border-white/10 bg-[#071018] px-3 text-sm text-slate-300 outline-none focus:border-emerald-400"
           >
             <option value="">{filter.label}</option>
             {filter.options.map((item) => (
@@ -287,7 +287,7 @@ export function AdminResourcePage({
             setFrom(event.target.value);
             setPage(1);
           }}
-          className="h-10 border border-white/10 bg-[#071018] px-3 text-sm text-slate-300 outline-none focus:border-emerald-400"
+          className="h-10 rounded-lg border border-white/10 bg-[#071018] px-3 text-sm text-slate-300 outline-none focus:border-emerald-400"
         />
         <input
           type="date"
@@ -297,7 +297,7 @@ export function AdminResourcePage({
             setTo(event.target.value);
             setPage(1);
           }}
-          className="h-10 border border-white/10 bg-[#071018] px-3 text-sm text-slate-300 outline-none focus:border-emerald-400"
+          className="h-10 rounded-lg border border-white/10 bg-[#071018] px-3 text-sm text-slate-300 outline-none focus:border-emerald-400"
         />
         <button
           type="button"
@@ -312,7 +312,7 @@ export function AdminResourcePage({
           }}
           aria-label="Clear filters"
           title="Clear filters"
-          className="grid h-10 w-10 place-items-center border border-white/10 text-slate-400"
+          className="grid h-10 w-10 place-items-center rounded-lg border border-white/10 text-slate-400"
         >
           <X className="h-4 w-4" />
         </button>
@@ -349,7 +349,7 @@ export function AdminResourcePage({
               disabled={page <= 1 || loading}
               aria-label="Previous page"
               title="Previous page"
-              className="grid h-9 w-9 place-items-center border border-white/10 disabled:opacity-35"
+              className="grid h-9 w-9 place-items-center rounded-lg border border-white/10 disabled:opacity-35"
             >
               <ChevronLeft className="h-4 w-4" />
             </button>
@@ -361,7 +361,7 @@ export function AdminResourcePage({
               disabled={page >= data.totalPages || loading}
               aria-label="Next page"
               title="Next page"
-              className="grid h-9 w-9 place-items-center border border-white/10 disabled:opacity-35"
+              className="grid h-9 w-9 place-items-center rounded-lg border border-white/10 disabled:opacity-35"
             >
               <ChevronRight className="h-4 w-4" />
             </button>

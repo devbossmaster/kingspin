@@ -60,6 +60,44 @@ export const LedgerTransactionSnapshotSchema = z.object({
   entries: z.array(LedgerEntrySnapshotSchema),
 });
 
+export const TransferRecipientSchema = z
+  .object({
+    id: z.string(),
+    username: z.string(),
+    displayName: z.string(),
+    maskedEmail: z.string().nullable(),
+    maskedPhone: z.string().nullable(),
+  })
+  .strict();
+
+export const ResolveTransferRecipientSchema = z
+  .object({
+    recipient: z.string().trim().min(3).max(160),
+  })
+  .strict();
+
+export const CreateWalletTransferSchema = z
+  .object({
+    recipientId: z.string().min(1),
+    amount: z.number().int().positive(),
+    note: z.string().trim().max(160).optional(),
+    idempotencyKey: z.string().min(1).max(200),
+  })
+  .strict();
+
+export const WalletTransferSnapshotSchema = z
+  .object({
+    id: z.string(),
+    direction: z.enum(["SENT", "RECEIVED"]),
+    amount: BigIntStringSchema,
+    currency: z.string(),
+    note: z.string().nullable(),
+    counterparty: TransferRecipientSchema,
+    createdAt: IsoDateStringSchema,
+    reused: z.boolean().optional(),
+  })
+  .strict();
+
 export type DevCreditWalletInput = z.infer<typeof DevCreditWalletSchema>;
 export type CurrentUser = z.infer<typeof CurrentUserSchema>;
 export type MeWallet = z.infer<typeof MeWalletSchema>;
@@ -67,4 +105,14 @@ export type WalletSnapshot = z.infer<typeof WalletSnapshotSchema>;
 export type LedgerEntrySnapshot = z.infer<typeof LedgerEntrySnapshotSchema>;
 export type LedgerTransactionSnapshot = z.infer<
   typeof LedgerTransactionSnapshotSchema
+>;
+export type TransferRecipient = z.infer<typeof TransferRecipientSchema>;
+export type ResolveTransferRecipientInput = z.infer<
+  typeof ResolveTransferRecipientSchema
+>;
+export type CreateWalletTransferInput = z.infer<
+  typeof CreateWalletTransferSchema
+>;
+export type WalletTransferSnapshot = z.infer<
+  typeof WalletTransferSnapshotSchema
 >;

@@ -834,6 +834,107 @@ export class WalletsService {
     }
   }
 
+  async creditPlatformFee(args: {
+    roundId: string;
+    amount: bigint;
+    platformFeeBps: number;
+  }) {
+    if (args.amount <= 0n) {
+      return null;
+    }
+
+    const houseWallet = await this.prisma.walletAccount.upsert({
+      where: { id: 'platform-house-main' },
+      update: {},
+      create: {
+        id: 'platform-house-main',
+        type: WalletAccountType.HOUSE,
+      },
+    });
+    const idempotencyKey = `round-platform-fee:${args.roundId}`;
+    const existingTransaction = await this.prisma.ledgerTransaction.findUnique({
+      where: { idempotencyKey },
+      include: { entries: true },
+    });
+
+    if (existingTransaction) {
+      this.assertPlatformFeeTransactionMatches(existingTransaction, args);
+      const freshWallet = await this.prisma.walletAccount.findUniqueOrThrow({
+        where: { id: houseWallet.id },
+      });
+
+      return {
+        wallet: this.toWalletSnapshot(freshWallet),
+        transaction: this.toLedgerTransactionSnapshot(existingTransaction),
+        reused: true,
+      };
+    }
+
+    try {
+      const result = await this.prisma.$transaction(async (tx) => {
+        const updatedWallet = await tx.walletAccount.update({
+          where: { id: houseWallet.id },
+          data: {
+            balanceSnapshot: {
+              increment: args.amount,
+            },
+          },
+        });
+        const transaction = await tx.ledgerTransaction.create({
+          data: {
+            type: LedgerTransactionType.HOUSE_FEE,
+            referenceType: 'ROUND',
+            referenceId: args.roundId,
+            idempotencyKey,
+            metadata: {
+              roundId: args.roundId,
+              amount: args.amount.toString(),
+              platformFeeBps: String(args.platformFeeBps),
+              walletAccountId: updatedWallet.id,
+            },
+            entries: {
+              create: {
+                walletAccountId: updatedWallet.id,
+                direction: LedgerEntryDirection.CREDIT,
+                amount: args.amount,
+                balanceAfterSnapshot: updatedWallet.balanceSnapshot,
+              },
+            },
+          },
+          include: { entries: true },
+        });
+
+        return { updatedWallet, transaction };
+      });
+
+      return {
+        wallet: this.toWalletSnapshot(result.updatedWallet),
+        transaction: this.toLedgerTransactionSnapshot(result.transaction),
+        reused: false,
+      };
+    } catch (error) {
+      if (!this.isUniqueConstraintError(error)) {
+        throw error;
+      }
+
+      const transaction =
+        await this.prisma.ledgerTransaction.findUniqueOrThrow({
+          where: { idempotencyKey },
+          include: { entries: true },
+        });
+      this.assertPlatformFeeTransactionMatches(transaction, args);
+      const freshWallet = await this.prisma.walletAccount.findUniqueOrThrow({
+        where: { id: houseWallet.id },
+      });
+
+      return {
+        wallet: this.toWalletSnapshot(freshWallet),
+        transaction: this.toLedgerTransactionSnapshot(transaction),
+        reused: true,
+      };
+    }
+  }
+
   async creditDepositInTransaction(
     tx: Prisma.TransactionClient,
     args: {
@@ -1446,6 +1547,32 @@ export class WalletsService {
     if (!matches) {
       throw new BadRequestException(
         'Idempotency key was already used for a different deposit credit.',
+      );
+    }
+  }
+
+  private assertPlatformFeeTransactionMatches(
+    transaction: LedgerTransactionWithEntries,
+    args: {
+      roundId: string;
+      amount: bigint;
+      platformFeeBps: number;
+    },
+  ) {
+    const matches =
+      transaction.type === LedgerTransactionType.HOUSE_FEE &&
+      transaction.referenceType === 'ROUND' &&
+      transaction.referenceId === args.roundId &&
+      this.getMetadataString(transaction.metadata, 'roundId') ===
+        args.roundId &&
+      this.getMetadataString(transaction.metadata, 'amount') ===
+        args.amount.toString() &&
+      this.getMetadataString(transaction.metadata, 'platformFeeBps') ===
+        String(args.platformFeeBps);
+
+    if (!matches) {
+      throw new BadRequestException(
+        'Round platform fee ledger transaction does not match the settlement.',
       );
     }
   }

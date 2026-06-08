@@ -9,6 +9,10 @@ import {
   adminRelativeDate,
   adminText,
 } from "../../../lib/admin-formatters";
+import {
+  formatCategoryLabel,
+  formatGameModeLabel,
+} from "../../../lib/game-modes";
 
 function nested(value: unknown) {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -36,8 +40,27 @@ export default function AdminRoomsPage() {
         },
         {
           key: "category",
-          label: "Arena",
-          render: (row) => adminText(nested(row.category).name),
+          label: "Mode / category",
+          render: (row) => {
+            const category = nested(row.category);
+            const mode = adminText(row.gameMode);
+            return (
+              <div>
+                <p className="font-bold text-slate-200">
+                  {formatGameModeLabel(
+                    mode === "FIXED_EQUAL_CHANCE"
+                      ? "FIXED_EQUAL_CHANCE"
+                      : "FLEXIBLE_PROPORTIONAL",
+                  )}
+                </p>
+                <p className="text-xs text-slate-500">
+                  {formatCategoryLabel(
+                    adminText(category.slug, adminText(category.name)),
+                  )}
+                </p>
+              </div>
+            );
+          },
         },
         {
           key: "status",

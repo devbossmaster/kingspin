@@ -23,7 +23,7 @@ export function PromoHero({
             Spin Battle
           </h1>
           <p className="mt-5 max-w-xl text-base leading-7 text-text-secondary md:text-lg">
-            Pick Pro for flexible ticket ranges or Fixed for equal-chance rooms.
+            Pick Flex for proportional ticket ranges or Classic for equal-chance rooms.
             Browse as a guest, sign in when you are ready to enter.
           </p>
 
@@ -46,13 +46,13 @@ export function PromoHero({
           <div className="absolute left-1/2 top-4 h-0 w-0 -translate-x-1/2 border-x-[18px] border-t-[36px] border-x-transparent border-t-gold drop-shadow-[0_0_12px_rgba(246,197,71,0.5)] md:top-6" />
           <div className="absolute bottom-5 left-4 rounded-md border border-[rgba(45,212,191,0.35)] bg-[rgba(8,12,20,0.78)] px-3 py-2 backdrop-blur md:bottom-7 md:left-7">
             <p className="text-xs font-black uppercase tracking-[0.14em] text-teal">
-              Pro
+              Flex
             </p>
             <p className="mt-1 font-mono text-sm font-black">10-350</p>
           </div>
           <div className="absolute right-4 top-5 rounded-md border border-[rgba(232,121,249,0.35)] bg-[rgba(8,12,20,0.78)] px-3 py-2 backdrop-blur md:right-7 md:top-7">
             <p className="text-xs font-black uppercase tracking-[0.14em] text-magenta">
-              Fixed
+              Classic
             </p>
             <p className="mt-1 font-mono text-sm font-black">10/20/50</p>
           </div>

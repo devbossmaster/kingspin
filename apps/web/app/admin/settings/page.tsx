@@ -64,6 +64,13 @@ export default function AdminSettingsPage() {
     ["Telebirr receipt verification", data?.telebirrReceiptVerificationEnabled],
     ["Deposit minimum", data?.depositMinimum],
     ["Deposit maximum", data?.depositMaximum],
+    ["Withdrawal minimum", data?.withdrawalMinimum],
+    ["Withdrawal maximum", data?.withdrawalMaximum],
+    ["Transfer minimum", data?.transferMinimum],
+    ["Transfer maximum", data?.transferMaximum],
+    ["Platform service fee", data?.platformFeePercent],
+    ["Platform fee basis points", data?.platformFeeBps],
+    ["Entry cutoff buffer", `${adminText(data?.entryCutoffBufferMs)} ms`],
     ["Redis enabled", data?.redisEnabled],
     ["Trusted proxy headers", data?.trustedProxyHeaders],
     ["Sentry configured", data?.sentryConfigured],
@@ -86,13 +93,13 @@ export default function AdminSettingsPage() {
           type="button"
           onClick={() => void refresh()}
           disabled={loading}
-          className="inline-flex min-h-10 items-center gap-2 border border-white/10 px-3 text-sm font-black text-slate-300"
+          className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-black text-slate-300"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           Refresh
         </button>
       </div>
-      <section className="mt-6 max-w-4xl border border-white/10 bg-[#0d1821]">
+      <section className="mt-6 max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-[#0d1821] shadow-[0_20px_60px_rgba(0,0,0,0.2)]">
         <dl className="divide-y divide-white/[0.07]">
           {rows.map(([label, value]) => (
             <div

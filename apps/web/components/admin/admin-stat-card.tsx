@@ -18,7 +18,9 @@ export function AdminStatCard({
     red: "border-red-400/20 text-red-300",
   };
   return (
-    <div className={`border bg-[#0d1821] p-4 ${tones[tone]}`}>
+    <div
+      className={`rounded-2xl border bg-[linear-gradient(145deg,#101e29,#0b151d)] p-4 shadow-[0_18px_45px_rgba(0,0,0,0.18)] ${tones[tone]}`}
+    >
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs font-bold uppercase text-slate-500">{label}</p>
         <Icon className="h-4 w-4" aria-hidden="true" />

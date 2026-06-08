@@ -45,14 +45,26 @@ export default function AdminRoundsPage() {
           render: (row) => <AdminStatusBadge value={row.status} />,
         },
         {
-          key: "totalEntryAmount",
-          label: "Entry total",
-          render: (row) => adminAmount(row.totalEntryAmount),
+          key: "grossPoolAmount",
+          label: "Gross pool",
+          render: (row) => adminAmount(row.grossPoolAmount),
         },
         {
-          key: "payoutAmount",
-          label: "Payout",
-          render: (row) => adminAmount(row.payoutAmount),
+          key: "platformFeeAmount",
+          label: "Service fee",
+          render: (row) => (
+            <div>
+              <p>{adminAmount(row.platformFeeAmount)}</p>
+              <p className="text-xs text-slate-500">
+                {adminText(row.platformFeeBps)} bps
+              </p>
+            </div>
+          ),
+        },
+        {
+          key: "netPrizeAmount",
+          label: "Winner payout",
+          render: (row) => adminAmount(row.netPrizeAmount),
         },
         { key: "entryCount", label: "Entries" },
         {

@@ -175,8 +175,21 @@ const ApiEnvBaseSchema = z
     TELEBIRR_EXPECTED_RECEIVER_NAME: OptionalStringSchema,
     TELEBIRR_EXPECTED_RECEIVER_ACCOUNT: OptionalStringSchema,
     TELEBIRR_EXPECTED_SHORT_CODE: OptionalStringSchema,
-    TELEBIRR_DEPOSIT_MIN: z.coerce.number().positive().default(10),
-    TELEBIRR_DEPOSIT_MAX: z.coerce.number().positive().default(10_000),
+    TELEBIRR_DEPOSIT_MIN: z.coerce.number().positive().optional(),
+    TELEBIRR_DEPOSIT_MAX: z.coerce.number().positive().optional(),
+    DEPOSIT_MIN_ETB: z.coerce.number().positive().optional(),
+    DEPOSIT_MAX_ETB: z.coerce.number().positive().optional(),
+    WITHDRAWAL_MIN_ETB: z.coerce.number().positive().default(50),
+    WITHDRAWAL_MAX_ETB: z.coerce.number().positive().default(1_000),
+    TRANSFER_MIN_ETB: z.coerce.number().positive().default(1),
+    TRANSFER_MAX_ETB: z.coerce.number().positive().default(1_000),
+    PLATFORM_FEE_BPS: z.coerce.number().int().min(0).max(10_000).default(2_000),
+    ROUND_ENTRY_CUTOFF_BUFFER_MS: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(10_000)
+      .default(2_000),
     TELEBIRR_DEPOSIT_INTENT_TTL_MINUTES: z.coerce
       .number()
       .int()
@@ -216,6 +229,10 @@ const ApiEnvBaseSchema = z
       ENABLE_LOCAL_DEV_AUTH: env.ENABLE_LOCAL_DEV_AUTH ?? env.ENABLE_DEV_AUTH,
       PAYMENT_PROVIDER:
         env.PAYMENT_PROVIDER ?? (appEnv === "local" ? "MOCK" : "MANUAL"),
+      DEPOSIT_MIN_ETB:
+        env.DEPOSIT_MIN_ETB ?? env.TELEBIRR_DEPOSIT_MIN ?? 10,
+      DEPOSIT_MAX_ETB:
+        env.DEPOSIT_MAX_ETB ?? env.TELEBIRR_DEPOSIT_MAX ?? 1_000,
     };
   });
 
@@ -285,12 +302,28 @@ export const ApiEnvSchema = ApiEnvBaseSchema.superRefine((env, context) => {
     });
   }
 
-  if (env.TELEBIRR_DEPOSIT_MAX <= env.TELEBIRR_DEPOSIT_MIN) {
+  if (env.DEPOSIT_MAX_ETB <= env.DEPOSIT_MIN_ETB) {
     context.addIssue({
       code: "custom",
-      path: ["TELEBIRR_DEPOSIT_MAX"],
+      path: ["DEPOSIT_MAX_ETB"],
+      message: "DEPOSIT_MAX_ETB must be greater than DEPOSIT_MIN_ETB.",
+    });
+  }
+
+  if (env.WITHDRAWAL_MAX_ETB <= env.WITHDRAWAL_MIN_ETB) {
+    context.addIssue({
+      code: "custom",
+      path: ["WITHDRAWAL_MAX_ETB"],
       message:
-        "TELEBIRR_DEPOSIT_MAX must be greater than TELEBIRR_DEPOSIT_MIN.",
+        "WITHDRAWAL_MAX_ETB must be greater than WITHDRAWAL_MIN_ETB.",
+    });
+  }
+
+  if (env.TRANSFER_MAX_ETB <= env.TRANSFER_MIN_ETB) {
+    context.addIssue({
+      code: "custom",
+      path: ["TRANSFER_MAX_ETB"],
+      message: "TRANSFER_MAX_ETB must be greater than TRANSFER_MIN_ETB.",
     });
   }
 

@@ -97,6 +97,9 @@ export function ArenaHeroCard({
   playerCount,
   maxPlayers,
   totalEntryAmount,
+  platformFeeAmount,
+  netPrizeAmount,
+  platformFeeBps,
   msLeft,
   msUntilNextRound,
 }: {
@@ -108,6 +111,9 @@ export function ArenaHeroCard({
   playerCount: number;
   maxPlayers?: number | null;
   totalEntryAmount: string;
+  platformFeeAmount: string;
+  netPrizeAmount: string;
+  platformFeeBps: number;
   msLeft: number;
   msUntilNextRound?: number | null;
 }) {
@@ -126,11 +132,20 @@ export function ArenaHeroCard({
       value: `${playerCount} / ${displayedMaxPlayers} Players`,
     },
     {
-      label: "Pool",
+      label: "Total Pool",
       value: formatCoins(totalEntryAmount),
     },
     {
-      label: publicPhase === "RESULT" ? "Next" : "Ends",
+      label: "Service Fee",
+      value: `${platformFeeBps / 100}% · ${formatCoins(platformFeeAmount)}`,
+    },
+    {
+      label: "Winner Gets",
+      value: formatCoins(netPrizeAmount),
+      highlight: true,
+    },
+    {
+      label: publicPhase === "RESULT" ? "Next Round" : "Entries Close",
       value: timerValue,
     },
   ];
@@ -173,7 +188,7 @@ export function ArenaHeroCard({
         })}
       </div>
 
-      <div className="mt-3 grid grid-cols-3 gap-2">
+      <div className="mt-3 grid grid-cols-2 gap-2">
         {stats.map((stat) => (
           <div
             key={stat.label}
@@ -182,7 +197,11 @@ export function ArenaHeroCard({
             <p className="text-[10px] font-black uppercase tracking-[0.14em] text-slate-400">
               {stat.label}
             </p>
-            <p className="mt-0.5 truncate font-mono text-sm font-black text-white">
+            <p
+              className={`mt-0.5 truncate font-mono text-sm font-black ${
+                stat.highlight ? "text-[var(--gold)]" : "text-white"
+              }`}
+            >
               {stat.value}
             </p>
           </div>

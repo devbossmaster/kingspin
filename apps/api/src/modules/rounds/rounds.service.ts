@@ -17,6 +17,7 @@ import {
   type FairnessEntry,
   type TicketRange,
 } from '@kingspin/game-engine';
+import { getApiEnv } from '../../config/api-env';
 import { PrismaService } from '../../prisma/prisma.service';
 import {
   WalletsService,
@@ -46,6 +47,17 @@ const LATEST_RESULT_TIMING_WARN_THRESHOLD_MS = 1_000;
 const ROUND_TRANSACTION_TIMING_WARN_THRESHOLD_MS = 300;
 const PUBLIC_WINNER_FEED_LIMIT = 15;
 
+export function calculatePlatformFeeAmount(
+  grossPoolAmount: bigint,
+  platformFeeBps: number,
+) {
+  if (grossPoolAmount <= 0n || platformFeeBps <= 0) {
+    return 0n;
+  }
+
+  return (grossPoolAmount * BigInt(platformFeeBps)) / 10_000n;
+}
+
 export type RoundSnapshot = {
   id: string;
   roomId: string;
@@ -54,6 +66,10 @@ export type RoundSnapshot = {
   totalEntryAmount: string;
   houseFeeAmount: string;
   payoutAmount: string;
+  grossPoolAmount: string;
+  platformFeeAmount: string;
+  netPrizeAmount: string;
+  platformFeeBps: number;
   openedAt: string;
   locksAt: string | null;
   lockedAt: string | null;
@@ -100,6 +116,7 @@ type RoundSnapshotSource = {
   totalEntryAmount: bigint;
   houseFeeAmount: bigint;
   payoutAmount: bigint;
+  platformFeeBps?: number | null;
   openedAt: Date;
   locksAt: Date | null;
   lockedAt: Date | null;
@@ -142,6 +159,7 @@ type LatestRoundResultRow = {
   roundTotalEntryAmount: bigint;
   roundHouseFeeAmount: bigint;
   roundPayoutAmount: bigint;
+  roundPlatformFeeBps: number | null;
   roundServerSeedHash: string | null;
   roundServerSeedReveal: string | null;
   roundFairnessAlgorithm: string | null;
@@ -213,6 +231,7 @@ type EmptyCancelAndStartRow = {
   cancelledTotalEntryAmount: bigint;
   cancelledHouseFeeAmount: bigint;
   cancelledPayoutAmount: bigint;
+  cancelledPlatformFeeBps: number | null;
   cancelledOpenedAt: Date;
   cancelledLocksAt: Date | null;
   cancelledLockedAt: Date | null;
@@ -235,6 +254,7 @@ type EmptyCancelAndStartRow = {
   nextTotalEntryAmount: bigint;
   nextHouseFeeAmount: bigint;
   nextPayoutAmount: bigint;
+  nextPlatformFeeBps: number | null;
   nextOpenedAt: Date;
   nextLocksAt: Date | null;
   nextLockedAt: Date | null;
@@ -360,7 +380,12 @@ export class RoundsService {
   ) {
     const roundNumber = args.latestRoundNumber + 1;
     const openedAt = new Date();
-    const locksAt = new Date(openedAt.getTime() + args.roundDurationMs);
+    const env = getApiEnv();
+    const entryWindowMs = Math.max(
+      1_000,
+      args.roundDurationMs - env.ROUND_ENTRY_CUTOFF_BUFFER_MS,
+    );
+    const locksAt = new Date(openedAt.getTime() + entryWindowMs);
 
     const serverSeed = randomBytes(32).toString('hex');
     const serverSeedHash = createHash('sha256')
@@ -374,6 +399,7 @@ export class RoundsService {
         status: RoundStatus.OPEN,
         openedAt,
         locksAt,
+        platformFeeBps: env.PLATFORM_FEE_BPS,
         serverSeedHash,
         serverSeedReveal: serverSeed,
         fairnessAlgorithm: FAIRNESS_ALGORITHM,
@@ -493,6 +519,13 @@ export class RoundsService {
       }
 
       const finalTotal = assignment.totalAmount;
+      const platformFeeBps =
+        currentRound.platformFeeBps ?? getApiEnv().PLATFORM_FEE_BPS;
+      const platformFeeAmount = calculatePlatformFeeAmount(
+        finalTotal,
+        platformFeeBps,
+      );
+      const netPrizeAmount = finalTotal - platformFeeAmount;
       const lockedEntries = await tx.entry.findMany({
         where: { roundId: currentRound.id },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -505,8 +538,9 @@ export class RoundsService {
         where: { id: currentRound.id },
         data: {
           totalEntryAmount: finalTotal,
-          houseFeeAmount: 0n,
-          payoutAmount: finalTotal,
+          houseFeeAmount: platformFeeAmount,
+          payoutAmount: netPrizeAmount,
+          platformFeeBps,
           fairnessAlgorithm: FAIRNESS_ALGORITHM,
           entriesHash,
           updatedAt: new Date(),
@@ -1000,6 +1034,11 @@ export class RoundsService {
       winnerEntryId,
       amount: currentRound.payoutAmount,
     });
+    const platformFee = await this.walletsService.creditPlatformFee({
+      roundId: currentRound.id,
+      amount: currentRound.houseFeeAmount,
+      platformFeeBps: currentRound.platformFeeBps ?? 0,
+    });
 
     const completeResult = await this.prisma.round.updateMany({
       where: {
@@ -1047,6 +1086,7 @@ export class RoundsService {
       winnerEntry: this.toEntrySnapshot(finalWinnerEntry),
       payoutAmount: completedRound.payoutAmount.toString(),
       payout,
+      platformFee,
       reused: payout.reused,
     };
   }
@@ -1200,6 +1240,7 @@ export class RoundsService {
     const serverSeedHash = createHash('sha256')
       .update(serverSeed)
       .digest('hex');
+    const env = getApiEnv();
 
     const rows = await this.prisma.$queryRaw<EmptyCancelAndStartRow[]>(
       Prisma.sql`
@@ -1257,6 +1298,7 @@ export class RoundsService {
             "totalEntryAmount",
             "houseFeeAmount",
             "payoutAmount",
+            "platformFeeBps",
             "serverSeedHash",
             "serverSeedReveal",
             "fairnessAlgorithm",
@@ -1270,10 +1312,16 @@ export class RoundsService {
             latest."roundNumber",
             CAST(${RoundStatus.OPEN} AS "RoundStatus"),
             ${openedAt},
-            ${openedAt} + (candidate."roundDurationMs" * INTERVAL '1 millisecond'),
+            ${openedAt} + (
+              GREATEST(
+                1000,
+                candidate."roundDurationMs" - ${env.ROUND_ENTRY_CUTOFF_BUFFER_MS}
+              ) * INTERVAL '1 millisecond'
+            ),
             0,
             0,
             0,
+            ${env.PLATFORM_FEE_BPS},
             ${serverSeedHash},
             ${serverSeed},
             ${FAIRNESS_ALGORITHM},
@@ -1294,6 +1342,7 @@ export class RoundsService {
           c."totalEntryAmount" AS "cancelledTotalEntryAmount",
           c."houseFeeAmount" AS "cancelledHouseFeeAmount",
           c."payoutAmount" AS "cancelledPayoutAmount",
+          c."platformFeeBps" AS "cancelledPlatformFeeBps",
           c."openedAt" AS "cancelledOpenedAt",
           c."locksAt" AS "cancelledLocksAt",
           c."lockedAt" AS "cancelledLockedAt",
@@ -1316,6 +1365,7 @@ export class RoundsService {
           n."totalEntryAmount" AS "nextTotalEntryAmount",
           n."houseFeeAmount" AS "nextHouseFeeAmount",
           n."payoutAmount" AS "nextPayoutAmount",
+          n."platformFeeBps" AS "nextPlatformFeeBps",
           n."openedAt" AS "nextOpenedAt",
           n."locksAt" AS "nextLocksAt",
           n."lockedAt" AS "nextLockedAt",
@@ -1845,6 +1895,7 @@ export class RoundsService {
         totalEntryAmount: row.cancelledTotalEntryAmount,
         houseFeeAmount: row.cancelledHouseFeeAmount,
         payoutAmount: row.cancelledPayoutAmount,
+        platformFeeBps: row.cancelledPlatformFeeBps,
         openedAt: row.cancelledOpenedAt,
         locksAt: row.cancelledLocksAt,
         lockedAt: row.cancelledLockedAt,
@@ -1871,6 +1922,7 @@ export class RoundsService {
       totalEntryAmount: row.nextTotalEntryAmount,
       houseFeeAmount: row.nextHouseFeeAmount,
       payoutAmount: row.nextPayoutAmount,
+      platformFeeBps: row.nextPlatformFeeBps,
       openedAt: row.nextOpenedAt,
       locksAt: row.nextLocksAt,
       lockedAt: row.nextLockedAt,
@@ -2027,6 +2079,7 @@ export class RoundsService {
           ro."totalEntryAmount",
           ro."houseFeeAmount",
           ro."payoutAmount",
+          ro."platformFeeBps",
           ro."serverSeedHash",
           ro."serverSeedReveal",
           ro."fairnessAlgorithm",
@@ -2059,6 +2112,7 @@ export class RoundsService {
         lr."totalEntryAmount" AS "roundTotalEntryAmount",
         lr."houseFeeAmount" AS "roundHouseFeeAmount",
         lr."payoutAmount" AS "roundPayoutAmount",
+        lr."platformFeeBps" AS "roundPlatformFeeBps",
         lr."serverSeedHash" AS "roundServerSeedHash",
         lr."serverSeedReveal" AS "roundServerSeedReveal",
         lr."fairnessAlgorithm" AS "roundFairnessAlgorithm",
@@ -2113,6 +2167,7 @@ export class RoundsService {
       totalEntryAmount: first.roundTotalEntryAmount,
       houseFeeAmount: first.roundHouseFeeAmount,
       payoutAmount: first.roundPayoutAmount,
+      platformFeeBps: first.roundPlatformFeeBps,
       serverSeedHash: first.roundServerSeedHash,
       serverSeedReveal: first.roundServerSeedReveal,
       fairnessAlgorithm: first.roundFairnessAlgorithm,
@@ -2203,14 +2258,33 @@ export class RoundsService {
   }
 
   toRoundSnapshot(round: RoundSnapshotSource): RoundSnapshot {
+    const grossPoolAmount = round.totalEntryAmount;
+    const platformFeeBps =
+      round.platformFeeBps ??
+      (round.status === RoundStatus.OPEN
+        ? getApiEnv().PLATFORM_FEE_BPS
+        : 0);
+    const platformFeeAmount =
+      round.status === RoundStatus.OPEN
+        ? calculatePlatformFeeAmount(grossPoolAmount, platformFeeBps)
+        : round.houseFeeAmount;
+    const netPrizeAmount =
+      round.status === RoundStatus.OPEN
+        ? grossPoolAmount - platformFeeAmount
+        : round.payoutAmount;
+
     return {
       id: round.id,
       roomId: round.roomId,
       roundNumber: round.roundNumber,
       status: round.status,
-      totalEntryAmount: round.totalEntryAmount.toString(),
-      houseFeeAmount: round.houseFeeAmount.toString(),
-      payoutAmount: round.payoutAmount.toString(),
+      totalEntryAmount: grossPoolAmount.toString(),
+      houseFeeAmount: platformFeeAmount.toString(),
+      payoutAmount: netPrizeAmount.toString(),
+      grossPoolAmount: grossPoolAmount.toString(),
+      platformFeeAmount: platformFeeAmount.toString(),
+      netPrizeAmount: netPrizeAmount.toString(),
+      platformFeeBps,
       openedAt: round.openedAt.toISOString(),
       locksAt: round.locksAt?.toISOString() ?? null,
       lockedAt: round.lockedAt?.toISOString() ?? null,

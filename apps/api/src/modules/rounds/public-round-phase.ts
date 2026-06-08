@@ -7,7 +7,7 @@ import type {
 export const ROUND_MACHINE_TIMINGS_MS = {
   lockedPhase: 1_500,
   drawingPhase: 500,
-  spinningPhase: 5_000,
+  spinningPhase: 6_500,
   settlingPhase: 1_000,
   cooldownPhase: 9_000,
 };

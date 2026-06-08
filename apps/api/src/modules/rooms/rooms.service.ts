@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, RoomStatus, RoundStatus } from '@kingspin/db';
+import { getApiEnv } from '../../config/api-env';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RoundsService, type RoundSnapshot } from '../rounds/rounds.service';
 import {
@@ -59,7 +60,9 @@ type LiveRoomSummaryRow = {
   roundCompletedAt: Date | null;
   roundCancelledAt: Date | null;
   roundTotalEntryAmount: bigint | null;
+  roundHouseFeeAmount: bigint | null;
   roundPayoutAmount: bigint | null;
+  roundPlatformFeeBps: number | null;
   entryCount: number | null;
   playerCount: number | null;
   liveEntryAmount: bigint | null;
@@ -421,7 +424,9 @@ export class RoomsService {
         cr."completedAt" AS "roundCompletedAt",
         cr."cancelledAt" AS "roundCancelledAt",
         cr."totalEntryAmount" AS "roundTotalEntryAmount",
+        cr."houseFeeAmount" AS "roundHouseFeeAmount",
         cr."payoutAmount" AS "roundPayoutAmount",
+        cr."platformFeeBps" AS "roundPlatformFeeBps",
         entry_stats."entryCount" AS "entryCount",
         entry_stats."playerCount" AS "playerCount",
         entry_stats."liveEntryAmount" AS "liveEntryAmount"
@@ -441,7 +446,9 @@ export class RoomsService {
           ro."completedAt",
           ro."cancelledAt",
           ro."totalEntryAmount",
+          ro."houseFeeAmount",
           ro."payoutAmount"
+          ,ro."platformFeeBps"
         FROM rounds ro
         WHERE ro."roomId" = r.id
           AND ro.status IN (${publicSummaryStatuses})
@@ -512,9 +519,18 @@ export class RoomsService {
         roundStatus === RoundStatus.OPEN
           ? liveEntryAmount
           : (row.roundTotalEntryAmount ?? liveEntryAmount);
+      const platformFeeBps =
+        row.roundPlatformFeeBps ??
+        (roundStatus === RoundStatus.OPEN
+          ? getApiEnv().PLATFORM_FEE_BPS
+          : 0);
+      const platformFeeAmount =
+        roundStatus === RoundStatus.OPEN
+          ? (totalEntryAmount * BigInt(platformFeeBps)) / 10_000n
+          : (row.roundHouseFeeAmount ?? 0n);
       const payoutAmount =
         roundStatus === RoundStatus.OPEN
-          ? liveEntryAmount
+          ? totalEntryAmount - platformFeeAmount
           : (row.roundPayoutAmount ?? totalEntryAmount);
       const msUntilLock =
         roundStatus === RoundStatus.OPEN && row.roundLocksAt
@@ -567,7 +583,11 @@ export class RoomsService {
               entryCount,
               totalEntryAmount: totalEntryAmount.toString(),
               payoutAmount: payoutAmount.toString(),
-              totalPool: payoutAmount.toString(),
+              totalPool: totalEntryAmount.toString(),
+              grossPoolAmount: totalEntryAmount.toString(),
+              platformFeeAmount: platformFeeAmount.toString(),
+              netPrizeAmount: payoutAmount.toString(),
+              platformFeeBps,
               winnerEntryId:
                 roundStatus === RoundStatus.SETTLING ||
                 roundStatus === RoundStatus.COMPLETED
@@ -616,6 +636,10 @@ export class RoomsService {
       totalEntryAmount: '0',
       payoutAmount: '0',
       totalPool: '0',
+      grossPoolAmount: '0',
+      platformFeeAmount: '0',
+      netPrizeAmount: '0',
+      platformFeeBps: round.platformFeeBps,
       winnerEntryId: null,
     };
   }

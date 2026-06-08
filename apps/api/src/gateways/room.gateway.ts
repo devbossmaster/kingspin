@@ -78,6 +78,10 @@ type OpenRoundSummaryPatch = {
   totalEntryAmount: string;
   houseFeeAmount: string;
   payoutAmount: string;
+  grossPoolAmount: string;
+  platformFeeAmount: string;
+  netPrizeAmount: string;
+  platformFeeBps: number;
   openedAt: string;
   locksAt: string | null;
   lockedAt: string | null;
@@ -1080,6 +1084,10 @@ export class RoomGateway
       typeof round.totalEntryAmount === 'string' &&
       typeof round.houseFeeAmount === 'string' &&
       typeof round.payoutAmount === 'string' &&
+      typeof round.grossPoolAmount === 'string' &&
+      typeof round.platformFeeAmount === 'string' &&
+      typeof round.netPrizeAmount === 'string' &&
+      typeof round.platformFeeBps === 'number' &&
       typeof round.openedAt === 'string' &&
       (typeof round.locksAt === 'string' || round.locksAt === null) &&
       (typeof round.lockedAt === 'string' || round.lockedAt === null) &&

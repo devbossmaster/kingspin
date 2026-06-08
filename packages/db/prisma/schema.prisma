@@ -55,6 +55,7 @@ enum LedgerTransactionType {
   WITHDRAWAL_APPROVED
   WITHDRAWAL_REJECTED
   WITHDRAWAL_REFUND
+  WALLET_TRANSFER
 }
 
 enum LedgerEntryDirection {
@@ -281,7 +282,7 @@ model RateLimit {
 
 model Category {
   id              String   @id @default(cuid())
-  name            String   @unique
+  name            String
   slug            String   @unique
   minEntryAmount  BigInt
   maxEntryAmount  BigInt
@@ -347,6 +348,7 @@ model Round {
   totalEntryAmount BigInt @default(0)
   houseFeeAmount   BigInt @default(0)
   payoutAmount     BigInt @default(0)
+  platformFeeBps   Int?
 
   serverSeedHash    String?
   serverSeedReveal  String?

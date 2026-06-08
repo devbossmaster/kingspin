@@ -81,6 +81,10 @@ export const RoomLiveSummaryRoundSchema = z.object({
   totalEntryAmount: BigIntStringSchema,
   payoutAmount: BigIntStringSchema,
   totalPool: BigIntStringSchema,
+  grossPoolAmount: BigIntStringSchema,
+  platformFeeAmount: BigIntStringSchema,
+  netPrizeAmount: BigIntStringSchema,
+  platformFeeBps: z.number().int().min(0).max(10_000),
   winnerEntryId: z.string().nullable().optional(),
 });
 

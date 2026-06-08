@@ -168,14 +168,14 @@ export function AdminShell({ children }: { children: ReactNode }) {
   if (!session?.user) {
     return (
       <main className="grid min-h-screen place-items-center bg-[#071018] px-4">
-        <div className="w-full max-w-md border border-white/10 bg-[#0d1720] p-6">
+        <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0d1720] p-6 shadow-2xl">
           <h1 className="text-xl font-black text-white">Admin sign in</h1>
           <p className="mt-2 text-sm text-slate-400">
             An authenticated admin session is required.
           </p>
           <Link
             href="/sign-in?callbackURL=/admin"
-            className="mt-5 inline-flex min-h-10 items-center bg-emerald-400 px-4 text-sm font-black text-[#071018]"
+            className="mt-5 inline-flex min-h-10 items-center rounded-lg bg-emerald-400 px-4 text-sm font-black text-[#071018]"
           >
             Sign in
           </Link>
@@ -191,14 +191,14 @@ export function AdminShell({ children }: { children: ReactNode }) {
   ) {
     return (
       <main className="grid min-h-screen place-items-center bg-[#071018] px-4">
-        <div className="w-full max-w-md border border-red-400/25 bg-[#0d1720] p-6">
+        <div className="w-full max-w-md rounded-2xl border border-red-400/25 bg-[#0d1720] p-6 shadow-2xl">
           <h1 className="text-xl font-black text-white">Access denied</h1>
           <p className="mt-2 text-sm text-slate-400">
             {authError ?? "This account does not have an admin role."}
           </p>
           <Link
             href="/"
-            className="mt-5 inline-flex min-h-10 items-center border border-white/15 px-4 text-sm font-black text-white"
+            className="mt-5 inline-flex min-h-10 items-center rounded-lg border border-white/15 px-4 text-sm font-black text-white"
           >
             Return home
           </Link>
@@ -216,9 +216,9 @@ export function AdminShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen bg-[#071018] text-slate-100">
-      <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 border-r border-white/10 bg-[#0b141c] lg:flex lg:flex-col">
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-72 border-r border-white/10 bg-[linear-gradient(180deg,#0d1821,#081119)] shadow-2xl lg:flex lg:flex-col">
         <Link href="/admin" className="flex h-20 items-center gap-3 px-5">
-          <span className="relative h-11 w-11 overflow-hidden border border-white/10 bg-black">
+          <span className="relative h-11 w-11 overflow-hidden rounded-xl border border-white/10 bg-black">
             <Image src="/logo.png" alt="" fill sizes="44px" className="object-contain p-1" />
           </span>
           <span>
@@ -242,10 +242,10 @@ export function AdminShell({ children }: { children: ReactNode }) {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex min-h-11 items-center gap-3 border-l-2 px-3 text-sm font-bold transition ${
+                className={`flex min-h-11 items-center gap-3 rounded-xl border px-3 text-sm font-bold transition ${
                   active
-                    ? "border-emerald-400 bg-emerald-400/10 text-white"
-                    : "border-transparent text-slate-400 hover:bg-white/[0.04] hover:text-white"
+                    ? "border-emerald-400/35 bg-emerald-400/10 text-white shadow-[0_10px_30px_rgba(16,185,129,0.08)]"
+                    : "border-transparent text-slate-400 hover:border-white/10 hover:bg-white/[0.04] hover:text-white"
                 }`}
               >
                 <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -265,7 +265,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
           <button
             type="button"
             onClick={() => void handleSignOut()}
-            className="mt-3 flex min-h-10 w-full items-center gap-2 border border-white/10 px-3 text-sm font-bold text-slate-300 hover:bg-white/[0.04]"
+            className="mt-3 flex min-h-10 w-full items-center gap-2 rounded-lg border border-white/10 px-3 text-sm font-bold text-slate-300 hover:bg-white/[0.04]"
           >
             <LogOut className="h-4 w-4" aria-hidden="true" />
             Sign out
@@ -273,7 +273,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
         </div>
       </aside>
 
-      <div className="lg:pl-64">
+      <div className="lg:pl-72">
         <header className="sticky top-0 z-30 border-b border-white/10 bg-[#071018]/95 px-3 py-3 backdrop-blur lg:hidden">
           <div className="mb-3 flex items-center justify-between">
             <Link href="/admin" className="font-black text-white">
@@ -284,7 +284,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
               onClick={() => void handleSignOut()}
               aria-label="Sign out"
               title="Sign out"
-              className="grid h-9 w-9 place-items-center border border-white/10 text-slate-300"
+              className="grid h-9 w-9 place-items-center rounded-lg border border-white/10 text-slate-300"
             >
               <LogOut className="h-4 w-4" />
             </button>
@@ -302,7 +302,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
                   href={item.href}
                   title={item.label}
                   aria-label={item.label}
-                  className={`grid h-10 w-10 shrink-0 place-items-center border ${
+                  className={`grid h-10 w-10 shrink-0 place-items-center rounded-lg border ${
                     active
                       ? "border-emerald-400 bg-emerald-400/10 text-emerald-300"
                       : "border-white/10 text-slate-400"

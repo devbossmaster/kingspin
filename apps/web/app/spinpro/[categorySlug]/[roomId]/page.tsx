@@ -93,7 +93,10 @@ export default function LiveRoomPage() {
 
   const totalEntryAmount = currentRound?.totalEntryAmount ?? "0";
   const categoryName = getCategoryDisplayName(state.category);
-  const roomName = getRoomDisplayName(state.room);
+  const roomName = getRoomDisplayName({
+    ...state.room,
+    categorySlug: state.category.slug,
+  });
   const maxPlayers = state.room.maxPlayers ?? state.category.maxPlayers ?? 30;
 
   const visibleWinnerEntryId =
@@ -147,6 +150,9 @@ export default function LiveRoomPage() {
             playerCount={state.entries.length}
             maxPlayers={maxPlayers}
             totalEntryAmount={totalEntryAmount}
+            platformFeeAmount={currentRound?.platformFeeAmount ?? "0"}
+            netPrizeAmount={currentRound?.netPrizeAmount ?? totalEntryAmount}
+            platformFeeBps={currentRound?.platformFeeBps ?? 2_000}
             msLeft={msLeft}
             msUntilNextRound={currentRound?.msUntilNextRound}
           />
@@ -173,7 +179,8 @@ export default function LiveRoomPage() {
               </p>
 
               <p className="font-mono text-xs font-black text-[var(--gold)]">
-                {formatCoins(totalEntryAmount)}
+                Winner gets{" "}
+                {formatCoins(currentRound?.netPrizeAmount ?? totalEntryAmount)}
               </p>
             </div>
 
@@ -214,6 +221,7 @@ export default function LiveRoomPage() {
           selectedChip={selectedChip}
           gameMode={state.room.gameMode}
           fixedEntryAmount={state.room.fixedEntryAmount}
+          platformFeeBps={currentRound?.platformFeeBps}
           myEntry={myEntry}
           isPlacingEntry={isPlacingEntry}
           onSelectChip={setSelectedChip}

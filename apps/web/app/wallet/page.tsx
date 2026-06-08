@@ -8,23 +8,28 @@ import {
   Clock3,
   Coins,
   ListChecks,
-  Trophy,
+  ReceiptText,
+  Send,
+  ShieldCheck,
 } from "lucide-react";
 import type {
   DepositSnapshot,
   LedgerTransactionSnapshot,
   PaymentProvider,
+  TransferRecipient,
+  WalletTransferSnapshot,
   WithdrawalSnapshot,
 } from "@kingspin/contracts";
 import { DepositCard } from "../../components/payments/deposit-card";
 import { GameShell } from "../../components/player/game-shell";
 import { Button } from "../../components/ui/button";
+import { Dialog } from "../../components/ui/dialog";
 import { useSession } from "../../lib/auth-client";
 import { apiClient, type CreateDepositResponse } from "../../lib/api-client";
 import { formatCoins, truncateId } from "../../lib/format";
 import { useAuthStore } from "../../stores/auth-store";
 
-type WalletTab = "deposit" | "withdraw" | "rewards" | "transactions";
+type WalletTab = "deposit" | "verify" | "withdraw" | "transfer" | "history";
 
 const inputClass =
   "mt-2 w-full rounded-md border border-white/10 bg-white/[0.055] px-3 py-3 text-sm font-semibold text-white outline-none transition placeholder:text-slate-500 focus:border-sky-300/70 focus:ring-2 focus:ring-sky-500/20";
@@ -38,9 +43,10 @@ const tabs: Array<{
   icon: typeof Coins;
 }> = [
   { id: "deposit", label: "Deposit", icon: ArrowDownToLine },
-  { id: "withdraw", label: "Withdrawal", icon: ArrowUpFromLine },
-  { id: "rewards", label: "Rewards", icon: Trophy },
-  { id: "transactions", label: "Transactions", icon: ListChecks },
+  { id: "verify", label: "Verify Receipt", icon: ReceiptText },
+  { id: "withdraw", label: "Withdraw", icon: ArrowUpFromLine },
+  { id: "transfer", label: "Transfer", icon: Send },
+  { id: "history", label: "History", icon: ListChecks },
 ];
 
 function createIdempotencyKey(prefix: string) {
@@ -121,6 +127,22 @@ function EmptyState({ label }: { label: string }) {
   );
 }
 
+function TelebirrBadge() {
+  return (
+    <span className="inline-flex items-center gap-2 rounded-full border border-sky-300/30 bg-sky-400/10 px-3 py-1 text-xs font-black text-sky-100">
+      <span className="grid h-6 w-6 place-items-center rounded-full bg-sky-400 text-[10px] text-slate-950">
+        tb
+      </span>
+      telebirr
+    </span>
+  );
+}
+
+function localPhone(value?: string | null) {
+  if (!value) return "";
+  return value.startsWith("+251") ? `0${value.slice(4)}` : value;
+}
+
 export default function WalletPage() {
   const { data: session, isPending } = useSession();
   const user = useAuthStore((store) => store.user);
@@ -134,6 +156,13 @@ export default function WalletPage() {
   const [transactions, setTransactions] = useState<LedgerTransactionSnapshot[]>(
     [],
   );
+  const [transfers, setTransfers] = useState<WalletTransferSnapshot[]>([]);
+  const [resolvedRecipient, setResolvedRecipient] =
+    useState<TransferRecipient | null>(null);
+  const [pendingTransfer, setPendingTransfer] = useState<{
+    amount: number;
+    note?: string;
+  } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -147,17 +176,24 @@ export default function WalletPage() {
     setIsRefreshing(true);
 
     try {
-      const [depositsResult, withdrawalsResult, transactionsResult] =
+      const [
+        depositsResult,
+        withdrawalsResult,
+        transactionsResult,
+        transfersResult,
+      ] =
         await Promise.all([
           apiClient.listDeposits(),
           apiClient.listWithdrawals(),
           apiClient.getMeTransactions(50),
+          apiClient.listWalletTransfers(50),
           fetchWallet(),
         ]);
 
       setDeposits(depositsResult);
       setWithdrawals(withdrawalsResult);
       setTransactions(transactionsResult);
+      setTransfers(transfersResult);
       setError(null);
     } catch (caught) {
       setError(
@@ -172,15 +208,15 @@ export default function WalletPage() {
     void refreshWallet();
   }, [refreshWallet]);
 
-  const latestRewards = useMemo(
+  const pendingCount = useMemo(
     () =>
-      transactions.filter(
-        (transaction) =>
-          transaction.type === "ROUND_PAYOUT" ||
-          transaction.type === "ENTRY_REFUND" ||
-          transaction.type === "ADMIN_CREDIT",
-      ),
-    [transactions],
+      deposits.filter((item) =>
+        ["PENDING", "VERIFYING", "NEEDS_MANUAL_REVIEW"].includes(item.status),
+      ).length +
+      withdrawals.filter((item) =>
+        ["PENDING_REVIEW", "APPROVED", "PROCESSING"].includes(item.status),
+      ).length,
+    [deposits, withdrawals],
   );
 
   async function handleDeposit(event: FormEvent<HTMLFormElement>) {
@@ -191,8 +227,8 @@ export default function WalletPage() {
     const formData = new FormData(event.currentTarget);
     const amount = parseDecimalAmount(formData.get("amount"));
 
-    if (!amount) {
-      setError("Enter a valid deposit amount.");
+    if (!amount || Number(amount) < 10 || Number(amount) > 1000) {
+      setError("Deposit amount must be between 10 and 1,000 ETB.");
       return;
     }
 
@@ -208,6 +244,7 @@ export default function WalletPage() {
       event.currentTarget.reset();
       setActiveDepositIntent(result);
       setMessage("Deposit request created.");
+      setActiveTab("verify");
       await refreshWallet();
     } catch (caught) {
       setError(
@@ -285,12 +322,12 @@ export default function WalletPage() {
       formData.get("provider") ?? "MANUAL",
     ) as PaymentProvider;
 
-    if (!amount) {
-      setError("Enter a valid withdrawal amount.");
+    if (!amount || amount < 50 || amount > 1000) {
+      setError("Withdrawal amount must be between 50 and 1,000 ETB.");
       return;
     }
 
-    if (!destinationName || !destinationPhone) {
+    if (!destinationName || !/^09\d{8}$/.test(destinationPhone)) {
       setError("Destination name and phone are required.");
       return;
     }
@@ -317,6 +354,89 @@ export default function WalletPage() {
           ? caught.message
           : "Could not request withdrawal.",
       );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  async function handleResolveRecipient(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage(null);
+    setError(null);
+    setResolvedRecipient(null);
+
+    const recipient = String(
+      new FormData(event.currentTarget).get("recipient") ?? "",
+    ).trim();
+
+    if (recipient.length < 3) {
+      setError("Enter a username, email, or Ethiopian phone number.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const result = await apiClient.resolveTransferRecipient({ recipient });
+      setResolvedRecipient(result.recipient);
+      setMessage("Recipient confirmed.");
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Recipient was not found.",
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  function handlePrepareTransfer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setMessage(null);
+    setError(null);
+
+    if (!resolvedRecipient) {
+      setError("Resolve and confirm the recipient first.");
+      return;
+    }
+
+    const formData = new FormData(event.currentTarget);
+    const amount = parseAmount(formData.get("amount"));
+    const note = String(formData.get("note") ?? "").trim();
+
+    if (!amount || amount < 1 || amount > 1000) {
+      setError("Transfer amount must be between 1 and 1,000 ETB.");
+      return;
+    }
+
+    if (amount > Number(wallet?.balanceSnapshot ?? 0)) {
+      setError("Insufficient wallet balance.");
+      return;
+    }
+
+    setPendingTransfer({ amount, ...(note ? { note } : {}) });
+  }
+
+  async function handleConfirmTransfer() {
+    if (!resolvedRecipient || !pendingTransfer) return;
+
+    setIsSubmitting(true);
+    setError(null);
+
+    try {
+      await apiClient.createWalletTransfer({
+        recipientId: resolvedRecipient.id,
+        amount: pendingTransfer.amount,
+        note: pendingTransfer.note,
+        idempotencyKey: createIdempotencyKey("transfer"),
+      });
+      setMessage("Transfer completed.");
+      setPendingTransfer(null);
+      setResolvedRecipient(null);
+      await refreshWallet();
+    } catch (caught) {
+      setError(
+        caught instanceof Error ? caught.message : "Transfer could not be completed.",
+      );
+      setPendingTransfer(null);
     } finally {
       setIsSubmitting(false);
     }
@@ -431,10 +551,23 @@ export default function WalletPage() {
             ) : null}
 
             {activeTab === "deposit" ? (
-              <section className="rounded-lg border border-white/10 bg-white/[0.045] p-4 md:p-5">
-                <h2 className="font-display text-lg font-black text-white">
-                  Telebirr Deposit
-                </h2>
+              <section className="rounded-2xl border border-sky-300/20 bg-[linear-gradient(145deg,rgba(14,165,233,0.12),rgba(255,255,255,0.035))] p-4 shadow-[0_24px_60px_rgba(0,0,0,0.25)] md:p-6">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className={labelClass}>Step 1 · Amount</p>
+                    <h2 className="mt-1 font-display text-xl font-black text-white">
+                      Create a Telebirr deposit
+                    </h2>
+                    <p className="mt-2 text-sm font-semibold text-slate-400">
+                      Pay between 10 and 1,000 ETB. Your registered phone is{" "}
+                      <span className="text-slate-200">
+                        {localPhone(user?.phoneNumber) || "not available"}
+                      </span>
+                      .
+                    </p>
+                  </div>
+                  <TelebirrBadge />
+                </div>
                 <form
                   className="mt-4 grid gap-4 md:grid-cols-[1fr_auto]"
                   onSubmit={handleDeposit}
@@ -445,72 +578,23 @@ export default function WalletPage() {
                       className={inputClass}
                       name="amount"
                       inputMode="decimal"
-                      placeholder="500.00"
+                      min="10"
+                      max="1000"
+                      placeholder="100.00"
                     />
+                    <span className="mt-2 block text-xs font-semibold text-slate-500">
+                      Min 10 ETB · Max 1,000 ETB · Balance{" "}
+                      {formatCoins(wallet?.balanceSnapshot)}
+                    </span>
                   </label>
                   <Button
                     type="submit"
                     disabled={isSubmitting}
                     className="mt-auto"
                   >
-                    {isSubmitting ? "Creating..." : "Create Intent"}
+                    {isSubmitting ? "Creating..." : "Create deposit request"}
                   </Button>
                 </form>
-
-                {activeDepositIntent?.instructions ? (
-                  <div className="mt-5 grid gap-3 rounded-lg border border-sky-300/25 bg-sky-400/10 p-4 text-sm font-semibold text-slate-200 md:grid-cols-2">
-                    <div>
-                      <p className={labelClass}>Pay</p>
-                      <p className="mt-1 font-mono text-xl font-black text-white">
-                        {activeDepositIntent.instructions.expectedAmount}{" "}
-                        {activeDepositIntent.instructions.currency}
-                      </p>
-                    </div>
-                    <div>
-                      <p className={labelClass}>Receiver</p>
-                      <p className="mt-1 text-white">
-                        {activeDepositIntent.instructions.receiverName ??
-                          "Configured merchant"}
-                      </p>
-                      <p className="mt-1 font-mono text-xs text-slate-400">
-                        {activeDepositIntent.instructions.receiverAccount ??
-                          activeDepositIntent.instructions.receiverShortCode ??
-                          "Merchant account"}
-                      </p>
-                    </div>
-                    <div>
-                      <p className={labelClass}>Expires</p>
-                      <p className="mt-1 text-white">
-                        {formatDate(activeDepositIntent.instructions.expiresAt)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className={labelClass}>Intent</p>
-                      <p className="mt-1 font-mono text-xs text-slate-400">
-                        {truncateId(activeDepositIntent.deposit.id, 6)}
-                      </p>
-                    </div>
-                  </div>
-                ) : null}
-
-                {activeDepositIntent ? (
-                  <form
-                    className="mt-4 grid gap-4"
-                    onSubmit={handleTelebirrReceipt}
-                  >
-                    <label>
-                      <span className={labelClass}>Receipt</span>
-                      <textarea
-                        className={`${inputClass} min-h-28 resize-y`}
-                        name="receiptInput"
-                        placeholder="Receipt URL, receipt number, or full 127 SMS"
-                      />
-                    </label>
-                    <Button type="submit" disabled={isSubmitting}>
-                      {isSubmitting ? "Verifying..." : "Submit Receipt"}
-                    </Button>
-                  </form>
-                ) : null}
 
                 <div className="mt-5 grid gap-2">
                   {deposits.length === 0 ? (
@@ -528,11 +612,104 @@ export default function WalletPage() {
               </section>
             ) : null}
 
+            {activeTab === "verify" ? (
+              <section className="rounded-2xl border border-sky-300/20 bg-white/[0.045] p-4 md:p-6">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className={labelClass}>Steps 2–3 · Pay and verify</p>
+                    <h2 className="mt-1 font-display text-xl font-black text-white">
+                      Verify your Telebirr receipt
+                    </h2>
+                  </div>
+                  <TelebirrBadge />
+                </div>
+
+                {activeDepositIntent?.instructions ? (
+                  <>
+                    <div className="mt-5 grid gap-3 rounded-xl border border-sky-300/25 bg-sky-400/10 p-4 text-sm font-semibold text-slate-200 md:grid-cols-2">
+                      <div>
+                        <p className={labelClass}>Pay exactly</p>
+                        <p className="mt-1 font-mono text-2xl font-black text-white">
+                          {activeDepositIntent.instructions.expectedAmount}{" "}
+                          {activeDepositIntent.instructions.currency}
+                        </p>
+                      </div>
+                      <div>
+                        <p className={labelClass}>Receiver</p>
+                        <p className="mt-1 text-white">
+                          {activeDepositIntent.instructions.receiverName ??
+                            "Configured merchant"}
+                        </p>
+                        <p className="mt-1 font-mono text-xs text-slate-400">
+                          {activeDepositIntent.instructions.receiverAccount ??
+                            activeDepositIntent.instructions.receiverShortCode ??
+                            "Merchant account"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className={labelClass}>Registered phone</p>
+                        <p className="mt-1 text-white">
+                          {localPhone(user?.phoneNumber) || "Not provided"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className={labelClass}>Expires</p>
+                        <p className="mt-1 text-white">
+                          {formatDate(activeDepositIntent.instructions.expiresAt)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-4 rounded-xl border border-amber-300/20 bg-amber-300/10 p-4 text-sm font-semibold text-amber-100">
+                      Pay exactly this amount using Telebirr. Then paste the
+                      receipt link, receipt ID, or full 127 SMS below. Wallet
+                      crediting happens only after server verification.
+                    </div>
+                    <form
+                      className="mt-4 grid gap-4"
+                      onSubmit={handleTelebirrReceipt}
+                    >
+                      <label>
+                        <span className={labelClass}>
+                          Receipt URL, ID, or 127 SMS
+                        </span>
+                        <textarea
+                          className={`${inputClass} min-h-32 resize-y`}
+                          name="receiptInput"
+                          placeholder="Paste the complete receipt details"
+                        />
+                      </label>
+                      <Button type="submit" disabled={isSubmitting}>
+                        {isSubmitting ? "Verifying..." : "Verify receipt"}
+                      </Button>
+                    </form>
+                    <div className="mt-4 flex items-center justify-between rounded-xl border border-white/10 bg-black/20 p-3">
+                      <span className="text-xs font-semibold text-slate-400">
+                        Request {truncateId(activeDepositIntent.deposit.id, 6)}
+                      </span>
+                      <StatusBadge status={activeDepositIntent.deposit.status} />
+                    </div>
+                  </>
+                ) : (
+                  <EmptyState label="Create a deposit request first, then return here to verify the receipt." />
+                )}
+              </section>
+            ) : null}
+
             {activeTab === "withdraw" ? (
-              <section className="rounded-lg border border-white/10 bg-white/[0.045] p-4 md:p-5">
-                <h2 className="font-display text-lg font-black text-white">
-                  Request Withdrawal
-                </h2>
+              <section className="rounded-2xl border border-white/10 bg-white/[0.045] p-4 md:p-6">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className={labelClass}>Manual payout</p>
+                    <h2 className="mt-1 font-display text-xl font-black text-white">
+                      Request a withdrawal
+                    </h2>
+                    <p className="mt-2 text-sm font-semibold text-slate-400">
+                      Withdrawals are reviewed and paid manually by admin. No
+                      fee configured.
+                    </p>
+                  </div>
+                  <TelebirrBadge />
+                </div>
                 <form
                   className="mt-4 grid gap-4 md:grid-cols-2"
                   onSubmit={handleWithdrawal}
@@ -543,30 +720,33 @@ export default function WalletPage() {
                       className={inputClass}
                       name="amount"
                       inputMode="numeric"
+                      min="50"
+                      max="1000"
                       placeholder="500"
+                    />
+                    <span className="mt-2 block text-xs font-semibold text-slate-500">
+                      Min 50 ETB · Max 1,000 ETB
+                    </span>
+                  </label>
+                  <input type="hidden" name="provider" value="MANUAL" />
+                  <label>
+                    <span className={labelClass}>Account name</span>
+                    <input
+                      className={inputClass}
+                      name="destinationName"
+                      defaultValue={user?.fullName ?? ""}
                     />
                   </label>
                   <label>
-                    <span className={labelClass}>Provider</span>
-                    <select
-                      className={inputClass}
-                      name="provider"
-                      defaultValue="MANUAL"
-                    >
-                      <option value="MANUAL">Manual</option>
-                      <option value="MOCK">Mock</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span className={labelClass}>Destination Name</span>
-                    <input className={inputClass} name="destinationName" />
-                  </label>
-                  <label>
-                    <span className={labelClass}>Destination Phone</span>
+                    <span className={labelClass}>Telebirr phone</span>
                     <input
                       className={inputClass}
                       name="destinationPhone"
                       autoComplete="tel"
+                      inputMode="tel"
+                      pattern="09[0-9]{8}"
+                      defaultValue={localPhone(user?.phoneNumber)}
+                      placeholder="09XXXXXXXX"
                     />
                   </label>
                   <Button
@@ -574,7 +754,7 @@ export default function WalletPage() {
                     disabled={isSubmitting}
                     className="md:col-span-2"
                   >
-                    {isSubmitting ? "Requesting..." : "Request Withdrawal"}
+                    {isSubmitting ? "Requesting..." : "Request withdrawal"}
                   </Button>
                 </form>
 
@@ -595,6 +775,16 @@ export default function WalletPage() {
                             {formatDate(withdrawal.requestedAt)} /{" "}
                             {truncateId(withdrawal.id, 5)}
                           </p>
+                          {withdrawal.destinationDisplay ? (
+                            <p className="mt-1 font-mono text-xs text-slate-400">
+                              {withdrawal.destinationDisplay}
+                            </p>
+                          ) : null}
+                          {withdrawal.providerReference ? (
+                            <p className="mt-1 text-xs text-slate-400">
+                              Reference {withdrawal.providerReference}
+                            </p>
+                          ) : null}
                         </div>
                         <StatusBadge status={withdrawal.status} />
                         <div className="flex items-center gap-3">
@@ -620,56 +810,144 @@ export default function WalletPage() {
               </section>
             ) : null}
 
-            {activeTab === "rewards" ? (
-              <section className="rounded-lg border border-white/10 bg-white/[0.045] p-4 md:p-5">
-                <h2 className="font-display text-lg font-black text-white">
-                  Rewards
+            {activeTab === "transfer" ? (
+              <section className="rounded-2xl border border-indigo-300/20 bg-[linear-gradient(145deg,rgba(99,102,241,0.12),rgba(255,255,255,0.035))] p-4 md:p-6">
+                <p className={labelClass}>Ledger-safe transfer</p>
+                <h2 className="mt-1 font-display text-xl font-black text-white">
+                  Send funds to another player
                 </h2>
-                <div className="mt-4 grid gap-2">
-                  {latestRewards.length === 0 ? (
-                    <EmptyState label="No rewards yet." />
-                  ) : (
-                    latestRewards.map((transaction) => {
-                      const delta = transactionDelta(transaction);
+                <p className="mt-2 text-sm font-semibold text-slate-400">
+                  Resolve the recipient first. Transfers cannot be automatically
+                  reversed.
+                </p>
 
-                      return (
-                        <div
-                          key={transaction.id}
-                          className="grid gap-3 rounded-lg border border-white/10 bg-black/25 p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
-                        >
-                          <div className="min-w-0">
-                            <p className="truncate text-sm font-black text-white">
-                              {titleCase(transaction.type)}
-                            </p>
-                            <p className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-slate-500">
-                              <Clock3
-                                className="h-3.5 w-3.5"
-                                aria-hidden="true"
-                              />
-                              {formatDate(transaction.createdAt)}
-                            </p>
-                          </div>
-                          <p
-                            className={`font-mono text-sm font-black ${
-                              delta >= 0 ? "text-lime-300" : "text-red-200"
-                            }`}
-                          >
-                            {delta >= 0 ? "+" : "-"}
-                            {formatCoins(Math.abs(delta))}
+                <form
+                  className="mt-4 grid gap-3 md:grid-cols-[1fr_auto]"
+                  onSubmit={handleResolveRecipient}
+                >
+                  <label>
+                    <span className={labelClass}>
+                      Username, email, or phone
+                    </span>
+                    <input
+                      className={inputClass}
+                      name="recipient"
+                      placeholder="playername or 09XXXXXXXX"
+                    />
+                  </label>
+                  <Button
+                    type="submit"
+                    variant="secondary"
+                    disabled={isSubmitting}
+                    className="mt-auto"
+                  >
+                    Resolve recipient
+                  </Button>
+                </form>
+
+                {resolvedRecipient ? (
+                  <div className="mt-4 rounded-xl border border-lime-300/25 bg-lime-400/10 p-4">
+                    <div className="flex items-center gap-3">
+                      <ShieldCheck className="h-5 w-5 text-lime-300" />
+                      <div>
+                        <p className="font-black text-white">
+                          {resolvedRecipient.displayName}
+                        </p>
+                        <p className="text-xs font-semibold text-slate-400">
+                          {resolvedRecipient.maskedEmail ??
+                            resolvedRecipient.maskedPhone ??
+                            resolvedRecipient.username}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                <form
+                  className="mt-4 grid gap-4 md:grid-cols-2"
+                  onSubmit={handlePrepareTransfer}
+                >
+                  <label>
+                    <span className={labelClass}>Amount ETB</span>
+                    <input
+                      className={inputClass}
+                      name="amount"
+                      inputMode="numeric"
+                      min="1"
+                      max="1000"
+                      placeholder="100"
+                    />
+                  </label>
+                  <label>
+                    <span className={labelClass}>Note (optional)</span>
+                    <input
+                      className={inputClass}
+                      name="note"
+                      maxLength={160}
+                      placeholder="What is this for?"
+                    />
+                  </label>
+                  <Button
+                    type="submit"
+                    disabled={!resolvedRecipient || isSubmitting}
+                    className="md:col-span-2"
+                  >
+                    Review transfer
+                  </Button>
+                </form>
+
+                <div className="mt-6 grid gap-2">
+                  <h3 className="text-sm font-black text-white">
+                    Transfer history
+                  </h3>
+                  {transfers.length === 0 ? (
+                    <EmptyState label="No transfers yet." />
+                  ) : (
+                    transfers.map((transfer) => (
+                      <div
+                        key={transfer.id}
+                        className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/20 p-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-black text-white">
+                            {transfer.direction === "SENT" ? "To" : "From"}{" "}
+                            {transfer.counterparty.displayName}
+                          </p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {formatDate(transfer.createdAt)}
+                            {transfer.note ? ` · ${transfer.note}` : ""}
                           </p>
                         </div>
-                      );
-                    })
+                        <p
+                          className={`font-mono text-sm font-black ${
+                            transfer.direction === "SENT"
+                              ? "text-red-200"
+                              : "text-lime-300"
+                          }`}
+                        >
+                          {transfer.direction === "SENT" ? "-" : "+"}
+                          {formatCoins(transfer.amount)}
+                        </p>
+                      </div>
+                    ))
                   )}
                 </div>
               </section>
             ) : null}
 
-            {activeTab === "transactions" ? (
-              <section className="rounded-lg border border-white/10 bg-white/[0.045] p-4 md:p-5">
-                <h2 className="font-display text-lg font-black text-white">
-                  Transactions
-                </h2>
+            {activeTab === "history" ? (
+              <section className="rounded-2xl border border-white/10 bg-white/[0.045] p-4 md:p-6">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className={labelClass}>Wallet activity</p>
+                    <h2 className="mt-1 font-display text-xl font-black text-white">
+                      Transaction history
+                    </h2>
+                  </div>
+                  <span className="rounded-full border border-amber-300/25 bg-amber-300/10 px-3 py-1 text-xs font-black text-amber-200">
+                    {pendingCount} pending
+                  </span>
+                </div>
                 <div className="mt-4 grid gap-2">
                   {transactions.length === 0 ? (
                     <EmptyState label="No transactions yet." />
@@ -680,14 +958,15 @@ export default function WalletPage() {
                       return (
                         <div
                           key={transaction.id}
-                          className="grid gap-3 rounded-lg border border-white/10 bg-black/25 p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
+                          className="grid gap-3 rounded-xl border border-white/10 bg-black/25 p-3 sm:grid-cols-[minmax(0,1fr)_auto]"
                         >
                           <div className="min-w-0">
                             <p className="truncate text-sm font-black text-white">
                               {titleCase(transaction.type)}
                             </p>
-                            <p className="mt-1 text-xs font-semibold text-slate-500">
-                              {formatDate(transaction.createdAt)} /{" "}
+                            <p className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-slate-500">
+                              <Clock3 className="h-3.5 w-3.5" />
+                              {formatDate(transaction.createdAt)} ·{" "}
                               {truncateId(transaction.id, 5)}
                             </p>
                           </div>
@@ -709,6 +988,41 @@ export default function WalletPage() {
           </div>
         )}
       </div>
+
+      <Dialog
+        open={Boolean(pendingTransfer && resolvedRecipient)}
+        title="Confirm transfer"
+        onClose={() => setPendingTransfer(null)}
+        panelClassName="max-w-md rounded-2xl border border-indigo-300/25 bg-slate-950 p-5 shadow-2xl"
+      >
+        <p className={labelClass}>Confirm transfer</p>
+        <h2 className="mt-2 text-2xl font-black text-white">
+          Send {formatCoins(pendingTransfer?.amount ?? 0)} ETB
+        </h2>
+        <p className="mt-2 text-sm font-semibold text-slate-400">
+          Recipient: {resolvedRecipient?.displayName}
+        </p>
+        <div className="mt-4 rounded-xl border border-amber-300/25 bg-amber-300/10 p-3 text-sm font-semibold text-amber-100">
+          Transfers cannot be automatically reversed. Check the recipient and
+          amount before continuing.
+        </div>
+        <div className="mt-5 grid grid-cols-2 gap-3">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => setPendingTransfer(null)}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            disabled={isSubmitting}
+            onClick={() => void handleConfirmTransfer()}
+          >
+            {isSubmitting ? "Sending..." : "Confirm and send"}
+          </Button>
+        </div>
+      </Dialog>
     </GameShell>
   );
 }

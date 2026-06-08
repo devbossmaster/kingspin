@@ -99,7 +99,7 @@ function buildParsedTelebirrReceipt(overrides = {}) {
 }
 
 describe('Payment money safety foundation', () => {
-  it('creates a Telebirr deposit intent with payment instructions', async () => {
+  it('accepts the configured 10 ETB Telebirr deposit minimum', async () => {
     const intent = buildDepositIntent();
     const prisma = {
       depositIntent: {
@@ -128,7 +128,7 @@ describe('Payment money safety foundation', () => {
 
     const result = await service.createDeposit('user-1', {
       provider: 'TELEBIRR_RECEIPT',
-      amount: '500.00',
+      amount: '10.00',
       currency: 'ETB',
       idempotencyKey: 'intent-key-1',
     });
@@ -170,6 +170,139 @@ describe('Payment money safety foundation', () => {
         currency: 'ETB',
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
+
+    await expect(
+      service.createDeposit('user-1', {
+        provider: 'TELEBIRR_RECEIPT',
+        amount: '1000.01',
+        currency: 'ETB',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects withdrawal amounts outside configured bounds', async () => {
+    const service = new WithdrawalsService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.requestWithdrawal('user-1', {
+        provider: 'MANUAL',
+        amount: 49,
+        currency: 'ETB',
+        destination: { phoneNumber: '0912345678' },
+        idempotencyKey: 'withdrawal-low',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    await expect(
+      service.requestWithdrawal('user-1', {
+        provider: 'MANUAL',
+        amount: 1001,
+        currency: 'ETB',
+        destination: { phoneNumber: '0912345678' },
+        idempotencyKey: 'withdrawal-high',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('rejects an invalid Telebirr withdrawal destination', async () => {
+    const service = new WithdrawalsService(
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+
+    await expect(
+      service.requestWithdrawal('user-1', {
+        provider: 'MANUAL',
+        amount: 100,
+        currency: 'ETB',
+        destination: { phoneNumber: '1234' },
+        idempotencyKey: 'withdrawal-invalid-phone',
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('accepts the configured 50 ETB withdrawal minimum', async () => {
+    const withdrawal = buildWithdrawal({
+      amount: 50n,
+      currency: 'ETB',
+      destination: {
+        method: 'TELEBIRR',
+        phoneNumber: '+251912345678',
+        name: 'Player One',
+      },
+    });
+    const tx = {
+      withdrawal: {
+        create: jest.fn().mockResolvedValue(withdrawal),
+      },
+    };
+    const prisma = {
+      withdrawal: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        aggregate: jest.fn().mockResolvedValue({
+          _sum: { amount: 50n },
+          _count: 1,
+        }),
+      },
+      $transaction: jest.fn(
+        (callback: (txClient: typeof tx) => Promise<unknown>) =>
+          callback(tx),
+      ),
+    };
+    const wallets = {
+      ensureMainWalletForUserId: jest
+        .fn()
+        .mockResolvedValue({ id: 'wallet-1' }),
+      reserveWithdrawalInTransaction: jest.fn().mockResolvedValue({
+        wallet: { id: 'wallet-1', balanceSnapshot: '950' },
+        transaction: { id: 'withdrawal-ledger-1' },
+      }),
+    };
+    const fraud = {
+      evaluateWithdrawalRequest: jest.fn().mockResolvedValue(undefined),
+      createRiskEvent: jest.fn().mockResolvedValue(undefined),
+    };
+    const service = new WithdrawalsService(
+      prisma as never,
+      wallets as never,
+      {} as never,
+      fraud as never,
+    );
+
+    const result = await service.requestWithdrawal('user-1', {
+      provider: 'MANUAL',
+      amount: 50,
+      currency: 'ETB',
+      destination: {
+        phoneNumber: '0912345678',
+        name: 'Player One',
+      },
+      idempotencyKey: 'withdrawal-minimum',
+    });
+
+    expect(tx.withdrawal.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          amount: 50n,
+          destination: {
+            method: 'TELEBIRR',
+            phoneNumber: '+251912345678',
+            name: 'Player One',
+          },
+        }),
+      }),
+    );
+    expect(result.withdrawal).toMatchObject({
+      amount: '50',
+      destinationDisplay: '+251***678',
+    });
   });
 
   it('credits a verified Telebirr receipt through the wallet ledger once', async () => {

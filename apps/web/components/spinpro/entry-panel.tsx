@@ -22,6 +22,7 @@ type EntryPanelProps = {
   selectedChip: number;
   gameMode?: GameMode | null;
   fixedEntryAmount?: string | null;
+  platformFeeBps?: number | null;
   myEntry: (EntryWithPlayerSnapshot & { pending?: boolean }) | null;
   isPlacingEntry: boolean;
   onSelectChip: (amount: number) => void;
@@ -39,6 +40,7 @@ export function EntryPanel({
   selectedChip,
   gameMode,
   fixedEntryAmount,
+  platformFeeBps = 2_000,
   myEntry,
   isPlacingEntry,
   onSelectChip,
@@ -296,6 +298,11 @@ export function EntryPanel({
             </span>
           </div>
         </div>
+
+        <p className="mt-3 text-center text-xs font-semibold text-amber-200/90">
+          Winner payout is after {((platformFeeBps ?? 2000) / 100).toFixed(0)}%
+          platform service fee.
+        </p>
 
         {/* Validation and backend state messages. */}
         {customAmountInvalid ? (

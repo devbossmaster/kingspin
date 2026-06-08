@@ -197,7 +197,7 @@ export default function CategoryLobbyPage() {
           <div className="min-w-0 p-3 pl-2">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="text-xs font-black text-white">Arena</p>
+                <p className="text-xs font-black text-white">{getModeTitle(mode)}</p>
                 <h1 className="mt-0.5 truncate font-display text-lg font-black text-white">
                   {title}
                 </h1>
@@ -219,7 +219,7 @@ export default function CategoryLobbyPage() {
                 <span className="truncate">{getModeTag(mode)}</span>
               </span>
               <span className="truncate text-right text-[10px] font-black uppercase tracking-[0.12em] text-yellow-200">
-                {mode === "fixed" ? "Fixed interval" : "Entry range"}
+                {mode === "fixed" ? "Equal chance" : "Proportional chance"}
               </span>
             </div>
           </div>
@@ -240,7 +240,7 @@ export default function CategoryLobbyPage() {
                 {getModeTitle(mode)}
               </p>
               <h2 className="mt-1 font-display text-2xl font-black text-white">
-                Choose your ring
+                Choose your room
               </h2>
             </div>
             <span className="shrink-0 rounded-md border border-white/10 bg-white/[0.06] px-2 py-1 text-[10px] font-black text-white/70">

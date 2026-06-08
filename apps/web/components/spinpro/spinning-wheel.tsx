@@ -41,7 +41,7 @@ type WheelPhase =
 
 export const WHEEL_SLICE_COLORS = PLAYER_SLICE_COLORS;
 
-const SPIN_DURATION_MS = 5600;
+const SPIN_DURATION_MS = 6500;
 const WHEEL_CENTER = 150;
 const WHEEL_OUTER_RADIUS = 136;
 const WHEEL_INNER_RADIUS = 68;
@@ -723,7 +723,7 @@ export function SpinningWheel({
               transformOrigin: "150px 150px",
               transition: prefersReducedMotion
                 ? "none"
-                : `transform ${transitionMs}ms cubic-bezier(0.11, 0.01, 0.04, 1)`,
+                : `transform ${transitionMs}ms cubic-bezier(0.12, 0.72, 0.18, 1)`,
             }}
           >
             {!hasEntries ? (

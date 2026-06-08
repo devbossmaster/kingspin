@@ -19,26 +19,24 @@ const FIXED_SLUG_SET = new Set<string>(FIXED_CATEGORY_SLUGS);
 export type PlayerMode = "pro" | "fixed";
 
 const CATEGORY_DISPLAY_NAMES: Record<string, string> = {
-  "pro-10-100": "Arena",
-  "pro-100-200": "Arena II",
-  "pro-200-350": "Arena III",
-  "fixed-10": "Fixed Arena",
-  "fixed-20": "Fixed Arena II",
-  "fixed-50": "Fixed Arena III",
+  "pro-10-100": "Base",
+  "pro-100-200": "Palace",
+  "pro-200-350": "Empire",
+  "fixed-10": "Base",
+  "fixed-20": "Palace",
+  "fixed-50": "Empire",
 };
 
-function formatArenaCode(index: number) {
-  return `A${String(index + 1).padStart(2, "0")}`;
-}
-
-function normalizeArenaCode(value: string | null | undefined) {
-  const match = value?.trim().match(/^A\s*0*(\d+)$/i);
+function normalizeRoomCode(value: string | null | undefined) {
+  const match = value?.trim().match(/^([CF][BPE])\s*0*(\d+)$/i);
 
   if (!match) {
     return null;
   }
 
-  return `A${Number(match[1]).toString().padStart(2, "0")}`;
+  return `${match[1]!.toUpperCase()}${Number(match[2]!)
+    .toString()
+    .padStart(2, "0")}`;
 }
 
 function cleanLabel(value: string | null | undefined) {
@@ -60,15 +58,16 @@ function looksLikeSlug(value: string) {
 }
 
 function formatCategorySlug(slug: string) {
-  if (FIXED_SLUG_SET.has(slug)) return "Fixed Arena";
-  if (PRO_SLUG_SET.has(slug)) return "Arena";
+  const mapped = CATEGORY_DISPLAY_NAMES[slug];
+
+  if (mapped) return mapped;
 
   const words = slug
     .split("-")
     .filter((part) => part && !/^\d+$/.test(part))
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1));
 
-  return words.length > 0 ? words.join(" ") : "Arena";
+  return words.length > 0 ? words.join(" ") : "Base";
 }
 
 function getFriendlyRoomLabel(value: string | null | undefined) {
@@ -76,9 +75,9 @@ function getFriendlyRoomLabel(value: string | null | undefined) {
 
   if (!label) return null;
 
-  const arenaCode = normalizeArenaCode(label);
+  const roomCode = normalizeRoomCode(label);
 
-  if (arenaCode) return arenaCode;
+  if (roomCode) return roomCode;
   if (looksLikeRawIdentifier(label) || looksLikeSlug(label)) return null;
 
   return label;
@@ -93,11 +92,41 @@ export function getRoomMode(room: Pick<RoomListItem, "gameMode">) {
 }
 
 export function getModeTitle(mode: PlayerMode) {
-  return mode === "fixed" ? "Fixed Battle" : "Flexible Battle";
+  return mode === "fixed" ? "Classic" : "Flex";
 }
 
 export function getModeTag(mode: PlayerMode) {
-  return mode === "fixed" ? "Fixed" : "Flexible";
+  return mode === "fixed" ? "Classic" : "Flex";
+}
+
+export function formatGameModeLabel(
+  mode: PlayerMode | "FLEXIBLE_PROPORTIONAL" | "FIXED_EQUAL_CHANCE",
+) {
+  return mode === "fixed" || mode === "FIXED_EQUAL_CHANCE"
+    ? "Classic"
+    : "Flex";
+}
+
+export function formatCategoryLabel(slugOrName: string) {
+  return CATEGORY_DISPLAY_NAMES[slugOrName] ?? cleanLabel(slugOrName) ?? "Base";
+}
+
+function categoryCodeFromSlug(slug: string | null | undefined) {
+  if (slug?.includes("100-200") || slug === "fixed-20") return "P";
+  if (slug?.includes("200-350") || slug === "fixed-50") return "E";
+  return "B";
+}
+
+export function buildRoomCode(
+  mode: PlayerMode | "FLEXIBLE_PROPORTIONAL" | "FIXED_EQUAL_CHANCE",
+  categorySlug: string | null | undefined,
+  index = 0,
+) {
+  const modeCode =
+    mode === "fixed" || mode === "FIXED_EQUAL_CHANCE" ? "C" : "F";
+  const categoryCode = categoryCodeFromSlug(categorySlug);
+
+  return `${modeCode}${categoryCode}${String(index + 1).padStart(2, "0")}`;
 }
 
 export function getCategoryDisplayName(
@@ -144,15 +173,28 @@ export function getCategoryAmountLabel(category: CategoryListItem) {
 }
 
 export function getRoomDisplayName(
-  room: Pick<RoomListItem, "code" | "name">,
+  room: Pick<RoomListItem, "code" | "name"> &
+    Partial<Pick<RoomListItem, "gameMode" | "categorySlug">>,
   index?: number,
 ) {
+  const storedCode = normalizeRoomCode(room.code) ?? normalizeRoomCode(room.name);
+
+  if (storedCode) return storedCode;
+
+  if (room.gameMode || room.categorySlug) {
+    return buildRoomCode(
+      room.gameMode ?? "FLEXIBLE_PROPORTIONAL",
+      room.categorySlug,
+      index ?? 0,
+    );
+  }
+
   const nameLabel = getFriendlyRoomLabel(room.name);
 
   if (nameLabel) return nameLabel;
 
   if (typeof index === "number") {
-    return formatArenaCode(index);
+    return `R${String(index + 1).padStart(2, "0")}`;
   }
 
   return getFriendlyRoomLabel(room.code) ?? "Room";

@@ -42,7 +42,7 @@ export function AdminStatusBadge({ value }: { value: unknown }) {
   return (
     <span
       className={clsx(
-        "inline-flex min-h-6 items-center border px-2 text-[11px] font-black uppercase",
+        "inline-flex min-h-6 items-center rounded-full border px-2 text-[11px] font-black uppercase",
         success.has(status) &&
           "border-emerald-400/30 bg-emerald-400/10 text-emerald-300",
         warning.has(status) &&

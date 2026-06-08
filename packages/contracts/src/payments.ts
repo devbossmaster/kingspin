@@ -98,6 +98,7 @@ export const WithdrawalSnapshotSchema = z.object({
   currency: z.string(),
   status: WithdrawalStatusSchema,
   providerReference: z.string().nullable(),
+  destinationDisplay: z.string().nullable().optional(),
   requestedAt: IsoDateStringSchema,
   reviewedAt: IsoDateStringSchema.nullable(),
   reviewedByAdminId: z.string().nullable(),

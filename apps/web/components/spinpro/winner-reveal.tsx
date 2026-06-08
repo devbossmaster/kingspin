@@ -206,7 +206,7 @@ export function WinnerReveal({
         <div className="mt-5 rounded-xl border border-amber-300/25 bg-amber-300/10 p-4 text-center">
           <div className="flex items-center justify-center gap-2">
             <p className="text-[10px] font-black uppercase tracking-[0.18em] text-amber-200/90">
-              Payout
+              Winner Gets
             </p>
             {multiplierLabel ? (
               <span className="rounded-full border border-amber-200/30 bg-amber-200/15 px-2 py-0.5 font-mono text-[10px] font-black text-amber-100">
@@ -218,6 +218,13 @@ export function WinnerReveal({
           <p className="mt-1 truncate font-mono text-4xl font-black text-amber-300">
             {formatCoins(payoutAmount)}
           </p>
+          {round && outcome === "winner" ? (
+            <p className="mt-2 text-xs font-semibold text-amber-100/75">
+              Pool {formatCoins(round.grossPoolAmount)} · Fee{" "}
+              {formatCoins(round.platformFeeAmount)} · Net{" "}
+              {formatCoins(round.netPrizeAmount)}
+            </p>
+          ) : null}
         </div>
 
         <div className="mt-4">

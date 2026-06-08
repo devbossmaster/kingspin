@@ -93,6 +93,35 @@ describe('API environment validation', () => {
     ).toThrow(EnvValidationError);
   });
 
+  it('defaults product money limits and the platform fee', () => {
+    expect(parseApiEnv({})).toMatchObject({
+      DEPOSIT_MIN_ETB: 10,
+      DEPOSIT_MAX_ETB: 1_000,
+      WITHDRAWAL_MIN_ETB: 50,
+      WITHDRAWAL_MAX_ETB: 1_000,
+      TRANSFER_MIN_ETB: 1,
+      TRANSFER_MAX_ETB: 1_000,
+      PLATFORM_FEE_BPS: 2_000,
+      ROUND_ENTRY_CUTOFF_BUFFER_MS: 2_000,
+    });
+  });
+
+  it('rejects inverted product money limits', () => {
+    expect(() =>
+      parseApiEnv({
+        DEPOSIT_MIN_ETB: '1000',
+        DEPOSIT_MAX_ETB: '10',
+      }),
+    ).toThrow(EnvValidationError);
+
+    expect(() =>
+      parseApiEnv({
+        WITHDRAWAL_MIN_ETB: '1000',
+        WITHDRAWAL_MAX_ETB: '50',
+      }),
+    ).toThrow(EnvValidationError);
+  });
+
   it('maps the local dev auth flag with safe backward compatibility', () => {
     expect(parseApiEnv({ ENABLE_DEV_AUTH: 'true' }).ENABLE_LOCAL_DEV_AUTH).toBe(
       true,

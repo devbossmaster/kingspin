@@ -149,10 +149,26 @@ export const auth = betterAuth({
   database: prismaAdapter(prisma, {
     provider: "postgresql",
   }),
+
+  // Speeds up useSession/getSession by storing a short-lived signed session
+  // cache in a cookie instead of hitting the DB for every session read.
+  session: {
+    cookieCache: {
+      enabled: true,
+      maxAge: 5 * 60,
+    },
+  },
+
+  // Keep Better Auth rate limiting, but do not rate-limit get-session and do
+  // not use the database for generic auth rate-limit counters. OTP resend
+  // still has the custom DB cooldown below.
   rateLimit: {
     enabled: true,
-    storage: "database",
+    storage: "memory",
+    window: 60,
+    max: 100,
     customRules: {
+      "/get-session": false,
       "/email-otp/send-verification-otp": {
         window: 60,
         max: 1,
@@ -163,6 +179,7 @@ export const auth = betterAuth({
       },
     },
   },
+
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
       const requestedPath = ctx.request
@@ -195,6 +212,7 @@ export const auth = betterAuth({
       }
     }),
   },
+
   advanced: env.BETTER_AUTH_COOKIE_DOMAIN
     ? {
         crossSubDomainCookies: {
@@ -203,6 +221,7 @@ export const auth = betterAuth({
         },
       }
     : undefined,
+
   user: {
     fields: {
       name: "fullName",
@@ -239,6 +258,7 @@ export const auth = betterAuth({
       },
     },
   },
+
   emailAndPassword: {
     enabled: true,
     requireEmailVerification: true,
@@ -263,11 +283,13 @@ export const auth = betterAuth({
       });
     },
   },
+
   emailVerification: {
     sendOnSignUp: true,
     sendOnSignIn: false,
     autoSignInAfterVerification: false,
   },
+
   plugins: [
     emailOTP({
       otpLength: EMAIL_OTP_LENGTH,

@@ -127,6 +127,31 @@ function EmptyState({ label }: { label: string }) {
   );
 }
 
+function WalletLoadingGate() {
+  return (
+    <section className="rounded-lg border border-white/10 bg-white/[0.045] p-5">
+      <div className="h-5 w-48 animate-pulse rounded bg-white/10" />
+      <div className="mt-4 h-10 w-36 animate-pulse rounded bg-white/10" />
+    </section>
+  );
+}
+
+function SignInGate() {
+  return (
+    <section className="rounded-lg border border-white/10 bg-white/[0.045] p-5">
+      <p className="text-sm font-semibold text-slate-400">
+        Sign in to view your wallet.
+      </p>
+      <Link
+        href="/sign-in?callbackURL=/wallet"
+        className="mt-4 inline-flex min-h-10 items-center rounded-md bg-[var(--gold)] px-4 text-sm font-black text-[var(--bg-void)]"
+      >
+        Sign In
+      </Link>
+    </section>
+  );
+}
+
 function TelebirrBadge() {
   return (
     <span className="inline-flex items-center gap-2 rounded-full border border-sky-300/30 bg-sky-400/10 px-3 py-1 text-xs font-black text-sky-100">
@@ -145,9 +170,12 @@ function localPhone(value?: string | null) {
 
 export default function WalletPage() {
   const { data: session, isPending } = useSession();
+  const isAuthenticated = Boolean(session?.user);
+
   const user = useAuthStore((store) => store.user);
   const wallet = useAuthStore((store) => store.wallet);
   const fetchWallet = useAuthStore((store) => store.fetchWallet);
+
   const [activeTab, setActiveTab] = useState<WalletTab>("deposit");
   const [deposits, setDeposits] = useState<DepositSnapshot[]>([]);
   const [activeDepositIntent, setActiveDepositIntent] =
@@ -169,7 +197,7 @@ export default function WalletPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const refreshWallet = useCallback(async () => {
-    if (!session?.user) {
+    if (!isAuthenticated) {
       return;
     }
 
@@ -181,14 +209,13 @@ export default function WalletPage() {
         withdrawalsResult,
         transactionsResult,
         transfersResult,
-      ] =
-        await Promise.all([
-          apiClient.listDeposits(),
-          apiClient.listWithdrawals(),
-          apiClient.getMeTransactions(50),
-          apiClient.listWalletTransfers(50),
-          fetchWallet(),
-        ]);
+      ] = await Promise.all([
+        apiClient.listDeposits(),
+        apiClient.listWithdrawals(),
+        apiClient.getMeTransactions(50),
+        apiClient.listWalletTransfers(50),
+        fetchWallet(),
+      ]);
 
       setDeposits(depositsResult);
       setWithdrawals(withdrawalsResult);
@@ -202,11 +229,15 @@ export default function WalletPage() {
     } finally {
       setIsRefreshing(false);
     }
-  }, [fetchWallet, session?.user]);
+  }, [fetchWallet, isAuthenticated]);
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
     void refreshWallet();
-  }, [refreshWallet]);
+  }, [isAuthenticated, refreshWallet]);
 
   const pendingCount = useMemo(
     () =>
@@ -223,6 +254,11 @@ export default function WalletPage() {
     event.preventDefault();
     setMessage(null);
     setError(null);
+
+    if (!isAuthenticated) {
+      setError("Sign in to create a deposit request.");
+      return;
+    }
 
     const formData = new FormData(event.currentTarget);
     const amount = parseDecimalAmount(formData.get("amount"));
@@ -259,6 +295,11 @@ export default function WalletPage() {
     event.preventDefault();
     setMessage(null);
     setError(null);
+
+    if (!isAuthenticated) {
+      setError("Sign in to verify a receipt.");
+      return;
+    }
 
     const depositIntentId = activeDepositIntent?.deposit.id;
     const formData = new FormData(event.currentTarget);
@@ -309,6 +350,11 @@ export default function WalletPage() {
     event.preventDefault();
     setMessage(null);
     setError(null);
+
+    if (!isAuthenticated) {
+      setError("Sign in to request a withdrawal.");
+      return;
+    }
 
     const formData = new FormData(event.currentTarget);
     const amount = parseAmount(formData.get("amount"));
@@ -365,6 +411,11 @@ export default function WalletPage() {
     setError(null);
     setResolvedRecipient(null);
 
+    if (!isAuthenticated) {
+      setError("Sign in to send a transfer.");
+      return;
+    }
+
     const recipient = String(
       new FormData(event.currentTarget).get("recipient") ?? "",
     ).trim();
@@ -375,6 +426,7 @@ export default function WalletPage() {
     }
 
     setIsSubmitting(true);
+
     try {
       const result = await apiClient.resolveTransferRecipient({ recipient });
       setResolvedRecipient(result.recipient);
@@ -392,6 +444,11 @@ export default function WalletPage() {
     event.preventDefault();
     setMessage(null);
     setError(null);
+
+    if (!isAuthenticated) {
+      setError("Sign in to send a transfer.");
+      return;
+    }
 
     if (!resolvedRecipient) {
       setError("Resolve and confirm the recipient first.");
@@ -416,7 +473,7 @@ export default function WalletPage() {
   }
 
   async function handleConfirmTransfer() {
-    if (!resolvedRecipient || !pendingTransfer) return;
+    if (!isAuthenticated || !resolvedRecipient || !pendingTransfer) return;
 
     setIsSubmitting(true);
     setError(null);
@@ -434,7 +491,9 @@ export default function WalletPage() {
       await refreshWallet();
     } catch (caught) {
       setError(
-        caught instanceof Error ? caught.message : "Transfer could not be completed.",
+        caught instanceof Error
+          ? caught.message
+          : "Transfer could not be completed.",
       );
       setPendingTransfer(null);
     } finally {
@@ -445,6 +504,11 @@ export default function WalletPage() {
   async function handleCancelWithdrawal(id: string) {
     setMessage(null);
     setError(null);
+
+    if (!isAuthenticated) {
+      setError("Sign in to cancel a withdrawal.");
+      return;
+    }
 
     try {
       await apiClient.cancelWithdrawal(id);
@@ -479,25 +543,17 @@ export default function WalletPage() {
           </Link>
         </div>
 
-        {!isPending && !session?.user ? (
-          <section className="rounded-lg border border-white/10 bg-white/[0.045] p-5">
-            <p className="text-sm font-semibold text-slate-400">
-              Sign in to view your wallet.
-            </p>
-            <Link
-              href="/sign-in?callbackURL=/wallet"
-              className="mt-4 inline-flex min-h-10 items-center rounded-md bg-[var(--gold)] px-4 text-sm font-black text-[var(--bg-void)]"
-            >
-              Sign In
-            </Link>
-          </section>
+        {isPending ? (
+          <WalletLoadingGate />
+        ) : !session?.user ? (
+          <SignInGate />
         ) : (
           <div className="grid gap-4">
             <section className="rounded-lg border border-yellow-300/25 bg-[linear-gradient(135deg,rgba(250,204,21,0.14),rgba(255,255,255,0.04))] p-4 shadow-[0_18px_44px_rgba(0,0,0,0.28)] md:p-5">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-sm font-bold text-slate-400">
-                    {user?.username ?? session?.user.name ?? "Player"}
+                    {user?.username ?? session.user.name ?? "Player"}
                   </p>
                   <p className="mt-2 font-mono text-4xl font-black text-gold md:text-5xl">
                     {formatCoins(wallet?.balanceSnapshot)}
@@ -655,7 +711,9 @@ export default function WalletPage() {
                       <div>
                         <p className={labelClass}>Expires</p>
                         <p className="mt-1 text-white">
-                          {formatDate(activeDepositIntent.instructions.expiresAt)}
+                          {formatDate(
+                            activeDepositIntent.instructions.expiresAt,
+                          )}
                         </p>
                       </div>
                     </div>
@@ -990,7 +1048,7 @@ export default function WalletPage() {
       </div>
 
       <Dialog
-        open={Boolean(pendingTransfer && resolvedRecipient)}
+        open={Boolean(isAuthenticated && pendingTransfer && resolvedRecipient)}
         title="Confirm transfer"
         onClose={() => setPendingTransfer(null)}
         panelClassName="max-w-md rounded-2xl border border-indigo-300/25 bg-slate-950 p-5 shadow-2xl"

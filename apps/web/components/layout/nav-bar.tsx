@@ -85,16 +85,55 @@ function BrandTitle({ small = false }: { small?: boolean }) {
   );
 }
 
+function PublicAuthButtons({
+  mobile = false,
+  onClick,
+}: {
+  mobile?: boolean;
+  onClick?: () => void;
+}) {
+  if (mobile) {
+    return (
+      <>
+        <Link href="/sign-in" onClick={onClick} className={mobileSignInButtonClass}>
+          ይግቡ
+        </Link>
+        <Link
+          href="/sign-up"
+          onClick={onClick}
+          className={`${mobileSignUpButtonClass} hidden min-[360px]:inline-flex`}
+        >
+          ይመዝገቡ
+        </Link>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Link href="/sign-in" onClick={onClick} className={`${signInButtonClass} w-36`}>
+        ይግቡ
+      </Link>
+      <Link href="/sign-up" onClick={onClick} className={`${signUpButtonClass} w-36`}>
+        ይመዝገቡ
+      </Link>
+    </>
+  );
+}
+
 export function NavBar({ backHref }: { backHref?: string }) {
-  const { data: session, isPending, refetch } = useSession();
+  const { data: session, refetch } = useSession();
   const pathname = usePathname();
   const user = useAuthStore((store) => store.user);
   const wallet = useAuthStore((store) => store.wallet);
   const fetchMe = useAuthStore((store) => store.fetchMe);
   const fetchWallet = useAuthStore((store) => store.fetchWallet);
   const clear = useAuthStore((store) => store.clear);
+
   const sessionUserId = session?.user.id ?? null;
+  const isAuthenticated = Boolean(sessionUserId);
   const balanceLabel = wallet ? formatCoins(wallet.balanceSnapshot) : "0";
+
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   useEffect(() => {
@@ -187,11 +226,7 @@ export function NavBar({ backHref }: { backHref?: string }) {
             className="hidden shrink-0 items-center gap-3 md:flex"
             aria-label="Account"
           >
-            {isPending ? (
-              <span className="inline-flex h-9 min-w-12 animate-pulse items-center justify-center rounded-md bg-white/5 px-3 text-sm font-bold text-white/50">
-                ...
-              </span>
-            ) : session?.user ? (
+            {isAuthenticated ? (
               <>
                 {isAdminRole(user?.role) ? (
                   <Link
@@ -214,21 +249,12 @@ export function NavBar({ backHref }: { backHref?: string }) {
                 <UserDropdown />
               </>
             ) : (
-              <>
-                <Link href="/sign-in" className={`${signInButtonClass} w-36`}>
-                  ይግቡ
-                </Link>
-                <Link href="/sign-up" className={`${signUpButtonClass} w-36`}>
-                  ይመዝገቡ
-                </Link>
-              </>
+              <PublicAuthButtons />
             )}
           </nav>
 
           <div className="flex shrink-0 items-center gap-1.5 md:hidden">
-            {isPending ? (
-              <span className="h-8 w-12 animate-pulse rounded-md bg-white/5" />
-            ) : session?.user ? (
+            {isAuthenticated ? (
               <div className="flex items-center gap-2">
                 <Link
                   href="/wallet"
@@ -241,17 +267,7 @@ export function NavBar({ backHref }: { backHref?: string }) {
                 <UserDropdown />
               </div>
             ) : (
-              <>
-                <Link href="/sign-in" className={mobileSignInButtonClass}>
-                  ይግቡ
-                </Link>
-                <Link
-                  href="/sign-up"
-                  className={`${mobileSignUpButtonClass} hidden min-[360px]:inline-flex`}
-                >
-                  ይመዝገቡ
-                </Link>
-              </>
+              <PublicAuthButtons mobile />
             )}
           </div>
         </div>
@@ -269,7 +285,9 @@ export function NavBar({ backHref }: { backHref?: string }) {
         />
 
         <div
-          className={`${drawerPanelClass} ${isMenuOpen ? "translate-x-0" : "-translate-x-full"}`}
+          className={`${drawerPanelClass} ${
+            isMenuOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
         >
           <div className="flex items-center justify-between pb-5">
             <Link
@@ -342,9 +360,7 @@ export function NavBar({ backHref }: { backHref?: string }) {
               })}
             </div>
 
-            {isPending ? (
-              <div className="mt-5 px-1 text-sm text-slate-500">በመጫን ላይ...</div>
-            ) : session?.user ? (
+            {isAuthenticated ? (
               <>
                 <div className={drawerSectionLabelClass}>አካውንት</div>
 

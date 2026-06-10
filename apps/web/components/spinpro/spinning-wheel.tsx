@@ -8,7 +8,6 @@ import { getPublicRoundPhase } from "../../lib/room-summary";
 import {
   getEntryDisplayColor,
   getPaletteColor,
-  getPlayerDisplayName,
   PLAYER_SLICE_COLORS,
   sortDisplayEntries,
 } from "./player-display";
@@ -22,6 +21,7 @@ type WheelEntry = EntryWithPlayerSnapshot & {
 type SpinningWheelProps = {
   entries: WheelEntry[];
   totalEntryAmount: string;
+  netPrizeAmount?: string | null;
   spinAngle: number | null | undefined;
   status: string | null | undefined;
   phase?: string | null | undefined;
@@ -41,11 +41,11 @@ type WheelPhase =
 
 export const WHEEL_SLICE_COLORS = PLAYER_SLICE_COLORS;
 
-const SPIN_DURATION_MS = 6500;
+const SPIN_DURATION_MS = 8_000;
 const WHEEL_CENTER = 150;
-const WHEEL_OUTER_RADIUS = 136;
-const WHEEL_INNER_RADIUS = 68;
-const COUNTDOWN_RADIUS = 143;
+const WHEEL_RADIUS = 136;
+const CENTER_DISC_RADIUS = 57;
+const COUNTDOWN_RADIUS = 144;
 const COUNTDOWN_CIRCUMFERENCE = 2 * Math.PI * COUNTDOWN_RADIUS;
 
 export function getWheelSliceColor(index: number, stableKey?: string | null) {
@@ -81,51 +81,30 @@ function polarToCartesian(
   };
 }
 
-function describeDonutSlice({
+function describePieSlice({
   centerX,
   centerY,
-  outerRadius,
-  innerRadius,
+  radius,
   startAngle,
   endAngle,
 }: {
   centerX: number;
   centerY: number;
-  outerRadius: number;
-  innerRadius: number;
+  radius: number;
   startAngle: number;
   endAngle: number;
 }) {
   const safeEndAngle =
     endAngle - startAngle >= 359.99 ? startAngle + 359.99 : endAngle;
 
-  const outerStart = polarToCartesian(
-    centerX,
-    centerY,
-    outerRadius,
-    safeEndAngle,
-  );
-  const outerEnd = polarToCartesian(centerX, centerY, outerRadius, startAngle);
-  const innerStart = polarToCartesian(
-    centerX,
-    centerY,
-    innerRadius,
-    startAngle,
-  );
-  const innerEnd = polarToCartesian(
-    centerX,
-    centerY,
-    innerRadius,
-    safeEndAngle,
-  );
-
+  const start = polarToCartesian(centerX, centerY, radius, safeEndAngle);
+  const end = polarToCartesian(centerX, centerY, radius, startAngle);
   const largeArcFlag = safeEndAngle - startAngle <= 180 ? "0" : "1";
 
   return [
-    `M ${outerStart.x} ${outerStart.y}`,
-    `A ${outerRadius} ${outerRadius} 0 ${largeArcFlag} 0 ${outerEnd.x} ${outerEnd.y}`,
-    `L ${innerStart.x} ${innerStart.y}`,
-    `A ${innerRadius} ${innerRadius} 0 ${largeArcFlag} 1 ${innerEnd.x} ${innerEnd.y}`,
+    `M ${centerX} ${centerY}`,
+    `L ${start.x} ${start.y}`,
+    `A ${radius} ${radius} 0 ${largeArcFlag} 0 ${end.x} ${end.y}`,
     "Z",
   ].join(" ");
 }
@@ -143,42 +122,18 @@ function entryWeight(entry: EntryWithPlayerSnapshot) {
   return Number(entry.amount);
 }
 
-function getWheelStatusCopy(phase: WheelPhase) {
+function getPhaseRingColor(phase: WheelPhase) {
   switch (phase) {
     case "ENTRY_OPEN":
-      return {
-        label: "Entry Open",
-        centerLabel: "Ends in",
-        ring: "#22c55e",
-      };
-
+      return "#22c55e";
     case "RANDOMIZING":
-      return {
-        label: "Randomizing",
-        centerLabel: "Locking",
-        ring: "#06b6d4",
-      };
-
+      return "#06b6d4";
     case "SPINNING":
-      return {
-        label: "Spinning",
-        centerLabel: "Spinning",
-        ring: "#ec4899",
-      };
-
+      return "#ec4899";
     case "RESULT":
-      return {
-        label: "Result",
-        centerLabel: "Winner",
-        ring: "#facc15",
-      };
-
+      return "#facc15";
     default:
-      return {
-        label: "Preparing",
-        centerLabel: "Waiting",
-        ring: "#94a3b8",
-      };
+      return "#94a3b8";
   }
 }
 
@@ -191,29 +146,10 @@ function getFinalWheelAngle(spinAngle: number | null | undefined) {
   return normalizeDegrees(360 - normalized);
 }
 
-function getEntryName(
-  entry: EntryWithPlayerSnapshot | null | undefined,
-  fallback = "Winner",
-) {
-  const displayName = getPlayerDisplayName(entry);
-
-  return displayName === "Player" ? fallback : displayName;
-}
-
-function devLog(message: string, details?: unknown) {
-  if (process.env.NODE_ENV === "production") return;
-
-  if (details === undefined) {
-    console.debug(`[spinning-wheel] ${message}`);
-    return;
-  }
-
-  console.debug(`[spinning-wheel] ${message}`, details);
-}
-
 export function SpinningWheel({
   entries,
   totalEntryAmount,
+  netPrizeAmount,
   spinAngle,
   status,
   phase: publicPhase,
@@ -221,21 +157,18 @@ export function SpinningWheel({
   winnerEntryId,
   locksAt,
   serverNow,
-  durationMs = 45_000,
+  durationMs = 60_000,
 }: SpinningWheelProps) {
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [rotation, setRotation] = useState(0);
-  const [transitionMs, setTransitionMs] = useState(500);
-  const [joinPopKey, setJoinPopKey] = useState(0);
-  const [coinBursts, setCoinBursts] = useState<number[]>([]);
+  const [transitionMs, setTransitionMs] = useState(450);
 
   const previousPhaseRef = useRef<WheelPhase>("WAITING");
-  const previousEntryCountRef = useRef(entries.length);
   const spinStartedForKeyRef = useRef<string | null>(null);
   const resultSettledForKeyRef = useRef<string | null>(null);
 
   const phase = normalizePhase(publicPhase, status);
-  const statusCopy = getWheelStatusCopy(phase);
+  const ringColor = getPhaseRingColor(phase);
   const displayEntries = useMemo(() => sortDisplayEntries(entries), [entries]);
   const entryCount = displayEntries.length;
 
@@ -252,7 +185,6 @@ export function SpinningWheel({
         ? 1
         : 0;
 
-  // Wheel data mapping: ticket ranges define slice weight, falling back to amount.
   const weights = useMemo(
     () => displayEntries.map(entryWeight),
     [displayEntries],
@@ -267,11 +199,6 @@ export function SpinningWheel({
 
   const hasEntries = entryCount > 0 && total > 0;
 
-  const winner = useMemo(() => {
-    return displayEntries.find((entry) => entry.id === winnerEntryId) ?? null;
-  }, [displayEntries, winnerEntryId]);
-
-  // Wheel data mapping: each entry maps to one slice in the current entry order.
   const slices = useMemo(() => {
     let cursor = 0;
 
@@ -287,11 +214,10 @@ export function SpinningWheel({
         index,
         startAngle,
         endAngle,
-        path: describeDonutSlice({
+        path: describePieSlice({
           centerX: WHEEL_CENTER,
           centerY: WHEEL_CENTER,
-          outerRadius: WHEEL_OUTER_RADIUS,
-          innerRadius: WHEEL_INNER_RADIUS,
+          radius: WHEEL_RADIUS,
           startAngle,
           endAngle,
         }),
@@ -300,7 +226,7 @@ export function SpinningWheel({
   }, [displayEntries, total, weights]);
 
   const emptyWheelSlices = useMemo(() => {
-    const segmentCount = 16;
+    const segmentCount = 12;
     const segmentDegrees = 360 / segmentCount;
 
     return Array.from({ length: segmentCount }, (_, index) => {
@@ -309,11 +235,10 @@ export function SpinningWheel({
 
       return {
         index,
-        path: describeDonutSlice({
+        path: describePieSlice({
           centerX: WHEEL_CENTER,
           centerY: WHEEL_CENTER,
-          outerRadius: WHEEL_OUTER_RADIUS,
-          innerRadius: WHEEL_INNER_RADIUS,
+          radius: WHEEL_RADIUS,
           startAngle,
           endAngle,
         }),
@@ -321,7 +246,6 @@ export function SpinningWheel({
     });
   }, []);
 
-  // Spin/result behavior: backend spinAngle and winnerEntryId define the landing key.
   const finalAngle = getFinalWheelAngle(spinAngle);
   const spinKey = `${winnerEntryId ?? "pending"}:${spinAngle ?? "no-angle"}`;
 
@@ -337,22 +261,6 @@ export function SpinningWheel({
   }, []);
 
   useEffect(() => {
-    if (entryCount > previousEntryCountRef.current) {
-      setJoinPopKey((key) => key + 1);
-
-      const burstKey = Date.now();
-      setCoinBursts((current) => [...current.slice(-3), burstKey]);
-
-      window.setTimeout(() => {
-        setCoinBursts((current) => current.filter((key) => key !== burstKey));
-      }, 1100);
-    }
-
-    previousEntryCountRef.current = entryCount;
-  }, [entryCount]);
-
-  // Spin/result behavior: preserves phase timing, spin start, and final settle logic.
-  useEffect(() => {
     const previousPhase = previousPhaseRef.current;
     previousPhaseRef.current = phase;
 
@@ -367,20 +275,19 @@ export function SpinningWheel({
     if (phase === "ENTRY_OPEN" || phase === "WAITING") {
       spinStartedForKeyRef.current = null;
       resultSettledForKeyRef.current = null;
+      setTransitionIfChanged(prefersReducedMotion ? 0 : 520);
 
-      setTransitionIfChanged(phase === "ENTRY_OPEN" ? 900 : 450);
-
-      setRotation((currentRotation) => {
-        const idleTarget = normalizeDegrees(currentRotation);
-        return currentRotation === idleTarget ? currentRotation : idleTarget;
-      });
+      setRotation((currentRotation) =>
+        currentRotation === 0 ? currentRotation : 0,
+      );
 
       return;
     }
 
     if (phase === "RANDOMIZING") {
       resultSettledForKeyRef.current = null;
-      setTransitionIfChanged(prefersReducedMotion ? 0 : 450);
+      setTransitionIfChanged(prefersReducedMotion ? 0 : 360);
+
       setRotation((currentRotation) => {
         const idleTarget = normalizeDegrees(currentRotation);
         return currentRotation === idleTarget ? currentRotation : idleTarget;
@@ -402,19 +309,9 @@ export function SpinningWheel({
           const distanceToFinal = normalizeDegrees(
             finalAngle - currentNormalized,
           );
-          const extraTurns = prefersReducedMotion ? 0 : 7;
-          const nextRotation =
-            currentRotation + extraTurns * 360 + distanceToFinal;
+          const extraTurns = prefersReducedMotion ? 0 : 8;
 
-          devLog("smooth spinning animation started", {
-            from: previousPhase,
-            to: phase,
-            spinAngle,
-            winnerEntryId,
-            nextRotation,
-          });
-
-          return nextRotation;
+          return currentRotation + extraTurns * 360 + distanceToFinal;
         });
       }
 
@@ -424,7 +321,7 @@ export function SpinningWheel({
     if (phase === "RESULT" && finalAngle !== null) {
       if (resultSettledForKeyRef.current !== spinKey) {
         resultSettledForKeyRef.current = spinKey;
-        setTransitionIfChanged(prefersReducedMotion ? 0 : 700);
+        setTransitionIfChanged(prefersReducedMotion ? 0 : 260);
 
         setRotation((currentRotation) => {
           const currentNormalized = normalizeDegrees(currentRotation);
@@ -440,197 +337,116 @@ export function SpinningWheel({
         });
       }
     }
-  }, [
-    finalAngle,
-    phase,
-    prefersReducedMotion,
-    spinAngle,
-    spinKey,
-    winnerEntryId,
-  ]);
 
-  // Center display: copies backend/result phase without changing winner state.
-  const shouldGlow = !prefersReducedMotion && phase === "SPINNING";
-  const showWinnerName = phase === "RESULT" && resultReason === "WINNER";
-  const centerLabel =
-    phase === "RESULT"
-      ? resultReason === "WINNER"
-        ? "Winner"
-        : resultReason === "REFUNDED_SINGLE"
-          ? "Refund"
-          : resultReason === "SKIPPED_EMPTY"
-            ? "Skipped"
-            : "Result"
-      : statusCopy.centerLabel;
+    void previousPhase;
+  }, [finalAngle, phase, prefersReducedMotion, spinKey]);
+
+  const isWinnerResult = phase === "RESULT" && resultReason === "WINNER";
+  const isRefundResult =
+    phase === "RESULT" && resultReason === "REFUNDED_SINGLE";
+  const isSkippedResult =
+    phase === "RESULT" && resultReason === "SKIPPED_EMPTY";
+
+  const displayAmount = isWinnerResult
+    ? (netPrizeAmount ?? totalEntryAmount)
+    : totalEntryAmount;
+
+  const formattedDisplayAmount = formatCoins(displayAmount);
+
+  const centerLabel = isWinnerResult
+    ? "Winner Gets"
+    : isRefundResult
+      ? "Refund"
+      : isSkippedResult
+        ? "Skipped"
+        : "Total Pool";
+
+  const centerMainText = isSkippedResult ? "0" : formattedDisplayAmount;
 
   const centerBottomText =
     phase === "ENTRY_OPEN"
-      ? formatMs(msLeft)
-      : showWinnerName
-        ? getEntryName(winner)
-        : phase === "RESULT" && resultReason === "SKIPPED_EMPTY"
-          ? "No entries"
-          : phase === "RESULT" && resultReason === "REFUNDED_SINGLE"
-            ? "Refunded"
-            : `${entryCount} ${entryCount === 1 ? "entry" : "entries"}`;
+      ? `Ends in ${formatMs(msLeft)}`
+      : phase === "RANDOMIZING"
+        ? "Drawing winner..."
+        : phase === "SPINNING"
+          ? "Spinning..."
+          : isWinnerResult
+            ? "Result"
+            : isRefundResult
+              ? "Refunded"
+              : isSkippedResult
+                ? "No entries"
+                : "Waiting";
+
+  const showPhaseAction = phase === "RANDOMIZING" || phase === "SPINNING";
 
   return (
     <section className="relative overflow-visible bg-transparent p-0">
       <style>{`
         .wheel-shell {
+          transform: translateZ(0);
           animation: ${
             prefersReducedMotion
               ? "none"
-              : "wheelBreath 2.8s ease-in-out infinite"
+              : "wheelBreath 3.2s ease-in-out infinite"
           };
         }
 
-        .wheel-pop {
+        .phase-action-pill {
           animation: ${
             prefersReducedMotion
               ? "none"
-              : "wheelJoinPop 520ms cubic-bezier(0.2, 1.4, 0.35, 1)"
-          };
-        }
-
-        .coin-burst {
-          animation: ${
-            prefersReducedMotion ? "none" : "coinBurst 1050ms ease-out forwards"
-          };
-        }
-
-        .status-shine {
-          animation: ${
-            prefersReducedMotion ? "none" : "shineSweep 2.2s linear infinite"
-          };
-        }
-
-        .phase-pulse {
-          animation: ${
-            prefersReducedMotion
-              ? "none"
-              : "phaseHeartbeat 1.1s ease-in-out infinite"
+              : "phaseActionPulse 1s ease-in-out infinite"
           };
         }
 
         @keyframes wheelBreath {
           0%,
           100% {
-            transform: scale(1);
-            filter: drop-shadow(0 10px 20px rgba(0, 0, 0, 0.34));
+            transform: translateZ(0) scale(1);
           }
           50% {
-            transform: scale(1.003);
-            filter: drop-shadow(0 12px 24px rgba(99, 102, 241, 0.08));
+            transform: translateZ(0) scale(1.004);
           }
         }
 
-        @keyframes wheelJoinPop {
-          0% {
-            transform: scale(1);
-          }
-          35% {
-            transform: scale(1.045);
-          }
-          100% {
-            transform: scale(1);
-          }
-        }
-
-        @keyframes coinBurst {
-          0% {
-            opacity: 0;
-            transform: translateY(16px) scale(0.7);
-          }
-          18% {
-            opacity: 1;
-          }
-          100% {
-            opacity: 0;
-            transform: translateY(-72px) scale(1.16);
-          }
-        }
-
-        @keyframes shineSweep {
-          0% {
-            transform: translateX(-120%);
-          }
-          100% {
-            transform: translateX(120%);
-          }
-        }
-
-        @keyframes phaseHeartbeat {
+        @keyframes phaseActionPulse {
           0%,
           100% {
-            opacity: 0.78;
-            transform: scale(1);
+            transform: translateY(0) scale(1);
+            opacity: 0.9;
+            box-shadow: 0 10px 30px rgba(251, 191, 36, 0.18);
           }
-          45% {
+          50% {
+            transform: translateY(-3px) scale(1.04);
             opacity: 1;
-            transform: scale(1.06);
+            box-shadow: 0 16px 42px rgba(251, 191, 36, 0.35);
           }
         }
       `}</style>
 
-      <div className="relative flex min-h-[280px] items-center justify-center overflow-visible md:min-h-[360px]">
-        {/* Pointer */}
-        <div className="absolute inset-x-0 top-11 z-30 flex justify-center md:top-12">
+      <div className="relative flex min-h-[335px] items-center justify-center overflow-visible pb-12 md:min-h-[405px]">
+        {/* Pointer exactly at the top edge */}
+        <div className="pointer-events-none absolute left-1/2 top-[4px] z-30 -translate-x-1/2">
           <WheelPointer />
         </div>
 
-        {/* Safe class/layout zone: status badge and decorative overlays. */}
-        <div className="pointer-events-none absolute top-2 z-40 overflow-hidden rounded-full border border-white/10 bg-black/55 px-4 py-1.5 text-[10px] font-black uppercase tracking-[0.16em] text-white/90 shadow-lg backdrop-blur-xl">
-          <span
-            className={`relative z-10 inline-block ${
-              phase === "RANDOMIZING" ? "phase-pulse" : ""
-            }`}
-          >
-            {statusCopy.label}
-          </span>
-          {phase === "SPINNING" ? (
-            <span className="status-shine absolute inset-y-0 w-12 rotate-12 bg-white/10 blur-sm" />
-          ) : null}
-        </div>
-
-        {coinBursts.map((key, index) => (
-          <div
-            key={key}
-            className="coin-burst pointer-events-none absolute z-30 rounded-full border border-amber-200/50 bg-amber-400 px-2 py-1 text-xs font-black text-amber-950 shadow-[0_0_24px_rgba(251,191,36,0.55)]"
-            style={{
-              left: `${44 + index * 8}%`,
-              bottom: `${20 + index * 4}%`,
-              animationDelay: `${index * 80}ms`,
-            }}
-          >
-            +1
-          </div>
-        ))}
-
-        {shouldGlow ? (
-          <>
-            <div className="pointer-events-none absolute h-[80%] w-[80%] rounded-full border border-fuchsia-400/10 shadow-[0_0_24px_rgba(217,70,239,0.08)]" />
-            <div className="pointer-events-none absolute h-[66%] w-[66%] rounded-full border border-cyan-300/10 shadow-[0_0_20px_rgba(34,211,238,0.08)]" />
-          </>
-        ) : null}
-
         <svg
-          key={joinPopKey}
           viewBox="0 0 300 300"
           role="img"
           aria-label={
             hasEntries
-              ? `Prize wheel with ${entryCount} entries and pool ${formatCoins(
+              ? `Prize wheel with ${entryCount} entries. Total pool ${formatCoins(
                   totalEntryAmount,
                 )} coins`
               : "Prize wheel waiting for entries"
           }
-          className="wheel-shell wheel-pop relative z-10 aspect-square w-[84vw] max-w-[310px] md:max-w-[360px]"
+          className="wheel-shell relative z-10 aspect-square w-[86vw] max-w-[320px] md:max-w-[365px]"
           style={{ height: "auto" }}
         >
           <defs>
             <filter
-              id="donutWheelShadow"
+              id="wheelShadow"
               x="-30%"
               y="-30%"
               width="160%"
@@ -638,69 +454,49 @@ export function SpinningWheel({
             >
               <feDropShadow
                 dx="0"
-                dy="12"
+                dy="10"
                 stdDeviation="10"
-                floodColor="rgba(0,0,0,0.68)"
-              />
-              <feDropShadow
-                dx="0"
-                dy="0"
-                stdDeviation="3"
-                floodColor="rgba(250,204,21,0.16)"
+                floodColor="rgba(0,0,0,0.55)"
               />
             </filter>
 
-            <linearGradient
-              id="metalOuterRing"
-              x1="0%"
-              y1="0%"
-              x2="100%"
-              y2="100%"
-            >
-              <stop offset="0%" stopColor="rgba(255,255,255,0.95)" />
-              <stop offset="28%" stopColor="rgba(250,204,21,0.88)" />
-              <stop offset="52%" stopColor="rgba(15,23,42,0.95)" />
-              <stop offset="77%" stopColor="rgba(255,255,255,0.75)" />
-              <stop offset="100%" stopColor="rgba(250,204,21,0.92)" />
-            </linearGradient>
+            <radialGradient id="centerDiscBg" cx="50%" cy="35%" r="75%">
+              <stop offset="0%" stopColor="rgba(30,41,59,0.96)" />
+              <stop offset="70%" stopColor="rgba(8,15,30,0.98)" />
+              <stop offset="100%" stopColor="rgba(2,6,23,1)" />
+            </radialGradient>
           </defs>
 
-          {/* Safe class/layout zone: outer rings and countdown ring. */}
+          {/* Outer white border */}
           <circle
             cx="150"
             cy="150"
-            r="146"
-            fill="none"
-            stroke="url(#metalOuterRing)"
-            strokeWidth="3"
-            filter="url(#donutWheelShadow)"
+            r="145"
+            fill="white"
+            filter="url(#wheelShadow)"
           />
 
+          {/* Dark rim */}
+          <circle cx="150" cy="150" r="140" fill="#0a1020" />
+
+          {/* Countdown ring track */}
           <circle
             cx="150"
             cy="150"
-            r="140"
+            r={COUNTDOWN_RADIUS}
             fill="none"
-            stroke="rgba(2,6,23,0.92)"
+            stroke="rgba(255,255,255,0.10)"
+            strokeWidth="4"
+          />
+
+          {/* Active countdown ring */}
+          <circle
+            cx="150"
+            cy="150"
+            r={COUNTDOWN_RADIUS}
+            fill="none"
+            stroke={ringColor}
             strokeWidth="5"
-          />
-
-          <circle
-            cx="150"
-            cy="150"
-            r={COUNTDOWN_RADIUS}
-            fill="none"
-            stroke="rgba(255,255,255,0.13)"
-            strokeWidth="4"
-          />
-
-          <circle
-            cx="150"
-            cy="150"
-            r={COUNTDOWN_RADIUS}
-            fill="none"
-            stroke={statusCopy.ring}
-            strokeWidth="4"
             strokeLinecap="round"
             strokeDasharray={COUNTDOWN_CIRCUMFERENCE}
             strokeDashoffset={COUNTDOWN_CIRCUMFERENCE * (1 - countdownRatio)}
@@ -708,15 +504,15 @@ export function SpinningWheel({
             style={{
               transition: prefersReducedMotion
                 ? "none"
-                : "stroke-dashoffset 900ms linear, stroke 250ms ease",
+                : "stroke-dashoffset 700ms linear, stroke 220ms ease",
               filter:
                 phase === "ENTRY_OPEN"
-                  ? `drop-shadow(0 0 5px ${statusCopy.ring})`
+                  ? `drop-shadow(0 0 6px ${ringColor})`
                   : "none",
             }}
           />
 
-          {/* Slice rendering */}
+          {/* Rotating slices */}
           <g
             style={{
               transform: `rotate(${rotation}deg)`,
@@ -726,110 +522,79 @@ export function SpinningWheel({
                 : `transform ${transitionMs}ms cubic-bezier(0.12, 0.72, 0.18, 1)`,
             }}
           >
-            {!hasEntries ? (
-              emptyWheelSlices.map(({ index, path }) => (
-                <path
-                  key={index}
-                  d={path}
-                  fill={index % 2 === 0 ? "#172033" : "#111827"}
-                  stroke="#020617"
-                  strokeWidth="2"
-                />
-              ))
-            ) : entryCount === 1 ? (
-              <path
-                d={describeDonutSlice({
-                  centerX: WHEEL_CENTER,
-                  centerY: WHEEL_CENTER,
-                  outerRadius: WHEEL_OUTER_RADIUS,
-                  innerRadius: WHEEL_INNER_RADIUS,
-                  startAngle: 0,
-                  endAngle: 360,
-                })}
-                fill={
-                  displayEntries[0]
-                    ? getEntrySliceColor(displayEntries[0], 0)
-                    : getWheelSliceColor(0)
-                }
-                opacity={displayEntries[0]?.pending ? 0.72 : 1}
-                stroke="#020617"
-                strokeWidth="1.8"
-              />
-            ) : (
-              slices.map(({ entry, index, path }) => {
-                return (
+            {!hasEntries
+              ? emptyWheelSlices.map(({ index, path }) => (
+                  <path
+                    key={index}
+                    d={path}
+                    fill={index % 2 === 0 ? "#14203c" : "#10192f"}
+                    stroke="#0b1325"
+                    strokeWidth="2"
+                  />
+                ))
+              : slices.map(({ entry, index, path }) => (
                   <path
                     key={entry.id}
                     d={path}
                     fill={getEntrySliceColor(entry, index)}
                     opacity={entry.pending ? 0.72 : 1}
-                    stroke="#020617"
-                    strokeWidth="1.8"
+                    stroke="#0b1325"
+                    strokeWidth="2"
                   />
-                );
-              })
-            )}
-
-            <circle
-              cx="150"
-              cy="150"
-              r={WHEEL_OUTER_RADIUS}
-              fill="none"
-              stroke="rgba(255,255,255,0.12)"
-              strokeWidth="1"
-            />
-
-            <circle
-              cx="150"
-              cy="150"
-              r={WHEEL_INNER_RADIUS}
-              fill="none"
-              stroke="rgba(255,255,255,0.16)"
-              strokeWidth="2"
-            />
+                ))}
           </g>
 
-          {/* Safe class/layout zone: center ring artwork. */}
+          {/* Inner wheel outline */}
           <circle
             cx="150"
             cy="150"
-            r="63"
+            r={WHEEL_RADIUS}
             fill="none"
-            stroke="rgba(15,23,42,0.85)"
-            strokeWidth="4"
+            stroke="rgba(255,255,255,0.14)"
+            strokeWidth="1"
+          />
+
+          {/* Center disc ring */}
+          <circle
+            cx="150"
+            cy="150"
+            r="66"
+            fill="rgba(80,35,10,0.18)"
+            stroke="rgba(255,180,90,0.20)"
+            strokeWidth="3"
           />
 
           <circle
             cx="150"
             cy="150"
-            r="53"
-            fill="none"
-            stroke="rgba(255,255,255,0.1)"
-            strokeWidth="1.5"
+            r={CENTER_DISC_RADIUS}
+            fill="url(#centerDiscBg)"
+            stroke="rgba(255,255,255,0.08)"
+            strokeWidth="2"
           />
         </svg>
 
-        {/* Center display */}
-        <div className="pointer-events-none absolute z-20 flex h-[98px] w-[98px] flex-col items-center justify-center rounded-full text-center md:h-[104px] md:w-[104px]">
-          <div className="absolute inset-0 rounded-full bg-slate-950/20 backdrop-blur-[1px]" />
-          <div className="relative">
-            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-white/85">
-              {centerLabel}
-            </p>
+        {/* Center content */}
+        <div className="pointer-events-none absolute z-20 flex h-[118px] w-[118px] flex-col items-center justify-center rounded-full text-center">
+          <div className="mb-1 text-lg leading-none">🪙</div>
 
-            <p className="mt-1 font-mono text-xl font-black leading-none text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
-              {formatCoins(totalEntryAmount)}
-            </p>
+          <p className="text-[10px] font-black uppercase tracking-[0.16em] text-white/82">
+            {centerLabel}
+          </p>
 
-            <p className="mt-2 max-w-[84px] truncate text-[10px] font-bold text-slate-200 drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
-              {centerBottomText}
-            </p>
-          </div>
+          <p className="mt-1 font-mono text-[22px] font-black leading-none text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.85)]">
+            {centerMainText}
+          </p>
+
+          <p className="mt-2 max-w-[96px] text-[11px] font-extrabold text-slate-200 drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
+            {centerBottomText}
+          </p>
         </div>
 
-        {phase === "SPINNING" ? (
-          <div className="pointer-events-none absolute bottom-5 z-20 rounded-full bg-black/45 px-4 py-2 text-center text-xs font-black uppercase tracking-[0.16em] text-white backdrop-blur">
-            Revealing winner
+        {/* Bottom phase badge */}
+        {showPhaseAction ? (
+          <div className="phase-action-pill pointer-events-none absolute bottom-0 z-30 rounded-full border border-yellow-200/60 bg-gradient-to-r from-yellow-300 via-amber-300 to-orange-400 px-6 py-3 text-center text-[12px] font-black uppercase tracking-[0.18em] text-slate-950 shadow-[0_16px_42px_rgba(251,191,36,0.38)]">
+            {phase === "SPINNING" ? "Spinning..." : "Drawing winner..."}
           </div>
         ) : null}
       </div>

@@ -12,7 +12,10 @@ import { getApiEnv } from '../../config/api-env';
 import { RoomGateway } from '../../gateways/room.gateway';
 import { PrismaService } from '../../prisma/prisma.service';
 import { RoundMachineLockService } from './round-machine-lock.service';
-import { ROUND_MACHINE_TIMINGS_MS } from './public-round-phase';
+import {
+  PUBLIC_CANCELLED_ROUND_VISIBILITY_MS,
+  ROUND_MACHINE_TIMINGS_MS,
+} from './public-round-phase';
 import { RoundsService } from './rounds.service';
 
 const ACTIVE_ROUND_STATUSES: RoundStatus[] = [
@@ -28,9 +31,9 @@ const ROUND_MACHINE_TIMING_WARN_THRESHOLD_MS = 300;
 const ROUND_MACHINE_TICK_QUEUE_WARN_THRESHOLD_MS = 300;
 const ROUND_MACHINE_STALE_PHASE_BUFFER_MS = 10_000;
 const ROUND_MACHINE_STALE_LOG_THROTTLE_MS = 60_000;
-const AUTO_START_CONCURRENCY = 2;
-const ROUND_MACHINE_NORMAL_TICK_CONCURRENCY = 2;
-const ROUND_MACHINE_URGENT_TICK_CONCURRENCY = 3;
+const AUTO_START_CONCURRENCY = 3;
+const ROUND_MACHINE_NORMAL_TICK_CONCURRENCY = 4;
+const ROUND_MACHINE_URGENT_TICK_CONCURRENCY = 6;
 const ROUND_MACHINE_TICK_PRIORITIES = {
   CATCH_UP: 0,
   START: 1,
@@ -1128,15 +1131,6 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
         this.states.set(roomId, state);
       }
 
-      /**
-       * Important performance fix:
-       *
-       * Do not block the round-machine scheduler on socket broadcasting.
-       * broadcastMachineResult may trigger live-state generation, which can be
-       * slow under Supabase pooler pressure. The state transition is already
-       * committed before this point, so broadcasting can safely happen in the
-       * background.
-       */
       this.broadcastMachineResultInBackground(roomId, result);
 
       return result;
@@ -1153,7 +1147,11 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
       );
 
       if (state.isRunning) {
-        this.scheduleNextTick(roomId, 5_000);
+        this.scheduleNextTick(
+          roomId,
+          1_500,
+          ROUND_MACHINE_TICK_PRIORITIES.CATCH_UP,
+        );
       } else {
         state.nextTickAt = null;
         this.states.set(roomId, state);
@@ -1192,7 +1190,6 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
       return false;
     }
 
-    // Waiting actions are internal scheduler states and should not spam clients.
     const silentActions = new Set([
       'WAITING_FOR_OPEN_TO_EXPIRE',
       'WAITING_FOR_LOCKED_PHASE',
@@ -1207,8 +1204,6 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
       return false;
     }
 
-    // Everything else is a visible state change or an error/convergence state.
-    // Emitting canonical round:state keeps the browser synchronized without polling.
     return true;
   }
 
@@ -1412,7 +1407,7 @@ export class RoundMachineService implements OnModuleInit, OnModuleDestroy {
       latestRound.status === RoundStatus.CANCELLED &&
       latestRound.cancelledAt &&
       now.getTime() <
-        latestRound.cancelledAt.getTime() + MACHINE_TIMINGS_MS.settlingPhase
+        latestRound.cancelledAt.getTime() + PUBLIC_CANCELLED_ROUND_VISIBILITY_MS
     ) {
       return latestRound;
     }

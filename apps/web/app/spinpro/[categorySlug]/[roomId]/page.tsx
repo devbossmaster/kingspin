@@ -4,25 +4,26 @@ import { useParams } from "next/navigation";
 import { useState } from "react";
 import { ConnectionPill } from "../../../../components/layout/connection-pill";
 import { EntryPanel } from "../../../../components/spinpro/entry-panel";
-import { FairnessStrip } from "../../../../components/spinpro/fairness-strip";
 import { PlayersList } from "../../../../components/spinpro/players-list";
+import { ResultRevealCard } from "../../../../components/spinpro/result-reveal-card";
 import {
   ArenaHeroCard,
   RockyTopBar,
   RoomEntryDock,
 } from "../../../../components/spinpro/room-rocky-ui";
 import { SpinningWheel } from "../../../../components/spinpro/spinning-wheel";
-import { WinnerReveal } from "../../../../components/spinpro/winner-reveal";
 import { useCountdown } from "../../../../hooks/use-countdown";
 import { useRoom } from "../../../../hooks/use-room";
 import { useSession } from "../../../../lib/auth-client";
-import { formatCoins } from "../../../../lib/format";
+import { formatCoins, formatMs } from "../../../../lib/format";
 import {
   getCategoryDisplayName,
   getRoomDisplayName,
 } from "../../../../lib/game-modes";
 import { getPublicRoundPhase } from "../../../../lib/room-summary";
 import { useRoomStore } from "../../../../stores/room-store";
+
+const ENTRY_OPEN_DURATION_MS = 60_000;
 
 export default function LiveRoomPage() {
   const params = useParams<{ categorySlug: string; roomId: string }>();
@@ -31,22 +32,13 @@ export default function LiveRoomPage() {
 
   const { data: session } = useSession();
 
-  const {
-    state,
-    latestResult,
-    wallet,
-    error,
-    isPlacingEntry,
-    myEntry,
-    placeEntry,
-  } = useRoom(roomId);
+  const { state, wallet, error, isPlacingEntry, myEntry, placeEntry } =
+    useRoom(roomId);
 
   const selectedChip = useRoomStore((store) => store.selectedChip);
   const setSelectedChip = useRoomStore((store) => store.setSelectedChip);
   const chipOptions = useRoomStore((store) => store.chipOptions);
   const connectionStatus = useRoomStore((store) => store.connectionStatus);
-  const isWinnerRevealOpen = useRoomStore((store) => store.isWinnerRevealOpen);
-  const dismissWinner = useRoomStore((store) => store.dismissWinner);
 
   const [isEntrySheetOpen, setIsEntrySheetOpen] = useState(false);
 
@@ -73,9 +65,11 @@ export default function LiveRoomPage() {
             <p className="text-xs font-black uppercase tracking-[0.22em] text-[var(--gold)]">
               Loading Room
             </p>
+
             <h1 className="mt-2 text-3xl font-black text-white">
               Preparing live table...
             </h1>
+
             <p className="mt-2 text-sm text-slate-300">
               Connecting to the room and loading the latest backend state.
             </p>
@@ -92,20 +86,27 @@ export default function LiveRoomPage() {
   }
 
   const totalEntryAmount = currentRound?.totalEntryAmount ?? "0";
+  const netPrizeAmount = currentRound?.netPrizeAmount ?? totalEntryAmount;
+
   const categoryName = getCategoryDisplayName(state.category);
   const roomName = getRoomDisplayName({
     ...state.room,
     categorySlug: state.category.slug,
   });
+
   const maxPlayers = state.room.maxPlayers ?? state.category.maxPlayers ?? 30;
 
   const visibleWinnerEntryId =
     publicPhase === "RESULT" && currentRound?.resultReason === "WINNER"
-      ? currentRound?.winnerEntryId
+      ? currentRound.winnerEntryId
       : null;
 
   const isEntryOpen = publicPhase === "ENTRY_OPEN";
+  const isRandomizing = publicPhase === "RANDOMIZING";
+  const isSpinning = publicPhase === "SPINNING";
+  const isResult = publicPhase === "RESULT";
   const isRoundFull = state.entries.length >= maxPlayers;
+
   const parsedFixedEntryAmount = Number(state.room.fixedEntryAmount ?? 0);
   const fixedEntryAmount =
     state.room.gameMode === "FIXED_EQUAL_CHANCE" &&
@@ -114,17 +115,26 @@ export default function LiveRoomPage() {
       ? parsedFixedEntryAmount
       : null;
 
+  const entryAmount = fixedEntryAmount ?? selectedChip;
+  const msUntilNextRound = currentRound?.msUntilNextRound ?? null;
+
   const bottomCtaLabel = !session?.user
     ? "Sign in to enter"
-    : !isEntryOpen
-      ? publicPhase === "RESULT"
-        ? "Next round soon"
-        : "Entries closed"
-      : isRoundFull
-        ? "The round is full"
-        : myEntry
-          ? `Your entry ${formatCoins(myEntry.amount)}`
-          : `Enter ${formatCoins(fixedEntryAmount ?? selectedChip)}`;
+    : isResult
+      ? typeof msUntilNextRound === "number" && msUntilNextRound > 0
+        ? `Next round in ${formatMs(msUntilNextRound)}`
+        : "Next round"
+      : isSpinning
+        ? "Spinning..."
+        : isRandomizing
+          ? "Drawing winner..."
+          : !isEntryOpen
+            ? "Entries closed"
+            : isRoundFull
+              ? "The round is full"
+              : myEntry
+                ? `Your entry ${formatCoins(myEntry.amount)}`
+                : `Enter ${formatCoins(entryAmount)}`;
 
   return (
     <main className="rocky-room min-h-screen overflow-x-hidden pb-28 text-white">
@@ -151,16 +161,17 @@ export default function LiveRoomPage() {
             maxPlayers={maxPlayers}
             totalEntryAmount={totalEntryAmount}
             platformFeeAmount={currentRound?.platformFeeAmount ?? "0"}
-            netPrizeAmount={currentRound?.netPrizeAmount ?? totalEntryAmount}
+            netPrizeAmount={netPrizeAmount}
             platformFeeBps={currentRound?.platformFeeBps ?? 2_000}
             msLeft={msLeft}
-            msUntilNextRound={currentRound?.msUntilNextRound}
+            msUntilNextRound={msUntilNextRound}
           />
 
           <section className="relative -mx-2 mt-2 flex min-h-[320px] items-center justify-center overflow-visible md:min-h-[410px]">
             <SpinningWheel
               entries={state.entries}
               totalEntryAmount={totalEntryAmount}
+              netPrizeAmount={netPrizeAmount}
               spinAngle={currentRound?.spinAngle}
               status={roundStatus}
               phase={roundPhase}
@@ -168,7 +179,17 @@ export default function LiveRoomPage() {
               winnerEntryId={visibleWinnerEntryId}
               locksAt={currentRound?.locksAt}
               serverNow={state.serverNow}
-              durationMs={state.room.roundDurationMs}
+              durationMs={ENTRY_OPEN_DURATION_MS}
+            />
+
+            <ResultRevealCard
+              entries={state.entries}
+              winnerEntryId={visibleWinnerEntryId}
+              netPrizeAmount={netPrizeAmount}
+              totalEntryAmount={totalEntryAmount}
+              msUntilNextRound={msUntilNextRound}
+              resultReason={currentRound?.resultReason}
+              publicPhase={publicPhase}
             />
           </section>
 
@@ -179,8 +200,9 @@ export default function LiveRoomPage() {
               </p>
 
               <p className="font-mono text-xs font-black text-[var(--gold)]">
-                Winner gets{" "}
-                {formatCoins(currentRound?.netPrizeAmount ?? totalEntryAmount)}
+                {publicPhase === "RESULT"
+  ? `Winner gets ${formatCoins(netPrizeAmount)}`
+  : `Total pool ${formatCoins(totalEntryAmount)}`}
               </p>
             </div>
 
@@ -190,11 +212,6 @@ export default function LiveRoomPage() {
               winnerEntryId={visibleWinnerEntryId}
             />
           </section>
-
-          <FairnessStrip
-            currentRound={currentRound}
-            latestResult={latestResult}
-          />
 
           {error ? (
             <div className="mt-3 rounded-2xl border border-red-400/40 bg-red-500/10 p-3 text-sm font-semibold text-red-200">
@@ -231,13 +248,6 @@ export default function LiveRoomPage() {
           }}
         />
       </RoomEntryDock>
-
-      <WinnerReveal
-        isOpen={isWinnerRevealOpen}
-        result={latestResult}
-        durationMs={currentRound?.msUntilNextRound}
-        onClose={dismissWinner}
-      />
     </main>
   );
 }

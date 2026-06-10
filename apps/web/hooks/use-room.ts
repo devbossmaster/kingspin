@@ -20,11 +20,26 @@ import { useRoomStore } from "../stores/room-store";
 
 type LiveEntry = RoomLiveState["entries"][number];
 type RoundSnapshot = NonNullable<RoomLiveState["currentRound"]>;
+type RoundLiveStateRound = RoomLiveState["currentRound"];
+
 type PendingLiveEntry = LiveEntry & {
   pending?: boolean;
   optimisticKey?: string;
   optimisticBaseEntryId?: string | null;
 };
+
+const OPEN_ROUND_MACHINE_ACTIONS = new Set([
+  "STARTED_OPEN_ROUND",
+  "CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT",
+  "CANCELLED_SINGLE_PLAYER_ROUND_AND_STARTED_NEXT",
+  "CANCELLED_EMPTY_LOCKED_ROUND_AND_STARTED_NEXT",
+  "CANCELLED_SINGLE_PLAYER_LOCKED_ROUND_AND_STARTED_NEXT",
+  "STARTED_NEXT_ROUND_AFTER_COMPLETION",
+]);
+
+const RESULT_STATE_SYNC_BUFFER_MS = 250;
+const RESULT_STATE_SYNC_RETRY_MS = 1200;
+const RESULT_STATE_SYNC_MAX_ATTEMPTS = 20;
 
 function createIdempotencyKey(roomId: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -49,20 +64,6 @@ function isCompletedRound(round: RoundLiveStateRound | null | undefined) {
   return round?.status === "COMPLETED";
 }
 
-type RoundLiveStateRound = RoomLiveState["currentRound"];
-
-const OPEN_ROUND_MACHINE_ACTIONS = new Set([
-  "STARTED_OPEN_ROUND",
-  "CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT",
-  "CANCELLED_SINGLE_PLAYER_ROUND_AND_STARTED_NEXT",
-  "CANCELLED_EMPTY_LOCKED_ROUND_AND_STARTED_NEXT",
-  "CANCELLED_SINGLE_PLAYER_LOCKED_ROUND_AND_STARTED_NEXT",
-  "STARTED_NEXT_ROUND_AFTER_COMPLETION",
-]);
-const RESULT_STATE_SYNC_BUFFER_MS = 350;
-const RESULT_STATE_SYNC_RETRY_MS = 1500;
-const RESULT_STATE_SYNC_MAX_ATTEMPTS = 24;
-
 function isNewOpenRound(
   previousRound: RoundLiveStateRound | null | undefined,
   nextRound: RoundLiveStateRound | null | undefined,
@@ -70,9 +71,22 @@ function isNewOpenRound(
   if (!nextRound || getPublicRoundPhase(nextRound) !== "ENTRY_OPEN") {
     return false;
   }
+
   if (!previousRound) return true;
 
   return previousRound.id !== nextRound.id;
+}
+
+function calculateNetPrizeAmount(totalEntryAmount: string, platformFeeBps = 0) {
+  try {
+    const total = BigInt(totalEntryAmount || "0");
+    const feeBps = BigInt(platformFeeBps);
+    const fee = (total * feeBps) / 10_000n;
+
+    return (total - fee).toString();
+  } catch {
+    return totalEntryAmount;
+  }
 }
 
 function devLog(message: string, details?: unknown) {
@@ -117,8 +131,6 @@ export function useRoom(roomId: string) {
     (store) => store.setConnectionStatus,
   );
   const setChipOptions = useRoomStore((store) => store.setChipOptions);
-  const showWinner = useRoomStore((store) => store.showWinner);
-  const dismissWinner = useRoomStore((store) => store.dismissWinner);
 
   const visibleWallet = fastWallet ?? wallet;
 
@@ -205,9 +217,6 @@ export function useRoom(roomId: string) {
       transientNoRoundSinceRef.current = Date.now();
     }
 
-    // Permanent rooms can briefly have no active round while the backend
-    // transitions CANCELLED/COMPLETED -> next OPEN. Do not let that tiny
-    // socket snapshot flicker the whole game UI to "NO ROUND".
     if (elapsedMs < 5_000) {
       devLog("ignored transient no-round snapshot", {
         previousRoundId: previousRound.id,
@@ -224,11 +233,13 @@ export function useRoom(roomId: string) {
 
     return nextState;
   }, []);
+
   const applyState = useCallback(
     (nextState: RoomLiveState) => {
       const normalizedState = mergePendingEntries(
         normalizeIncomingState(nextState),
       );
+
       const previousRound = lastRoundRef.current;
       const nextRound = normalizedState.currentRound;
 
@@ -253,7 +264,6 @@ export function useRoom(roomId: string) {
         pendingEntriesRef.current.clear();
         pendingEntryBackupsRef.current.clear();
         setLatestResult(null);
-        dismissWinner();
         setFastWallet(null);
       }
 
@@ -273,7 +283,6 @@ export function useRoom(roomId: string) {
       clearResultTimer,
       clearResultStateRefreshTimer,
       clearWalletTimer,
-      dismissWinner,
       mergePendingEntries,
       normalizeIncomingState,
       setChipOptions,
@@ -308,38 +317,25 @@ export function useRoom(roomId: string) {
   }, [fetchWallet]);
 
   const scheduleCompletedRoundEffects = useCallback(
-    (round: RoundSnapshot, delayMs = 900) => {
+    (round: RoundSnapshot, delayMs = 120) => {
       clearResultTimer();
       clearWalletTimer();
 
       resultFetchTimerRef.current = window.setTimeout(() => {
-        void (async () => {
-          const result = await fetchLatestResult();
-
-          if (result) {
-            devLog("winner reveal shown", {
-              roundId: round.id,
-              roundNumber: round.roundNumber,
-            });
-            showWinner(result);
-          }
-        })();
+        void fetchLatestResult();
       }, delayMs);
 
-      walletRefreshTimerRef.current = window.setTimeout(
-        () => {
-          void refreshWallet();
-        },
-        Math.max(delayMs, 1200),
-      );
+      walletRefreshTimerRef.current = window.setTimeout(() => {
+        void refreshWallet();
+      }, Math.max(delayMs, 650));
+
+      devLog("completed round effects scheduled", {
+        roundId: round.id,
+        roundNumber: round.roundNumber,
+        delayMs,
+      });
     },
-    [
-      clearResultTimer,
-      clearWalletTimer,
-      fetchLatestResult,
-      refreshWallet,
-      showWinner,
-    ],
+    [clearResultTimer, clearWalletTimer, fetchLatestResult, refreshWallet],
   );
 
   const scheduleResultStateRefresh = useCallback(
@@ -359,6 +355,7 @@ export function useRoom(roomId: string) {
           typeof round.msUntilNextRound === "number"
             ? round.msUntilNextRound
             : round.msUntilPhaseEnd;
+
         const delayMs =
           attempt === 0
             ? Math.max(RESULT_STATE_SYNC_BUFFER_MS, phaseDelayMs) +
@@ -409,11 +406,11 @@ export function useRoom(roomId: string) {
 
         walletRefreshTimerRef.current = window.setTimeout(() => {
           void refreshWallet();
-        }, 1200);
+        }, 900);
       }
 
       if (isCompletedRound(round)) {
-        scheduleCompletedRoundEffects(round);
+        scheduleCompletedRoundEffects(round, 120);
       }
 
       if (
@@ -488,6 +485,7 @@ export function useRoom(roomId: string) {
         };
 
         lastRoundRef.current = nextState.currentRound ?? null;
+        lastNonNullStateRef.current = nextState;
 
         return nextState;
       });
@@ -556,19 +554,32 @@ export function useRoom(roomId: string) {
             )
           : [...currentState.entries, pendingEntry];
 
-        const nextTotal = (
+        const nextTotalEntryAmount = (
           BigInt(round.totalEntryAmount ?? "0") + BigInt(amount)
         ).toString();
 
-        return {
-          ...currentState,
-          currentRound: {
-            ...round,
-            totalEntryAmount: nextTotal,
-            payoutAmount: nextTotal,
-          },
-          entries: entries.sort(compareEntriesByCreatedAt),
-        };
+        const nextPlatformFeeAmount = (
+          (BigInt(nextTotalEntryAmount) * BigInt(round.platformFeeBps ?? 0)) /
+          10_000n
+        ).toString();
+
+        const nextNetPrizeAmount = calculateNetPrizeAmount(
+          nextTotalEntryAmount,
+          round.platformFeeBps ?? 0,
+        );
+
+       return {
+  ...currentState,
+  currentRound: {
+    ...round,
+    totalEntryAmount: nextTotalEntryAmount,
+    grossPoolAmount: nextTotalEntryAmount,
+    payoutAmount: nextNetPrizeAmount,
+    platformFeeAmount: nextPlatformFeeAmount,
+    netPrizeAmount: nextNetPrizeAmount,
+  },
+  entries: entries.sort(compareEntriesByCreatedAt),
+};
       });
     },
     [user],
@@ -588,6 +599,7 @@ export function useRoom(roomId: string) {
 
       const amountDelta =
         BigInt(pendingEntry.amount) - BigInt(backupEntry?.amount ?? "0");
+
       const nextEntries = backupEntry
         ? currentState.entries.map((entry) =>
             entry.id === pendingEntry.id ||
@@ -599,19 +611,41 @@ export function useRoom(roomId: string) {
 
       const round = currentState.currentRound;
 
+      if (!round) {
+        return {
+          ...currentState,
+          entries: nextEntries.sort(compareEntriesByCreatedAt),
+        };
+      }
+
+      const nextTotalEntryAmount = (
+        BigInt(round.totalEntryAmount ?? "0") - amountDelta
+      ).toString();
+
+      const nextPayoutAmount = (
+        BigInt(round.payoutAmount ?? "0") - amountDelta
+      ).toString();
+
+      const nextPlatformFeeAmount = (
+  (BigInt(nextTotalEntryAmount) * BigInt(round.platformFeeBps ?? 0)) /
+  10_000n
+).toString();
+
+const nextNetPrizeAmount = calculateNetPrizeAmount(
+  nextTotalEntryAmount,
+  round.platformFeeBps ?? 0,
+);
+
       return {
         ...currentState,
-        currentRound: round
-          ? {
-              ...round,
-              totalEntryAmount: (
-                BigInt(round.totalEntryAmount ?? "0") - amountDelta
-              ).toString(),
-              payoutAmount: (
-                BigInt(round.payoutAmount ?? "0") - amountDelta
-              ).toString(),
-            }
-          : round,
+     currentRound: {
+  ...round,
+  totalEntryAmount: nextTotalEntryAmount,
+  grossPoolAmount: nextTotalEntryAmount,
+  payoutAmount: nextNetPrizeAmount,
+  platformFeeAmount: nextPlatformFeeAmount,
+  netPrizeAmount: nextNetPrizeAmount,
+},
         entries: nextEntries.sort(compareEntriesByCreatedAt),
       };
     });
@@ -634,9 +668,6 @@ export function useRoom(roomId: string) {
     };
 
     setConnectionStatus(socket.connected ? "connected" : "connecting");
-
-    // Always fetch once. Socket join also sends state, but HTTP gives a stable
-    // first snapshot if the socket connects early or a broadcast is missed.
     void refresh();
 
     const onConnect = () => {
@@ -694,7 +725,7 @@ export function useRoom(roomId: string) {
         clearResultStateRefreshTimer();
         clearWalletTimer();
         setLatestResult(null);
-        dismissWinner();
+        setFastWallet(null);
         void refresh();
         return;
       }
@@ -706,7 +737,7 @@ export function useRoom(roomId: string) {
         const currentRound = lastRoundRef.current;
 
         if (currentRound && currentRound.status === "COMPLETED") {
-          scheduleCompletedRoundEffects(currentRound, 400);
+          scheduleCompletedRoundEffects(currentRound, 80);
         } else {
           void refresh();
         }
@@ -755,7 +786,6 @@ export function useRoom(roomId: string) {
     clearResultTimer,
     clearResultStateRefreshTimer,
     clearWalletTimer,
-    dismissWinner,
     handleRoundSnapshotSideEffects,
     refresh,
     roomId,
@@ -829,14 +859,12 @@ export function useRoom(roomId: string) {
         socket.connect();
       }
 
-      // After lock time, retry a few times by socket only. This is not polling;
-      // it is a short convergence guard when a transition broadcast is missed.
       if (attempts < 6) {
-        retryTimer = window.setTimeout(requestAuthoritativeSync, 1000);
+        retryTimer = window.setTimeout(requestAuthoritativeSync, 900);
       }
     };
 
-    const delayMs = Math.max(0, locksAtMs - Date.now() + 350);
+    const delayMs = Math.max(0, locksAtMs - Date.now() + 250);
     const timer = window.setTimeout(requestAuthoritativeSync, delayMs);
 
     return () => {
@@ -848,6 +876,7 @@ export function useRoom(roomId: string) {
       }
     };
   }, [deadlineRound, roomId]);
+
   const placeEntry = useCallback(
     async (amount: number) => {
       if (!roomId || placingEntryRef.current) return;

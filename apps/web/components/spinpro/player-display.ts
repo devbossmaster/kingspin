@@ -5,6 +5,10 @@ export type DisplayEntry = EntryWithPlayerSnapshot & {
   pending?: boolean;
 };
 
+/**
+ * 30-color wheel/list palette.
+ * Max room size is 30 players.
+ */
 export const PLAYER_SLICE_COLORS = [
   "#22c55e",
   "#ec4899",
@@ -15,9 +19,64 @@ export const PLAYER_SLICE_COLORS = [
   "#14b8a6",
   "#facc15",
   "#3b82f6",
+  "#f43f5e",
+
+  "#84cc16",
   "#a855f7",
+  "#0ea5e9",
+  "#fb923c",
   "#10b981",
+  "#eab308",
+  "#6366f1",
   "#fb7185",
+  "#2dd4bf",
+  "#c084fc",
+
+  "#65a30d",
+  "#d946ef",
+  "#0284c7",
+  "#ea580c",
+  "#059669",
+  "#ca8a04",
+  "#4f46e5",
+  "#dc2626",
+  "#0891b2",
+  "#9333ea",
+];
+
+export const PLAYER_AVATAR_GLYPHS = [
+  "♞",
+  "♛",
+  "♜",
+  "♟",
+  "✦",
+  "✧",
+  "★",
+  "◆",
+  "●",
+  "▲",
+
+  "♠",
+  "♥",
+  "♦",
+  "♣",
+  "⚡",
+  "☄",
+  "☀",
+  "☾",
+  "✹",
+  "✺",
+
+  "✶",
+  "✷",
+  "✸",
+  "✻",
+  "✽",
+  "✿",
+  "❖",
+  "⬟",
+  "⬢",
+  "⬣",
 ];
 
 function hashColorKey(value: string) {
@@ -59,15 +118,23 @@ export function getEntryColorKey(entry: DisplayEntry, index: number) {
 }
 
 export function getPaletteColor(index: number, stableKey?: string | null) {
+  if (Number.isFinite(index) && index >= 0) {
+    return PLAYER_SLICE_COLORS[index % PLAYER_SLICE_COLORS.length] ?? "#22c55e";
+  }
+
   const colorIndex = stableKey
     ? hashColorKey(stableKey) % PLAYER_SLICE_COLORS.length
-    : index % PLAYER_SLICE_COLORS.length;
+    : 0;
 
   return PLAYER_SLICE_COLORS[colorIndex] ?? "#22c55e";
 }
 
 export function getEntryDisplayColor(entry: DisplayEntry, index: number) {
   return getPaletteColor(index, getEntryColorKey(entry, index));
+}
+
+export function getPlayerAvatarGlyph(index: number) {
+  return PLAYER_AVATAR_GLYPHS[index % PLAYER_AVATAR_GLYPHS.length] ?? "●";
 }
 
 export function getPlayerDisplayName(

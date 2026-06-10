@@ -46,6 +46,11 @@ const CANCELLABLE_ROUND_STATUSES: RoundStatus[] = [
 const LATEST_RESULT_TIMING_WARN_THRESHOLD_MS = 1_000;
 const ROUND_TRANSACTION_TIMING_WARN_THRESHOLD_MS = 300;
 const PUBLIC_WINNER_FEED_LIMIT = 15;
+const ENTRY_OPEN_DURATION_MS = 60_000;
+
+function getEntryOpenDurationMs(_roomRoundDurationMs: number | null | undefined) {
+  return ENTRY_OPEN_DURATION_MS;
+}
 
 export function calculatePlatformFeeAmount(
   grossPoolAmount: bigint,
@@ -56,6 +61,33 @@ export function calculatePlatformFeeAmount(
   }
 
   return (grossPoolAmount * BigInt(platformFeeBps)) / 10_000n;
+}
+
+export function calculateWinnerPayoutAmounts(args: {
+  totalEntryAmount: bigint;
+  winnerEntryAmount: bigint;
+  platformFeeBps: number;
+}) {
+  const safeTotalEntryAmount =
+    args.totalEntryAmount > 0n ? args.totalEntryAmount : 0n;
+  const safeWinnerEntryAmount =
+    args.winnerEntryAmount > 0n ? args.winnerEntryAmount : 0n;
+  const losingPoolAmount =
+    safeTotalEntryAmount > safeWinnerEntryAmount
+      ? safeTotalEntryAmount - safeWinnerEntryAmount
+      : 0n;
+  const platformFeeAmount = calculatePlatformFeeAmount(
+    losingPoolAmount,
+    args.platformFeeBps,
+  );
+  const payoutAmount =
+    safeWinnerEntryAmount + losingPoolAmount - platformFeeAmount;
+
+  return {
+    losingPoolAmount,
+    platformFeeAmount,
+    payoutAmount,
+  };
 }
 
 export type RoundSnapshot = {
@@ -381,10 +413,7 @@ export class RoundsService {
     const roundNumber = args.latestRoundNumber + 1;
     const openedAt = new Date();
     const env = getApiEnv();
-    const entryWindowMs = Math.max(
-      1_000,
-      args.roundDurationMs - env.ROUND_ENTRY_CUTOFF_BUFFER_MS,
-    );
+    const entryWindowMs = getEntryOpenDurationMs(args.roundDurationMs);
     const locksAt = new Date(openedAt.getTime() + entryWindowMs);
 
     const serverSeed = randomBytes(32).toString('hex');
@@ -521,11 +550,6 @@ export class RoundsService {
       const finalTotal = assignment.totalAmount;
       const platformFeeBps =
         currentRound.platformFeeBps ?? getApiEnv().PLATFORM_FEE_BPS;
-      const platformFeeAmount = calculatePlatformFeeAmount(
-        finalTotal,
-        platformFeeBps,
-      );
-      const netPrizeAmount = finalTotal - platformFeeAmount;
       const lockedEntries = await tx.entry.findMany({
         where: { roundId: currentRound.id },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -538,8 +562,11 @@ export class RoundsService {
         where: { id: currentRound.id },
         data: {
           totalEntryAmount: finalTotal,
-          houseFeeAmount: platformFeeAmount,
-          payoutAmount: netPrizeAmount,
+          // Final fee and payout depend on the winner.
+          // Winner always gets their own entry back; fee is taken only from
+          // the losing/opponent pool after the draw selects a winner.
+          houseFeeAmount: 0n,
+          payoutAmount: finalTotal,
           platformFeeBps,
           fairnessAlgorithm: FAIRNESS_ALGORITHM,
           entriesHash,
@@ -684,6 +711,14 @@ export class RoundsService {
       currentRound.totalEntryAmount,
     );
 
+    const platformFeeBps =
+      currentRound.platformFeeBps ?? getApiEnv().PLATFORM_FEE_BPS;
+    const { platformFeeAmount, payoutAmount } = calculateWinnerPayoutAmounts({
+      totalEntryAmount: currentRound.totalEntryAmount,
+      winnerEntryAmount: winnerEntry.amount,
+      platformFeeBps,
+    });
+
     const result = await this.prisma.$transaction(async (tx) => {
       const updateResult = await tx.round.updateMany({
         where: {
@@ -701,6 +736,9 @@ export class RoundsService {
           winnerEntryId: winnerEntry.id,
           winnerUserId: winnerEntry.userId,
           spinAngle,
+          houseFeeAmount: platformFeeAmount,
+          payoutAmount,
+          platformFeeBps,
         },
       });
 
@@ -1313,10 +1351,7 @@ export class RoundsService {
             CAST(${RoundStatus.OPEN} AS "RoundStatus"),
             ${openedAt},
             ${openedAt} + (
-              GREATEST(
-                1000,
-                candidate."roundDurationMs" - ${env.ROUND_ENTRY_CUTOFF_BUFFER_MS}
-              ) * INTERVAL '1 millisecond'
+              ${ENTRY_OPEN_DURATION_MS} * INTERVAL '1 millisecond'
             ),
             0,
             0,
@@ -2265,13 +2300,9 @@ export class RoundsService {
         ? getApiEnv().PLATFORM_FEE_BPS
         : 0);
     const platformFeeAmount =
-      round.status === RoundStatus.OPEN
-        ? calculatePlatformFeeAmount(grossPoolAmount, platformFeeBps)
-        : round.houseFeeAmount;
+      round.status === RoundStatus.OPEN ? 0n : round.houseFeeAmount;
     const netPrizeAmount =
-      round.status === RoundStatus.OPEN
-        ? grossPoolAmount - platformFeeAmount
-        : round.payoutAmount;
+      round.status === RoundStatus.OPEN ? grossPoolAmount : round.payoutAmount;
 
     return {
       id: round.id,

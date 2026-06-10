@@ -18,7 +18,7 @@ type RoundPhaseSource = {
 
 export const PUBLIC_ROUND_PHASE_LABELS: Record<PublicRoundPhase, string> = {
   ENTRY_OPEN: "ENTRY OPEN",
-  RANDOMIZING: "RANDOMIZING",
+  RANDOMIZING: "DRAWING",
   SPINNING: "SPINNING",
   RESULT: "RESULT",
 };
@@ -123,8 +123,9 @@ export function getRoundStatusTone(
 
 export function getRoomPool(room?: RoomListItem | null) {
   return (
-    room?.currentRound?.totalPool ??
+    room?.currentRound?.netPrizeAmount ??
     room?.currentRound?.payoutAmount ??
+    room?.currentRound?.totalPool ??
     room?.currentRound?.totalEntryAmount ??
     "0"
   );

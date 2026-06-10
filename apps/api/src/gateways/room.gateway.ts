@@ -49,16 +49,20 @@ import {
 } from '../modules/redis/redis.service';
 
 type GameServer = Server<ClientToServerEvents, ServerToClientEvents>;
+
 type GameSocketData = {
   userId?: string;
 };
+
 type GameSocket = Socket<
   ClientToServerEvents,
   ServerToClientEvents,
   Record<string, never>,
   GameSocketData
 >;
+
 type RedisAdapterClient = RedisDedicatedClient;
+
 type PendingRoomBroadcast = {
   timer: ReturnType<typeof setTimeout>;
   reasons: Set<string>;
@@ -67,9 +71,11 @@ type PendingRoomBroadcast = {
   reject: (error: unknown) => void;
   promise: Promise<void>;
 };
+
 type PendingCategoryBroadcast = PendingRoomBroadcast & {
   useCachedSummary: boolean;
 };
+
 type OpenRoundSummaryPatch = {
   id: string;
   roomId: string;
@@ -99,11 +105,27 @@ type OpenRoundSummaryPatch = {
   spinAngle: number | null;
 };
 
-const ROOM_BROADCAST_COALESCE_MS = 50;
+const ROOM_BROADCAST_COALESCE_MS = 30;
+const ROOM_BROADCAST_IMMEDIATE_MS = 0;
 const ROOM_BROADCAST_REDIS_LOCK_TTL_MS = 1_000;
 const PRESENCE_TTL_MS = 30_000;
 const PRESENCE_HEARTBEAT_MS = 15_000;
 const BROADCAST_TIMING_WARN_THRESHOLD_MS = 300;
+
+const IMMEDIATE_ROOM_STATE_ACTIONS = new Set([
+  'STARTED_OPEN_ROUND',
+  'CANCELLED_EMPTY_ROUND_AND_STARTED_NEXT',
+  'CANCELLED_SINGLE_PLAYER_ROUND_AND_STARTED_NEXT',
+  'CANCELLED_EMPTY_LOCKED_ROUND_AND_STARTED_NEXT',
+  'CANCELLED_SINGLE_PLAYER_LOCKED_ROUND_AND_STARTED_NEXT',
+  'STARTED_NEXT_ROUND_AFTER_COMPLETION',
+  'LOCKED_ROUND',
+  'DREW_ROUND',
+  'STARTED_SPINNING_ROUND',
+  'STARTED_SETTLING_ROUND',
+  'SETTLED_ROUND',
+  'RESUMED_SETTLEMENT',
+]);
 
 function allowConfiguredSocketOrigin(
   origin: string | undefined,
@@ -335,6 +357,7 @@ export class RoomGateway
     const rooms =
       await this.roomsService.findActiveByCategorySlug(categorySlug);
     const emittedAt = new Date().toISOString();
+
     const categoryState = SocketCategoryStateEventSchema.parse({
       categorySlug,
       reason: 'JOINED_CATEGORY',
@@ -377,9 +400,13 @@ export class RoomGateway
     });
   }
 
-  async broadcastRoundState(roomId: string, reason: string) {
+  async broadcastRoundState(
+    roomId: string,
+    reason: string,
+    options: { immediate?: boolean } = {},
+  ) {
     try {
-      return this.scheduleRoomStateBroadcast(roomId, reason);
+      return this.scheduleRoomStateBroadcast(roomId, reason, options);
     } catch (error) {
       this.logBroadcastFailed(roomId, reason, error);
       throw error;
@@ -407,14 +434,6 @@ export class RoomGateway
     await Promise.resolve();
 
     const payload = this.toSocketSafePayload(result);
-
-    /**
-     * Performance fix:
-     *
-     * Do not block machine-event emission on a full room snapshot rebuild.
-     * The caller already runs this in the background, but this keeps the gateway
-     * itself responsive and avoids serial socket work.
-     */
     const action =
       payload && typeof payload === 'object' && 'action' in payload
         ? String((payload as { action?: unknown }).action)
@@ -422,7 +441,9 @@ export class RoomGateway
 
     this.queueOpenRoundSummaryPatch(roomId, payload);
 
-    void this.broadcastRoundState(roomId, action).catch((error: unknown) => {
+    void this.broadcastRoundState(roomId, action, {
+      immediate: this.shouldBroadcastRoomStateImmediately(action),
+    }).catch((error: unknown) => {
       const message =
         error instanceof Error ? error.message : 'Unknown round state error';
 
@@ -502,6 +523,10 @@ export class RoomGateway
     }
 
     this.emitMachineEvent(roomId, SOCKET_EVENTS.ROUND_UPDATED, action, payload);
+  }
+
+  private shouldBroadcastRoomStateImmediately(action: string) {
+    return IMMEDIATE_ROOM_STATE_ACTIONS.has(action);
   }
 
   private emitMachineEvent(
@@ -637,33 +662,54 @@ export class RoomGateway
     return user;
   }
 
-  private scheduleRoomStateBroadcast(roomId: string, reason: string) {
+  private scheduleRoomStateBroadcast(
+    roomId: string,
+    reason: string,
+    options: { immediate?: boolean } = {},
+  ) {
+    const immediate = options.immediate === true;
     const existing = this.pendingBroadcastsByRoom.get(roomId);
 
     if (existing) {
       existing.reasons.add(reason);
       existing.count += 1;
+
+      if (immediate) {
+        clearTimeout(existing.timer);
+        existing.timer = setTimeout(() => {
+          void this.flushRoomStateBroadcast(roomId).catch((error: unknown) => {
+            const current = this.pendingBroadcastsByRoom.get(roomId);
+            current?.reject(error);
+          });
+        }, ROOM_BROADCAST_IMMEDIATE_MS);
+      }
+
       this.metrics?.increment('socketCoalescedBroadcastCount');
       this.logRealtimeDebug(
-        `broadcast scheduled roomId=${roomId} reason=${reason} coalesced=true pending=${existing.count}`,
+        `broadcast scheduled roomId=${roomId} reason=${reason} coalesced=true immediate=${immediate} pending=${existing.count}`,
       );
+
       return existing.promise;
     }
 
     let resolve!: () => void;
     let reject!: (error: unknown) => void;
+
     const promise = new Promise<void>((innerResolve, innerReject) => {
       resolve = innerResolve;
       reject = innerReject;
     });
 
     const pending: PendingRoomBroadcast = {
-      timer: setTimeout(() => {
-        void this.flushRoomStateBroadcast(roomId).catch((error: unknown) => {
-          const current = this.pendingBroadcastsByRoom.get(roomId);
-          current?.reject(error);
-        });
-      }, ROOM_BROADCAST_COALESCE_MS),
+      timer: setTimeout(
+        () => {
+          void this.flushRoomStateBroadcast(roomId).catch((error: unknown) => {
+            const current = this.pendingBroadcastsByRoom.get(roomId);
+            current?.reject(error);
+          });
+        },
+        immediate ? ROOM_BROADCAST_IMMEDIATE_MS : ROOM_BROADCAST_COALESCE_MS,
+      ),
       reasons: new Set([reason]),
       count: 1,
       resolve,
@@ -673,7 +719,7 @@ export class RoomGateway
 
     this.pendingBroadcastsByRoom.set(roomId, pending);
     this.logRealtimeDebug(
-      `broadcast scheduled roomId=${roomId} reason=${reason} coalesced=false pending=1`,
+      `broadcast scheduled roomId=${roomId} reason=${reason} coalesced=false immediate=${immediate} pending=1`,
     );
 
     return promise;
@@ -767,6 +813,7 @@ export class RoomGateway
 
       const snapshot = await this.getRoomStateSnapshot(roomId);
       const reasons = [...pending.reasons];
+
       const payload = SocketRoundStateEventSchema.parse({
         roomId,
         reason: reasons.length === 1 ? reasons[0] : reasons.join('+'),
@@ -828,6 +875,7 @@ export class RoomGateway
 
     let resolve!: () => void;
     let reject!: (error: unknown) => void;
+
     const promise = new Promise<void>((innerResolve, innerReject) => {
       resolve = innerResolve;
       reject = innerReject;
@@ -888,6 +936,7 @@ export class RoomGateway
       const rooms =
         await this.roomsService.findActiveByCategorySlug(categorySlug);
       const reasons = [...pending.reasons];
+
       const payload = SocketCategoryStateEventSchema.parse({
         categorySlug,
         reason: reasons.length === 1 ? reasons[0] : reasons.join('+'),
@@ -966,9 +1015,11 @@ export class RoomGateway
 
     if (roomId) {
       rooms?.delete(roomId);
+
       if (rooms?.size === 0) {
         this.socketRoomsById.delete(socketId);
       }
+
       return;
     }
 
@@ -992,6 +1043,7 @@ export class RoomGateway
                 error instanceof Error
                   ? error.message
                   : 'Unknown presence heartbeat error';
+
               this.logger.warn(`Presence heartbeat failed: ${message}`);
             });
         }
@@ -1137,8 +1189,6 @@ export class RoomGateway
       return true;
     }
 
-    // With a Redis adapter, another API instance may own the sockets for this
-    // room. Stay conservative and emit the cross-node broadcast.
     return this.redisService?.isAvailable() === true;
   }
 

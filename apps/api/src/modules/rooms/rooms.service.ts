@@ -82,12 +82,14 @@ export class RoomsService {
       staleUntil: number;
     }
   >();
+
   private readonly inFlightLiveSummaryByCategory = new Map<
     string,
     Promise<
       Awaited<ReturnType<RoomsService['buildLiveRoomSummariesForCategory']>>
     >
   >();
+
   private readonly categorySlugByRoomId = new Map<string, string | null>();
 
   constructor(
@@ -108,11 +110,13 @@ export class RoomsService {
 
     if (cached && cached.expiresAt > now) {
       const snapshot = this.rebaseLiveRoomSummarySnapshot(cached.snapshot);
+
       this.logLiveSummaryTiming(cacheKey, {
         source: 'cache',
         totalMs: Date.now() - startedAt,
         roomCount: snapshot.length,
       });
+
       return snapshot;
     }
 
@@ -177,6 +181,7 @@ export class RoomsService {
     const queryStartedAt = Date.now();
     const rows = await this.queryLiveRoomSummaryRows(categorySlug);
     const queryMs = Date.now() - queryStartedAt;
+
     const serializeStartedAt = Date.now();
     const snapshot = this.serializeLiveRoomSummaryRows(rows);
     const serializeMs = Date.now() - serializeStartedAt;
@@ -214,6 +219,7 @@ export class RoomsService {
 
     for (const [categorySlug, cached] of this.liveSummaryCacheByCategory) {
       let categoryChanged = false;
+
       const snapshot = cached.snapshot.map((room) => {
         if (room.id !== roomId) {
           return room;
@@ -385,11 +391,13 @@ export class RoomsService {
         (status) => Prisma.sql`CAST(${status} AS "RoundStatus")`,
       ),
     );
+
     const publicSummaryStatuses = Prisma.join(
       PUBLIC_SUMMARY_ROUND_STATUSES.map(
         (status) => Prisma.sql`CAST(${status} AS "RoundStatus")`,
       ),
     );
+
     const completedVisibleSince = new Date(
       Date.now() - COMPLETED_ROUND_VISIBILITY_MS,
     );
@@ -447,8 +455,8 @@ export class RoomsService {
           ro."cancelledAt",
           ro."totalEntryAmount",
           ro."houseFeeAmount",
-          ro."payoutAmount"
-          ,ro."platformFeeBps"
+          ro."payoutAmount",
+          ro."platformFeeBps"
         FROM rounds ro
         WHERE ro."roomId" = r.id
           AND ro.status IN (${publicSummaryStatuses})
@@ -515,27 +523,33 @@ export class RoomsService {
       const entryCount = row.entryCount ?? 0;
       const playerCount = row.playerCount ?? 0;
       const liveEntryAmount = row.liveEntryAmount ?? 0n;
+
       const totalEntryAmount =
         roundStatus === RoundStatus.OPEN
           ? liveEntryAmount
           : (row.roundTotalEntryAmount ?? liveEntryAmount);
+
       const platformFeeBps =
         row.roundPlatformFeeBps ??
         (roundStatus === RoundStatus.OPEN
           ? getApiEnv().PLATFORM_FEE_BPS
           : 0);
+
       const platformFeeAmount =
         roundStatus === RoundStatus.OPEN
           ? (totalEntryAmount * BigInt(platformFeeBps)) / 10_000n
           : (row.roundHouseFeeAmount ?? 0n);
+
       const payoutAmount =
         roundStatus === RoundStatus.OPEN
           ? totalEntryAmount - platformFeeAmount
           : (row.roundPayoutAmount ?? totalEntryAmount);
+
       const msUntilLock =
         roundStatus === RoundStatus.OPEN && row.roundLocksAt
           ? Math.max(0, row.roundLocksAt.getTime() - serverNow.getTime())
           : 0;
+
       const publicRoundView = buildPublicRoundPhaseView(
         {
           status: roundStatus,
@@ -601,6 +615,7 @@ export class RoomsService {
 
   private toOpenLiveRoundSummary(round: RoundSnapshot, serverNow: Date) {
     const locksAt = this.parseNullableDate(round.locksAt);
+
     const publicRoundView = buildPublicRoundPhaseView(
       {
         status: RoundStatus.OPEN,
@@ -616,6 +631,7 @@ export class RoomsService {
       },
       serverNow,
     );
+
     const msUntilLock = locksAt
       ? Math.max(0, locksAt.getTime() - serverNow.getTime())
       : 0;
@@ -662,11 +678,33 @@ export class RoomsService {
       throw new NotFoundException('Room not found.');
     }
 
-    const currentRound = await this.roundsService.findCurrentRoundForRoom(
-      room.id,
-    );
+    const currentRound = await this.prisma.round.findFirst({
+      where: {
+        roomId: room.id,
+        status: { in: ACTIVE_ROUND_STATUSES },
+      },
+      orderBy: { roundNumber: 'desc' },
+    });
+
+    const entries = currentRound
+      ? await this.prisma.entry.findMany({
+          where: { roundId: currentRound.id },
+          include: {
+            user: {
+              select: {
+                id: true,
+                username: true,
+                fullName: true,
+              },
+            },
+          },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        })
+      : [];
 
     return {
+      serverNow: new Date().toISOString(),
+
       room: {
         id: room.id,
         categoryId: room.categoryId,
@@ -680,6 +718,7 @@ export class RoomsService {
         roundDurationMs: room.roundDurationMs,
         activatedAt: room.activatedAt?.toISOString() ?? null,
       },
+
       category: {
         id: room.category.id,
         name: room.category.name,
@@ -689,7 +728,29 @@ export class RoomsService {
         maxPlayers: room.category.maxPlayers,
         roundDurationMs: room.category.roundDurationMs,
       },
-      currentRound,
+
+      currentRound: currentRound
+        ? this.roundsService.toLiveRoundSnapshot(currentRound, entries.length)
+        : null,
+
+   entries: entries.map((entry) => ({
+  id: entry.id,
+  roundId: entry.roundId,
+  userId: entry.userId,
+  amount: entry.amount.toString(),
+  ticketStart: entry.ticketStart?.toString() ?? null,
+  ticketEnd: entry.ticketEnd?.toString() ?? null,
+  isWinner: entry.isWinner,
+  createdAt: entry.createdAt.toISOString(),
+  updatedAt: entry.updatedAt.toISOString(),
+  player: entry.user
+    ? {
+        id: entry.user.id,
+        username: entry.user.username,
+        fullName: entry.user.fullName,
+      }
+    : null,
+})),
     };
   }
 }

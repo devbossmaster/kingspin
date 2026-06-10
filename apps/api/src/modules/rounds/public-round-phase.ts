@@ -5,11 +5,11 @@ import type {
 } from '@kingspin/contracts';
 
 export const ROUND_MACHINE_TIMINGS_MS = {
-  lockedPhase: 1_500,
-  drawingPhase: 500,
-  spinningPhase: 6_500,
-  settlingPhase: 1_000,
-  cooldownPhase: 9_000,
+  lockedPhase: 800,
+  drawingPhase: 300,
+  spinningPhase: 8_000,
+  settlingPhase: 300,
+  cooldownPhase: 10_000,
 };
 
 export const PUBLIC_COMPLETED_ROUND_VISIBILITY_MS =
@@ -22,7 +22,7 @@ export const PUBLIC_CANCELLED_ROUND_VISIBILITY_MS =
 
 const PUBLIC_PHASE_LABELS: Record<PublicRoundPhase, string> = {
   ENTRY_OPEN: 'ENTRY OPEN',
-  RANDOMIZING: 'RANDOMIZING',
+  RANDOMIZING: 'DRAWING',
   SPINNING: 'SPINNING',
   RESULT: 'RESULT',
 };
@@ -146,8 +146,7 @@ export function buildPublicRoundPhaseView(
   if (status === RoundStatus.SETTLING) {
     const phaseEndsAt = addMs(
       input.settlingAt,
-      ROUND_MACHINE_TIMINGS_MS.settlingPhase +
-        ROUND_MACHINE_TIMINGS_MS.cooldownPhase,
+      ROUND_MACHINE_TIMINGS_MS.settlingPhase,
     );
     const msUntilPhaseEnd = msUntil(phaseEndsAt, now);
 
